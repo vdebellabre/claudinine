@@ -1,0 +1,9 @@
+# The POSIX shim must stay LF and executable regardless of the committer's OS.
+bin/claudinine text eol=lf
+bin/claudinine.cmd text eol=crlf
+
+# Released Native AOT binaries are committed under bin/<rid>/.
+bin/*/claudinine binary
+bin/*/claudinine.exe binary
+
+* text=auto

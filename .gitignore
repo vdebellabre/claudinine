@@ -1,0 +1,7 @@
+# .NET build output (release binaries under bin/<rid>/ ARE committed — see plan)
+obj/
+src/**/bin/
+tests/**/bin/
+*.user
+.vs/
+.idea/

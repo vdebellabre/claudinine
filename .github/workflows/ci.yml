@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  publish:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64,     os: windows-latest }
+          - { rid: win-arm64,   os: windows-11-arm }
+          - { rid: linux-x64,   os: ubuntu-latest }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm }
+          - { rid: osx-x64,     os: macos-13 }
+          - { rid: osx-arm64,   os: macos-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # Native AOT cannot cross-compile across OSes: this matrix IS the
+      # release build. Publishing on every push is the early warning for
+      # any trim/AOT-unfriendly change.
+      - name: Publish (Native AOT)
+        run: dotnet publish src/Claudinine -c Release -r ${{ matrix.rid }} -o publish/${{ matrix.rid }}
+
+      - name: Smoke test
+        if: ${{ !startsWith(matrix.rid, 'win-') }}
+        run: |
+          ./publish/${{ matrix.rid }}/claudinine version
+          echo '{"hook_event_name":"SessionStart","transcript_path":"/nonexistent"}' | ./publish/${{ matrix.rid }}/claudinine hook
+
+      - name: Smoke test (Windows)
+        if: ${{ startsWith(matrix.rid, 'win-') }}
+        shell: pwsh
+        run: |
+          ./publish/${{ matrix.rid }}/claudinine.exe version
+          '{"hook_event_name":"SessionStart","transcript_path":"C:\\nonexistent"}' | ./publish/${{ matrix.rid }}/claudinine.exe hook
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claudinine-${{ matrix.rid }}
+          path: publish/${{ matrix.rid }}/claudinine*
+          if-no-files-found: error
