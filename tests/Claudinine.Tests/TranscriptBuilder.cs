@@ -152,6 +152,58 @@ internal sealed class TranscriptBuilder
         return this;
     }
 
+    /// <summary>Uuid-less metadata record (last-prompt, custom-title, mode, ...).</summary>
+    public TranscriptBuilder MetaLine(string type, params (string Key, string Value)[] fields)
+    {
+        var record = new JsonObject { ["type"] = type, ["sessionId"] = "test-session" };
+        foreach ((string key, string value) in fields)
+            record[key] = value;
+        _lines.Add(record.ToJsonString());
+        return this;
+    }
+
+    public TranscriptBuilder QueueOp(string operation, string? content = null, string session = "test-session")
+    {
+        var record = new JsonObject
+        {
+            ["type"] = "queue-operation",
+            ["operation"] = operation,
+            ["timestamp"] = "2026-08-07T00:00:00.000Z",
+            ["sessionId"] = session,
+        };
+        if (content is not null)
+            record["content"] = content;
+        _lines.Add(record.ToJsonString());
+        return this;
+    }
+
+    /// <summary>On-chain system record as the app writes after Stop hooks run.</summary>
+    public TranscriptBuilder StopHookSummary(bool hasOutput = false,
+        string[]? additionalContext = null, string[]? errors = null,
+        bool preventedContinuation = false, string stopReason = "")
+    {
+        string uuid = NextUuid();
+        var record = new JsonObject
+        {
+            ["parentUuid"] = _lastUuid,
+            ["isSidechain"] = false,
+            ["type"] = "system",
+            ["subtype"] = "stop_hook_summary",
+            ["hookCount"] = 2,
+            ["hookErrors"] = new JsonArray([.. (errors ?? []).Select(e => (JsonNode)e)]),
+            ["hookAdditionalContext"] = new JsonArray([.. (additionalContext ?? []).Select(c => (JsonNode)c)]),
+            ["preventedContinuation"] = preventedContinuation,
+            ["stopReason"] = stopReason,
+            ["hasOutput"] = hasOutput,
+            ["level"] = "suggestion",
+            ["uuid"] = uuid,
+            ["sessionId"] = "test-session",
+        };
+        _lastUuid = uuid;
+        _lines.Add(record.ToJsonString());
+        return this;
+    }
+
     public TranscriptBuilder RawLine(string line)
     {
         _lines.Add(line);

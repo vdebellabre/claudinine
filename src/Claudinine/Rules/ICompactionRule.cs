@@ -34,5 +34,10 @@ internal static class RuleCatalog
         new ToolResultAgeRule(),
         new MegaBlockTrimRule(),
         new ImageStripRule(),
+        // Record-removal housekeeping (whole inert records, no stubs) — touches
+        // nothing the content rules above read, so order-independent of them.
+        new MetadataKeepLastRule(),
+        new QueueHistoryCollapseRule(),
+        new StopHookSummaryStripRule(),
     ];
 }
