@@ -271,6 +271,36 @@ internal sealed class TranscriptBuilder
         return this;
     }
 
+    /// <summary>Hook-success attachment as the app writes after a hook runs clean.</summary>
+    public TranscriptBuilder HookSuccess(string hookEvent, bool sidechain = false)
+    {
+        string uuid = NextUuid();
+        var record = new JsonObject
+        {
+            ["parentUuid"] = _lastUuid,
+            ["isSidechain"] = sidechain,
+            ["attachment"] = new JsonObject
+            {
+                ["type"] = "hook_success",
+                ["hookName"] = hookEvent,
+                ["toolUseID"] = NextUuid(),
+                ["hookEvent"] = hookEvent,
+                ["content"] = "hook output",
+                ["stdout"] = "hook output\n",
+                ["stderr"] = "",
+                ["exitCode"] = 0,
+                ["command"] = "some-hook-command",
+                ["durationMs"] = 42,
+            },
+            ["type"] = "attachment",
+            ["uuid"] = uuid,
+            ["sessionId"] = "test-session",
+        };
+        _lastUuid = uuid;
+        _lines.Add(record.ToJsonString());
+        return this;
+    }
+
     /// <summary>
     /// A sequential tool call: use record + result carrier, the carrier bearing
     /// the harness-written toolUseResult object (string for errored calls).

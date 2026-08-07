@@ -41,5 +41,6 @@ internal static class RuleCatalog
         new StopHookSummaryStripRule(),
         new EditedTextFileSupersessionRule(),
         new TaskReminderKeepLastRule(),
+        new HookSuccessStripRule(),
     ];
 }
