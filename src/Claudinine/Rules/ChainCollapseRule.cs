@@ -13,9 +13,16 @@ namespace Claudinine.Rules;
 /// note lines, and the remaining pairs are dropped whole. Full outputs stay in the
 /// session mirror, addressed by uuid prefix via `claudinine get`.
 ///
-/// Fail-closed: any shape this rule does not fully understand (parallel tool
-/// calls, orphan results, protected or sidechain records inside the span) skips
-/// the whole turn.
+/// Parallel batches (modern format, v2.1.222+): each tool_use is its OWN
+/// assistant record; a batch is a run of consecutive use records followed by its
+/// results in COMPLETION order, each result parented to its own use record (the
+/// chain forks; one result per batch is a dead-end leaf). Batch calls collapse
+/// like sequential ones; pairs are removed atomically (a kept result whose use
+/// was removed would dangle its tool_use_id and sourceToolAssistantUUID).
+///
+/// Fail-closed: any shape this rule does not fully understand (legacy multi-use
+/// records, a new use while a batch is partially answered, orphan results,
+/// protected or sidechain records inside the span) skips the whole turn.
 /// </summary>
 internal sealed class ChainCollapseRule : ICompactionRule
 {
@@ -59,8 +66,12 @@ internal sealed class ChainCollapseRule : ICompactionRule
     private void CollapseTurn(List<TranscriptRecord> records, int start, int end)
     {
         // Pass 1: enumerate the turn's calls; anything unexpected aborts the turn.
+        // A parallel batch shows up as consecutive uses accumulating in `pending`,
+        // drained by results in any order; a new use before the batch is fully
+        // answered is a shape we don't know.
         var calls = new List<Call>();
-        (int Index, string Id, string Tool, string Arg)? pending = null;
+        var pending = new List<(int Index, string Id, string Tool, string Arg)>();
+        bool draining = false;
 
         for (int i = start; i < end; i++)
         {
@@ -77,15 +88,15 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 var uses = RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
                     .Where(x => x["type"]?.GetValue<string>() == "tool_use").ToList();
                 if (uses.Count > 1)
-                    return; // parallel batch: not a chain, don't touch
+                    return; // legacy multi-use record: not a chain, don't touch
                 if (uses.Count == 1)
                 {
-                    if (pending is not null)
-                        return; // two uses without a result between them
+                    if (draining)
+                        return; // new use while the batch is partially answered
                     JsonObject u = uses[0];
                     if (u["id"]?.GetValue<string>() is not string id || id.Length == 0)
                         return;
-                    pending = (i, id, u["name"]?.GetValue<string>() ?? "?", PrimaryArg(u));
+                    pending.Add((i, id, u["name"]?.GetValue<string>() ?? "?", PrimaryArg(u)));
                 }
             }
             else if (type == "user")
@@ -95,31 +106,46 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 if (results.Count == 0)
                     continue; // an image share or similar — leave it alone, keep scanning
                 if (results.Count > 1 || blocks.Count != results.Count)
-                    return; // parallel results or mixed carrier: don't touch
+                    return; // legacy multi-result or mixed carrier: don't touch
                 JsonObject r = results[0];
-                if (pending is null || r["tool_use_id"]?.GetValue<string>() != pending.Value.Id)
-                    return; // orphan or out-of-order result
+                int match = pending.FindIndex(p => p.Id == r["tool_use_id"]?.GetValue<string>());
+                if (match < 0)
+                    return; // orphan or duplicate result
                 if (rec.Uuid is null)
                     return; // ref addressing needs the uuid
+                var p = pending[match];
+                pending.RemoveAt(match);
+                draining = pending.Count > 0;
                 bool isError = r["is_error"] is JsonValue ev && ev.TryGetValue<bool>(out bool e) && e;
-                calls.Add(new Call(pending.Value.Index, i, pending.Value.Id,
-                    pending.Value.Tool, pending.Value.Arg, RuleHelpers.ResultText(r), isError));
-                pending = null;
+                calls.Add(new Call(p.Index, i, p.Id, p.Tool, p.Arg,
+                    RuleHelpers.ResultText(r), isError));
             }
         }
-        if (pending is not null)
+        if (pending.Count > 0)
             return; // in-flight call with no result: not a settled turn
         if (calls.Count < MinCalls)
             return;
 
-        Call anchor = calls[0];
+        // Anchor = the pair of the FIRST use in file order. In a batch whose
+        // results arrived out of order, the first RESULT's pair would leave the
+        // batch's first use outside the span (its result removed, the use kept —
+        // API-invalid); the first USE's pair also keeps the survivor chain linear.
+        Call anchor = calls.MinBy(c => c.UseIndex)!;
         TranscriptRecord anchorResult = records[anchor.ResultIndex];
         if ((RuleHelpers.CurrentNode(anchorResult)["claudinine"] as JsonObject)?["rule"]
                 ?.GetValue<string>() == Name)
             return; // already collapsed (idempotence)
 
         int spanStart = anchor.UseIndex;
-        int spanEnd = calls[^1].ResultIndex;
+        int spanEnd = calls.Max(c => c.ResultIndex);
+
+        // Tail guard: the file's final record must never be removed or replaced
+        // (the app chains its next append off it; TryRewrite would abort the WHOLE
+        // rewrite, discarding every rule's work). An interrupted session can end
+        // exactly at a result record — skip the turn; it collapses on a later
+        // pass, once records follow it.
+        if (spanEnd == records.Count - 1)
+            return;
         var useIndexes = calls.Select(c => c.UseIndex).ToHashSet();
         var resultIndexes = calls.Select(c => c.ResultIndex).ToHashSet();
         var callByResult = calls.ToDictionary(c => c.ResultIndex);

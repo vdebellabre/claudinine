@@ -142,23 +142,36 @@ internal static class MirrorFile
             seen.Add(identity);
     }
 
-    /// <summary>Identity for the "already mirrored?" test: uuid when present, else a content hash.</summary>
+    /// <summary>
+    /// Identity for the "already mirrored?" test: uuid when present, else a content
+    /// hash. For uuid-less records the hash EXCLUDES leafUuid — the rewrite layer
+    /// remaps it (nearest surviving ancestor) on records like last-prompt, and that
+    /// remapped variant is not a new original; re-appending it would pollute the
+    /// mirror with a rewritten copy on the pass after a collapse.
+    /// </summary>
     private static string IdentityOf(string line, string? knownUuid = null)
     {
-        string? uuid = knownUuid;
-        if (uuid is null)
+        JsonObject? obj = null;
+        if (knownUuid is null)
         {
             try
             {
-                uuid = (JsonNode.Parse(line) as JsonObject)?["uuid"]?.GetValue<string>();
+                obj = JsonNode.Parse(line) as JsonObject;
             }
             catch
             {
-                // fall through to hash
+                // fall through to raw hash
             }
         }
+        string? uuid = knownUuid ?? obj?["uuid"]?.GetValue<string>();
         if (uuid is not null)
             return "u:" + uuid;
+        if (obj?["leafUuid"] is not null)
+        {
+            obj.Remove("leafUuid");
+            return "h:" + Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(obj.ToJsonString(Json.Compact))));
+        }
         return "h:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(line)));
     }
 }

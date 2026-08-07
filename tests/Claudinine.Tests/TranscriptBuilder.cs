@@ -79,6 +79,48 @@ internal sealed class TranscriptBuilder
         return this;
     }
 
+    /// <summary>
+    /// Modern-format (v2.1.222+) tool_use: its OWN assistant record, chained to the
+    /// current tail. Emit several in a row to shape a parallel batch.
+    /// </summary>
+    public TranscriptBuilder ToolUse(string command, out string toolUseId, out string recordUuid)
+    {
+        toolUseId = $"toolu_{_seq + 1:D4}";
+        Add("assistant", new JsonObject
+        {
+            ["role"] = "assistant",
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "tool_use",
+                ["id"] = toolUseId,
+                ["name"] = "Bash",
+                ["input"] = new JsonObject { ["command"] = command },
+            }),
+        });
+        recordUuid = _lastUuid!;
+        return this;
+    }
+
+    /// <summary>
+    /// Modern-format tool_result: parented to its OWN tool_use record (not the tail)
+    /// and carrying sourceToolAssistantUUID, exactly as the app writes batch results.
+    /// The tail still advances, so the next record chains off this result.
+    /// </summary>
+    public TranscriptBuilder ToolResultFor(string toolUseId, string useRecordUuid, string output)
+    {
+        Add("user", new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "tool_result",
+                ["tool_use_id"] = toolUseId,
+                ["content"] = output,
+            }),
+        }, parent: useRecordUuid, sourceToolAssistantUuid: useRecordUuid);
+        return this;
+    }
+
     public TranscriptBuilder AssistantText(string text)
     {
         Add("assistant", new JsonObject
@@ -116,17 +158,20 @@ internal sealed class TranscriptBuilder
         return this;
     }
 
-    private void Add(string type, JsonObject message)
+    private void Add(string type, JsonObject message,
+        string? parent = null, string? sourceToolAssistantUuid = null)
     {
         string uuid = NextUuid();
         var record = new JsonObject
         {
             ["type"] = type,
             ["uuid"] = uuid,
-            ["parentUuid"] = _lastUuid,
+            ["parentUuid"] = parent ?? _lastUuid,
             ["sessionId"] = "test-session",
             ["message"] = message,
         };
+        if (sourceToolAssistantUuid is not null)
+            record["sourceToolAssistantUUID"] = sourceToolAssistantUuid;
         _lastUuid = uuid;
         _lines.Add(record.ToJsonString());
     }

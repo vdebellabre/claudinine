@@ -151,6 +151,27 @@ public sealed class CompactorTests : IDisposable
     }
 
     [Fact]
+    public void RewriteRefusesResultWhoseToolUseWasRemoved()
+    {
+        // Pair atomicity: a surviving result carrier whose tool_use record was
+        // removed dangles its sourceToolAssistantUUID (and its tool_use_id has no
+        // answering block on reload). No rule should do this; the rewrite layer
+        // must refuse if one does.
+        var b = new TranscriptBuilder().UserPrompt("look");
+        b.ToolUse("sed -n '1,5p' a.txt", out string useId, out string useUuid);
+        b.ToolResultFor(useId, useUuid, LongOutput);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+        string before = File.ReadAllText(path);
+
+        var transcript = Claudinine.Transcript.TranscriptFile.TryLoad(path)!;
+        transcript.Records.Single(r => r.Uuid == useUuid).Removed = true;
+
+        Assert.False(transcript.TryRewrite());
+        Assert.Equal(before, File.ReadAllText(path));
+    }
+
+    [Fact]
     public void ShortResultsAreNotWorthAStub()
     {
         var b = new TranscriptBuilder();
@@ -205,6 +226,32 @@ public sealed class CompactorTests : IDisposable
         string[] mirror = File.ReadAllLines(MirrorFile.PathFor(path));
         Assert.Equal(File.ReadAllLines(path).Length, mirror.Length - 1); // header + all records
         Assert.Equal(2, mirror.Count(l => l == queueOp));
+    }
+
+    [Fact]
+    public void MirrorDoesNotReAppendLeafRemappedUuidlessRecords()
+    {
+        // A last-prompt record whose leafUuid points into a collapsed span gets its
+        // leaf remapped by the rewrite layer. On the NEXT pass that remapped variant
+        // must not read as a new original (uuid-less identity ignores leafUuid) —
+        // it would pollute the mirror with a rewritten copy.
+        var b = new TranscriptBuilder().UserPrompt("investigate");
+        string? removedUuid = null;
+        for (int i = 0; i < 5; i++)
+        {
+            b.BashRead($"sed -n '1,5p' f{i}.txt", out _, LongOutput + i);
+            if (i == 3) removedUuid = b.LastUuid;
+        }
+        b.RawLine($$"""{"type":"last-prompt","sessionId":"test-session","leafUuid":"{{removedUuid}}"}""");
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+        int originalCount = File.ReadAllLines(path).Length;
+
+        Compactor.Run(path); // collapse + leaf remap
+        Compactor.Run(path); // second pass sees the remapped variant
+
+        string[] mirror = File.ReadAllLines(MirrorFile.PathFor(path));
+        Assert.Equal(originalCount, mirror.Length - 1); // header + originals, nothing more
     }
 
     [Fact]

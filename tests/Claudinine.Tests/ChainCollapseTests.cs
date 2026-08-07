@@ -194,8 +194,198 @@ public sealed class ChainCollapseTests : IDisposable
         Assert.True(leaf is null || uuids.Contains(leaf)); // and points at a survivor
     }
 
+    /// <summary>Every surviving parentUuid must resolve to a record EARLIER in the file.</summary>
+    private static void AssertParentsResolveEarlier(JsonObject[] records)
+    {
+        var seen = new HashSet<string>();
+        foreach (JsonObject r in records)
+        {
+            if (r["parentUuid"]?.GetValue<string>() is string parent)
+                Assert.Contains(parent, seen);
+            if (r["uuid"]?.GetValue<string>() is string u)
+                seen.Add(u);
+        }
+    }
+
+    private static List<string> RemainingUseIds(JsonObject[] records) =>
+        records.SelectMany(r =>
+            (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>()
+                .Where(x => x["type"]?.GetValue<string>() == "tool_use")
+                .Select(x => x["id"]!.GetValue<string>()) ?? []).ToList();
+
+    private static string CarrierContent(JsonObject[] records, string toolUseId) =>
+        records.SelectMany(r =>
+            (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
+            .Single(x => x["tool_use_id"]?.GetValue<string>() == toolUseId)["content"]!
+            .GetValue<string>();
+
     [Fact]
-    public void TurnWithParallelToolCallsIsSkippedWhole()
+    public void ParallelBatchCollapsesWithInOrderResults()
+    {
+        // Modern batch: consecutive single-use assistant records, then the results.
+        var b = new TranscriptBuilder().UserPrompt("run these in parallel");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolUse("cmd-b", out string idB, out string uuidB);
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.ToolResultFor(idB, uuidB, Output + "B");
+        b.BashRead("sed -n '1,5p' seq.txt", out string idC, Output + "C");
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+        int linesBefore = File.ReadAllLines(path).Length;
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        Assert.True(records.Length < linesBefore);
+
+        // Anchor = the batch's FIRST use; batch sibling and the sequential call collapse.
+        var remainingUses = RemainingUseIds(records);
+        Assert.Contains(idA, remainingUses);
+        Assert.DoesNotContain(idB, remainingUses);
+        Assert.DoesNotContain(idC, remainingUses);
+
+        string carrier = CarrierContent(records, idA);
+        Assert.StartsWith("[claudinine: this turn originally ran 3 separate tool calls", carrier);
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(carrier,
+            @"^\[[0-9a-f-]{8}\] ", System.Text.RegularExpressions.RegexOptions.Multiline).Count);
+
+        AssertParentsResolveEarlier(records);
+    }
+
+    [Fact]
+    public void ParallelBatchCollapsesWithOutOfOrderResults()
+    {
+        // Results arrive in COMPLETION order, not call order (real specimen: USE:Bash,
+        // USE:Glob, RES:Glob, RES:Bash). The anchor must still be the FIRST use's
+        // pair, or that use would survive without its result.
+        var b = new TranscriptBuilder().UserPrompt("out of order");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolUse("cmd-b", out string idB, out string uuidB);
+        b.ToolResultFor(idB, uuidB, Output + "B"); // b's result lands first
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+        int linesBefore = File.ReadAllLines(path).Length;
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        Assert.True(records.Length < linesBefore);
+
+        var remainingUses = RemainingUseIds(records);
+        Assert.Contains(idA, remainingUses);
+        Assert.DoesNotContain(idB, remainingUses);
+
+        string carrier = CarrierContent(records, idA);
+        Assert.StartsWith("[claudinine: this turn originally ran 2 separate tool calls", carrier);
+
+        AssertParentsResolveEarlier(records);
+    }
+
+    [Fact]
+    public void UuidlessRecordsInsideBatchSpanSurviveWithLeafRemapped()
+    {
+        // Real specimen: last-prompt/custom-title records interleave INSIDE a batch,
+        // between the uses and their results, and last-prompt's leafUuid can point
+        // at a batch record the collapse removes.
+        var b = new TranscriptBuilder().UserPrompt("interleaved");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolUse("cmd-b", out string idB, out string uuidB);
+        b.RawLine($$"""{"type":"last-prompt","sessionId":"test-session","leafUuid":"{{uuidB}}"}""");
+        b.RawLine("""{"type":"custom-title","customTitle":"t","sessionId":"test-session"}""");
+        b.ToolResultFor(idB, uuidB, Output + "B");
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        Assert.DoesNotContain(idB, RemainingUseIds(records)); // collapse did happen
+
+        Assert.Single(records, r => r["type"]?.GetValue<string>() == "custom-title");
+        JsonObject lastPrompt = records.Single(r => r["type"]?.GetValue<string>() == "last-prompt");
+        string? leaf = lastPrompt["leafUuid"]?.GetValue<string>();
+        var uuids = records.Select(r => r["uuid"]?.GetValue<string>()).Where(u => u is not null).ToHashSet();
+        Assert.NotEqual(uuidB, leaf);
+        Assert.True(leaf is null || uuids.Contains(leaf));
+    }
+
+    [Fact]
+    public void InterruptedTurnEndingAtResultIsSkippedButEarlierTurnsStillCollapse()
+    {
+        // The file's final record must never be removed: TryRewrite would abort the
+        // WHOLE rewrite, silently discarding every other rule's work. The rule must
+        // skip such a turn itself.
+        var b = new TranscriptBuilder().UserPrompt("first");
+        for (int i = 0; i < 3; i++)
+            b.BashRead($"sed -n '1,5p' t1f{i}.txt", out _, Output + i);
+        b.AssistantText("turn one done");
+        b.UserPrompt("second"); // interrupted turn: file ends exactly at a tool_result
+        b.BashRead("sed -n '1,5p' t2a.txt", out string keptA, Output + "x");
+        b.BashRead("sed -n '1,5p' t2b.txt", out string keptB, Output + "y");
+        string path = b.WriteTo(_dir);
+        string lastLineBefore = File.ReadAllLines(path)[^1];
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        // Turn 1 collapsed — the rewrite as a whole landed…
+        Assert.Contains("this turn originally ran 3 separate tool calls",
+            string.Join("\n", records.Select(r => r.ToJsonString())));
+        // …while the interrupted turn is intact, tail byte-identical.
+        var remainingUses = RemainingUseIds(records);
+        Assert.Contains(keptA, remainingUses);
+        Assert.Contains(keptB, remainingUses);
+        Assert.Equal(lastLineBefore, File.ReadAllLines(path)[^1]);
+    }
+
+    [Fact]
+    public void NewUseWhileBatchPartiallyAnsweredAbortsTurn()
+    {
+        // USE a, USE b, RES a, USE c, RES b, RES c is a shape we don't understand:
+        // fail-closed, whole turn untouched.
+        var b = new TranscriptBuilder().UserPrompt("pathological");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolUse("cmd-b", out string idB, out string uuidB);
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.ToolUse("cmd-c", out string idC, out string uuidC);
+        b.ToolResultFor(idB, uuidB, Output + "B");
+        b.ToolResultFor(idC, uuidC, Output + "C");
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+        string before = File.ReadAllText(path);
+
+        Compactor.Run(path);
+
+        Assert.Equal(before, File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void SourceToolAssistantUuidNeverDanglesAfterCollapse()
+    {
+        var b = new TranscriptBuilder().UserPrompt("batch");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolUse("cmd-b", out string idB, out string uuidB);
+        b.ToolResultFor(idB, uuidB, Output + "B");
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        Assert.DoesNotContain(idB, RemainingUseIds(records)); // collapse did happen
+        var uuids = records.Select(r => r["uuid"]?.GetValue<string>()).Where(u => u is not null).ToHashSet();
+        foreach (JsonObject r in records)
+        {
+            if (r["sourceToolAssistantUUID"]?.GetValue<string>() is string src)
+                Assert.Contains(src, uuids);
+        }
+    }
+
+    [Fact]
+    public void TurnWithLegacyMultiUseRecordIsSkippedWhole()
     {
         // Hand-build an assistant record with TWO tool_use blocks: fail-closed.
         var b = new TranscriptBuilder().UserPrompt("parallel");

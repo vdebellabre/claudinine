@@ -165,6 +165,12 @@ internal sealed class TranscriptFile
             if (reparsed.Node["leafUuid"] is JsonValue rlv
                 && rlv.TryGetValue<string>(out string? rleaf) && removedUuids.Contains(rleaf))
                 return false;
+            // A result carrier pointing at a removed tool_use record means a rule
+            // broke pair atomicity. Unlike parentUuid/leafUuid this is not an
+            // ancestry link — remapping has no meaning, so fail the rewrite.
+            if (reparsed.Node["sourceToolAssistantUUID"] is JsonValue rsv
+                && rsv.TryGetValue<string>(out string? rsrc) && removedUuids.Contains(rsrc))
+                return false;
         }
         // The tail keeps its identity (uuid checked above via expected[^1]); it is
         // byte-identical unless the rewrite layer had to rechain its parentUuid.
