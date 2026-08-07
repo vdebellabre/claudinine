@@ -1,0 +1,13 @@
+{
+  "name": "claudinine",
+  "owner": {
+    "name": "vdebellabre"
+  },
+  "plugins": [
+    {
+      "name": "claudinine",
+      "source": "./",
+      "description": "Silent context optimizer: compacts session transcripts at re-read boundaries (chain-collapse, read dedup, aged-result stubs). Install and forget."
+    }
+  ]
+}
