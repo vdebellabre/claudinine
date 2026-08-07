@@ -26,6 +26,9 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Test
+        run: dotnet test tests/Claudinine.Tests
+
       # Native AOT cannot cross-compile across OSes: this matrix IS the
       # release build. Publishing on every push is the early warning for
       # any trim/AOT-unfriendly change.

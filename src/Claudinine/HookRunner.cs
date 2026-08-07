@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Claudinine.Mirror;
 
 namespace Claudinine;
 
@@ -17,23 +18,23 @@ internal static class HookRunner
             if (input?.TranscriptPath is null || !File.Exists(input.TranscriptPath))
                 return 0;
 
+            // Every event runs the same idempotent pass; they differ only in
+            // which part of the file still has work in it. UserPromptSubmit is
+            // the steady-state workhorse (the turn that just ended), SessionEnd
+            // makes the file clean at rest (a resume loads the transcript BEFORE
+            // SessionStart hooks run), SessionStart/PreCompact are repair for
+            // crashes and missed ends — they pay at the next load.
             switch (input.HookEventName)
             {
                 case "UserPromptSubmit":
-                    // v1 workhorse: mirror-then-compact the turn(s) since the
-                    // previous real user message. Wired next.
-                    break;
-
                 case "SessionEnd":
-                    // Compact the session's final turn so the file is clean at
-                    // rest (a resume loads the transcript before SessionStart
-                    // hooks run, so this is what makes the next load lean).
+                case "PreCompact":
+                    Compactor.Run(input.TranscriptPath);
                     break;
 
                 case "SessionStart":
-                case "PreCompact":
-                    // Full scan + repair: crash leftovers, missed SessionEnd,
-                    // mirror GC. Pays off at the next transcript load.
+                    Compactor.Run(input.TranscriptPath);
+                    MirrorFile.CollectGarbage();
                     break;
             }
 

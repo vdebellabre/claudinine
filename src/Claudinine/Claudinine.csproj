@@ -12,6 +12,10 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Claudinine.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
