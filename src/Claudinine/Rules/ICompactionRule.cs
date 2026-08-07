@@ -17,6 +17,19 @@ internal interface ICompactionRule
 
 internal static class RuleCatalog
 {
-    /// <summary>v1 order per plan: dedup → archive/retrieval → chain-collapse.</summary>
-    public static readonly ICompactionRule[] All = [new BashReadDedupRule(), new ReadToolDedupRule()];
+    /// <summary>
+    /// Rollout order follows cozempic's tier ordering (gentle-equivalents first):
+    /// supersession/dedup rules run before age-based ones so a deduped result gets
+    /// the more informative stub, and the mega-block safety net runs last.
+    /// </summary>
+    public static readonly ICompactionRule[] All =
+    [
+        new BashReadDedupRule(),
+        new ReadToolDedupRule(),
+        new SystemReminderDedupRule(),
+        new DocumentDedupRule(),
+        new ToolResultAgeRule(),
+        new MegaBlockTrimRule(),
+        new ImageStripRule(),
+    ];
 }

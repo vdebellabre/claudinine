@@ -86,6 +86,27 @@ internal sealed class TranscriptBuilder
         return this;
     }
 
+    public TranscriptBuilder RawImageMessage(string marker)
+    {
+        Add("user", new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = new JsonArray(
+                new JsonObject { ["type"] = "text", ["text"] = $"screenshot {marker}" },
+                new JsonObject
+                {
+                    ["type"] = "image",
+                    ["source"] = new JsonObject
+                    {
+                        ["type"] = "base64",
+                        ["media_type"] = "image/png",
+                        ["data"] = Convert.ToBase64String(new byte[4096]),
+                    },
+                }),
+        });
+        return this;
+    }
+
     public TranscriptBuilder RawLine(string line)
     {
         _lines.Add(line);

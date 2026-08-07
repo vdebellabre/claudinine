@@ -67,14 +67,15 @@ internal abstract class ReadSupersessionRule : ICompactionRule
         if (superseded.Count == 0)
             return;
 
-        // Pass 3: stub the matching tool_result payloads.
+        // Pass 3: stub the matching tool_result payloads. Idempotence comes from
+        // MinResultChars: a stub is short, so a second pass skips it naturally.
         foreach (TranscriptRecord rec in transcript.Records)
         {
-            if (rec.IsProtected() || rec.Node["claudinine"] is not null)
+            if (rec.IsProtected())
                 continue;
 
             JsonObject? clone = null;
-            foreach (JsonNode? block in ContentBlocks(rec.Replacement ?? rec.Node))
+            foreach (JsonNode? block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
             {
                 if (block is not JsonObject b)
                     continue;
@@ -83,22 +84,13 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 if (b["tool_use_id"]?.GetValue<string>() is not string toolUseId
                     || !superseded.TryGetValue(toolUseId, out List<ReadTarget>? targets))
                     continue;
-                if (ResultText(b).Length < MinResultChars)
+                if (RuleHelpers.ResultText(b).Length < MinResultChars)
                     continue;
 
                 // First hit on this record: clone it, then mutate the clone's
                 // corresponding block (never the original parse).
-                if (clone is null)
-                {
-                    clone = (JsonObject)(rec.Replacement ?? rec.Node).DeepClone();
-                    clone["claudinine"] = new JsonObject
-                    {
-                        ["v"] = 1,
-                        ["rule"] = Name,
-                        ["origUuid"] = rec.Uuid,
-                    };
-                }
-                foreach (JsonNode? cb in ContentBlocks(clone))
+                clone ??= (JsonObject)RuleHelpers.CurrentNode(rec).DeepClone();
+                foreach (JsonNode? cb in RuleHelpers.ContentBlocks(clone))
                 {
                     if (cb is JsonObject cbo && cbo["tool_use_id"]?.GetValue<string>() == toolUseId)
                     {
@@ -108,25 +100,10 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 }
             }
             if (clone is not null)
-                rec.Replacement = clone;
+                RuleHelpers.SetReplacement(rec, clone, Name);
         }
     }
 
-    private static IEnumerable<JsonNode?> ContentBlocks(JsonObject record)
-    {
-        if (record["message"] is JsonObject m && m["content"] is JsonArray blocks)
-            return blocks;
-        return [];
-    }
-
-    private static string ResultText(JsonObject block)
-    {
-        JsonNode? c = block["content"];
-        if (c is JsonValue v && v.TryGetValue<string>(out string? s))
-            return s;
-        if (c is JsonArray parts)
-            return string.Concat(parts.OfType<JsonObject>()
-                .Select(p => p["text"]?.GetValue<string>() ?? ""));
-        return "";
-    }
+    private static IEnumerable<JsonNode?> ContentBlocks(JsonObject record) =>
+        RuleHelpers.ContentBlocks(record);
 }

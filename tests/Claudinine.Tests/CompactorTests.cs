@@ -178,6 +178,24 @@ public sealed class CompactorTests : IDisposable
     }
 
     [Fact]
+    public void MirrorPreservesRepeatedIdenticalUuidlessRecords()
+    {
+        // Real transcripts repeat identical uuid-less lines (queue-operations);
+        // the mirror must keep every copy or a restore loses records.
+        string queueOp = """{"type":"queue-operation","operation":"dequeue","sessionId":"test-session"}""";
+        string path = EightIdenticalReads(out _)
+            .RawLine(queueOp)
+            .RawLine(queueOp)
+            .WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string[] mirror = File.ReadAllLines(MirrorFile.PathFor(path));
+        Assert.Equal(File.ReadAllLines(path).Length, mirror.Length - 1); // header + all records
+        Assert.Equal(2, mirror.Count(l => l == queueOp));
+    }
+
+    [Fact]
     public void GarbageCollectionRemovesOrphanedMirrors()
     {
         string path = EightIdenticalReads(out _).WriteTo(_dir);

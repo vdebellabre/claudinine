@@ -41,7 +41,11 @@ internal static class MirrorFile
             string mirrorPath = PathFor(transcript.Path);
             Directory.CreateDirectory(MirrorsDirectory());
 
+            // Identity: uuid when present; identical uuid-less lines (repeated
+            // queue-operations…) are tracked by content hash WITH multiplicity, so
+            // a restore reproduces every copy.
             var seen = new HashSet<string>();
+            var seenCounts = new Dictionary<string, int>();
             bool hasHeader = false;
             if (File.Exists(mirrorPath))
             {
@@ -49,7 +53,7 @@ internal static class MirrorFile
                 {
                     if (line.Length == 0) continue;
                     if (!hasHeader) { hasHeader = true; continue; }
-                    seen.Add(IdentityOf(line));
+                    Register(IdentityOf(line), seen, seenCounts);
                 }
             }
 
@@ -66,13 +70,24 @@ internal static class MirrorFile
                 };
                 toAppend.Add(header.ToJsonString(Json.Compact));
             }
+            var transcriptCounts = new Dictionary<string, int>();
             foreach (TranscriptRecord rec in transcript.Records)
             {
                 if (rec.Node["claudinine"] is not null)
                     continue; // already a stub; its original is already mirrored
                 string line = rec.HadCarriageReturn ? rec.RawLine[..^1] : rec.RawLine;
-                if (seen.Add(IdentityOf(line, rec.Uuid)))
+                string identity = IdentityOf(line, rec.Uuid);
+                if (identity.StartsWith("h:", StringComparison.Ordinal))
+                {
+                    // uuid-less: mirror as many copies as the transcript holds.
+                    int nth = transcriptCounts[identity] = transcriptCounts.GetValueOrDefault(identity) + 1;
+                    if (nth > seenCounts.GetValueOrDefault(identity))
+                        toAppend.Add(line);
+                }
+                else if (seen.Add(identity))
+                {
                     toAppend.Add(line);
+                }
             }
 
             if (toAppend.Count == 0)
@@ -117,6 +132,14 @@ internal static class MirrorFile
                 // Unreadable mirror: leave it for a human.
             }
         }
+    }
+
+    private static void Register(string identity, HashSet<string> seen, Dictionary<string, int> counts)
+    {
+        if (identity.StartsWith("h:", StringComparison.Ordinal))
+            counts[identity] = counts.GetValueOrDefault(identity) + 1;
+        else
+            seen.Add(identity);
     }
 
     /// <summary>Identity for the "already mirrored?" test: uuid when present, else a content hash.</summary>
