@@ -40,5 +40,6 @@ internal static class RuleCatalog
         new QueueHistoryCollapseRule(),
         new StopHookSummaryStripRule(),
         new EditedTextFileSupersessionRule(),
+        new TaskReminderKeepLastRule(),
     ];
 }

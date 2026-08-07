@@ -232,6 +232,46 @@ internal sealed class TranscriptBuilder
         Attachment("edited_text_file", ("filename", filename), ("snippet", snippet));
 
     /// <summary>
+    /// Full-snapshot task list reminder as the app writes each turn: content is
+    /// the ENTIRE current list (empty array for the zero-state nudge).
+    /// </summary>
+    public TranscriptBuilder TaskReminder(string? subject = null, bool sidechain = false)
+    {
+        string uuid = NextUuid();
+        var content = new JsonArray();
+        if (subject is not null)
+        {
+            content.Add(new JsonObject
+            {
+                ["id"] = "1",
+                ["subject"] = subject,
+                ["description"] = "details",
+                ["activeForm"] = "working",
+                ["status"] = "pending",
+                ["blocks"] = new JsonArray(),
+                ["blockedBy"] = new JsonArray(),
+            });
+        }
+        var record = new JsonObject
+        {
+            ["parentUuid"] = _lastUuid,
+            ["isSidechain"] = sidechain,
+            ["attachment"] = new JsonObject
+            {
+                ["type"] = "task_reminder",
+                ["content"] = content,
+                ["itemCount"] = content.Count,
+            },
+            ["type"] = "attachment",
+            ["uuid"] = uuid,
+            ["sessionId"] = "test-session",
+        };
+        _lastUuid = uuid;
+        _lines.Add(record.ToJsonString());
+        return this;
+    }
+
+    /// <summary>
     /// A sequential tool call: use record + result carrier, the carrier bearing
     /// the harness-written toolUseResult object (string for errored calls).
     /// </summary>

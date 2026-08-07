@@ -148,8 +148,8 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
-            .Attachment("task_reminder", ("content", "reminder one"))
-            .Attachment("task_reminder", ("content", "reminder two"))
+            .Attachment("hook_success", ("content", "hook one"))
+            .Attachment("hook_success", ("content", "hook two"))
             .Attachment("edited_text_file", ("snippet", "no filename — malformed, keep"))
             .AssistantText("done")
             .WriteTo(_dir);
