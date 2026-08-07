@@ -1,12 +1,15 @@
 #!/bin/sh
 # Platform-routing shim: picks the right Native AOT binary for this host.
-# Windows never runs this file — cmd.exe resolves the extensionless path to
-# claudinine.cmd via PATHEXT (dual-shim pattern).
+# Windows reaches this file too: Claude Code prefers Git Bash for hook commands
+# when it is installed, so the MINGW/MSYS case below — not claudinine.cmd — is
+# the common Windows path. The .cmd twin only serves cmd.exe/PowerShell hosts
+# (PATHEXT resolves the extensionless name to it).
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 case "$(uname -s)" in
-  Darwin) os=osx ;;
-  *)      os=linux ;;
+  Darwin)               os=osx ;;
+  MINGW*|MSYS*|CYGWIN*) os=win ;;
+  *)                    os=linux ;;
 esac
 
 case "$(uname -m)" in
@@ -14,4 +17,9 @@ case "$(uname -m)" in
   *)             arch=x64 ;;
 esac
 
-exec "$dir/$os-$arch/claudinine" "$@"
+bin="$dir/$os-$arch/claudinine"
+if [ "$os" = "win" ]; then
+  bin="$bin.exe"
+fi
+
+exec "$bin" "$@"
