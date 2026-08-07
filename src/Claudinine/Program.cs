@@ -1,10 +1,9 @@
 using Claudinine;
 
-// Verbs: `hook` (invoked by Claude Code hooks, JSON on stdin) is the only one
-// wired up today; user-facing verbs (restore, get) come with the mirror work.
 return args switch
 {
     ["hook", ..] => HookRunner.Run(Console.OpenStandardInput()),
+    ["get", .. var getArgs] => GetVerb.Run(getArgs),
     ["version", ..] or ["--version", ..] => Verbs.Version(),
     _ => Verbs.Usage(),
 };
@@ -21,7 +20,7 @@ namespace Claudinine
 
         public static int Usage()
         {
-            Console.Error.WriteLine("usage: claudinine <hook|version>");
+            Console.Error.WriteLine("usage: claudinine <hook|get|version>");
             return 1;
         }
     }

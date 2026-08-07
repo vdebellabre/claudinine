@@ -6,3 +6,6 @@ tests/**/bin/
 .vs/
 .idea/
 publish/
+
+# Local benchmarking only, never committed
+tests/POC reference/

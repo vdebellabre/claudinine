@@ -28,6 +28,9 @@ internal static class RuleCatalog
         new ReadToolDedupRule(),
         new SystemReminderDedupRule(),
         new DocumentDedupRule(),
+        // Chain-collapse runs before the age tiers so digest previews render from
+        // (mostly) original content; whatever it leaves behind ages normally.
+        new ChainCollapseRule(),
         new ToolResultAgeRule(),
         new MegaBlockTrimRule(),
         new ImageStripRule(),

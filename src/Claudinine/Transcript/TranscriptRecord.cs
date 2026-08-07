@@ -20,6 +20,12 @@ internal sealed class TranscriptRecord
     /// <summary>Set by a rule to replace this record on rewrite. Must preserve uuid/parentUuid.</summary>
     public JsonObject? Replacement { get; set; }
 
+    /// <summary>
+    /// Set by a rule to drop this record on rewrite. The rewrite layer rechains
+    /// surviving children (and leafUuid anchors) to the nearest surviving ancestor.
+    /// </summary>
+    public bool Removed { get; set; }
+
     /// <summary>True if the original line ended with a CR (CRLF file) to preserve on rewrite.</summary>
     public required bool HadCarriageReturn { get; init; }
 

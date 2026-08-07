@@ -47,55 +47,121 @@ internal sealed class TranscriptFile
         return new TranscriptFile { Path = path, Records = records, EndsWithNewline = endsWithNewline };
     }
 
-    public bool HasReplacements => Records.Any(r => r.Replacement is not null);
+    public bool HasChanges => Records.Any(r => r.Replacement is not null || r.Removed);
 
     /// <summary>
-    /// Validate the pending rewrite, then atomically swap it in. Fail-closed: any
-    /// validation miss leaves the original file untouched and reports false.
+    /// Validate the pending rewrite (replacements and removals), then atomically
+    /// swap it in. Fail-closed: any validation miss leaves the original file
+    /// untouched and reports false. Removals rechain surviving children's
+    /// parentUuid — and any leafUuid resume anchors — to the nearest surviving
+    /// ancestor (dangling leafUuid was a shipped cozempic-POC bug).
     /// Temp file deliberately does not end in .jsonl (session discovery scans *.jsonl).
     /// </summary>
     public bool TryRewrite()
     {
-        if (!HasReplacements)
+        if (!HasChanges)
             return true;
 
         // Tail-uuid invariant: the app chains the next append off the in-memory
         // tail — the final record must survive byte-for-byte.
-        if (Records[^1].Replacement is not null)
+        if (Records[^1].Removed || Records[^1].Replacement is not null)
             return false;
 
-        var sb = new StringBuilder();
-        var rewrittenUuids = new List<string?>(Records.Count);
-        for (int i = 0; i < Records.Count; i++)
+        var byUuid = new Dictionary<string, TranscriptRecord>();
+        foreach (TranscriptRecord r in Records)
         {
-            TranscriptRecord rec = Records[i];
-            string line;
-            if (rec.Replacement is JsonObject repl)
+            if (r.Uuid is not null)
+                byUuid.TryAdd(r.Uuid, r);
+        }
+        var removedUuids = Records.Where(r => r.Removed && r.Uuid is not null)
+            .Select(r => r.Uuid!).ToHashSet();
+
+        // Walk up through removed records to the nearest kept ancestor. A uuid we
+        // don't know is left as-is (original files legally contain references we
+        // cannot resolve — grafts, crash leftovers; we only fix what WE break).
+        string? SurvivingAncestor(string? uuid)
+        {
+            var visited = new HashSet<string>();
+            while (uuid is not null && removedUuids.Contains(uuid))
             {
-                line = repl.ToJsonString(Json.Compact);
+                if (!visited.Add(uuid))
+                    return null; // cycle: fail safe to a root
+                uuid = byUuid[uuid].ParentUuid;
+            }
+            return uuid;
+        }
+
+        // Build the output, computing the expected chain as we go.
+        var outLines = new List<string>();
+        var expected = new List<(string? Uuid, string? Parent)>();
+        foreach (TranscriptRecord rec in Records)
+        {
+            if (rec.Removed)
+                continue;
+
+            JsonObject? node = rec.Replacement;
+
+            string? newParent = rec.ParentUuid;
+            if (newParent is not null && removedUuids.Contains(newParent))
+                newParent = SurvivingAncestor(newParent);
+
+            string? origLeaf = (node ?? rec.Node)["leafUuid"] is JsonValue lv
+                && lv.TryGetValue<string>(out string? l) ? l : null;
+            string? newLeaf = origLeaf is not null && removedUuids.Contains(origLeaf)
+                ? SurvivingAncestor(origLeaf)
+                : origLeaf;
+
+            if (newParent != rec.ParentUuid || newLeaf != origLeaf)
+            {
+                node ??= (JsonObject)rec.Node.DeepClone();
+                if (newParent != rec.ParentUuid)
+                    node["parentUuid"] = newParent is null ? null : JsonValue.Create(newParent);
+                if (newLeaf != origLeaf)
+                    node["leafUuid"] = newLeaf is null ? null : JsonValue.Create(newLeaf);
+            }
+
+            string line;
+            if (node is not null)
+            {
+                line = node.ToJsonString(Json.Compact);
                 if (rec.HadCarriageReturn) line += "\r";
             }
             else
             {
                 line = rec.RawLine;
             }
-            sb.Append(line);
-            if (i < Records.Count - 1 || EndsWithNewline) sb.Append('\n');
+            outLines.Add(line);
+            expected.Add((rec.Uuid, newParent));
+        }
+
+        if (outLines.Count == 0)
+            return false; // never empty a transcript
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < outLines.Count; i++)
+        {
+            sb.Append(outLines[i]);
+            if (i < outLines.Count - 1 || EndsWithNewline) sb.Append('\n');
         }
         string rewritten = sb.ToString();
 
-        // Independent re-validation of the full result: every line parses, record
-        // count unchanged, uuid/parentUuid sequence identical, tail byte-identical.
+        // Independent re-validation of the full result.
         string[] lines = rewritten.Split('\n');
         int count = EndsWithNewline ? lines.Length - 1 : lines.Length;
-        if (count != Records.Count)
+        if (count != expected.Count)
             return false;
         for (int i = 0; i < count; i++)
         {
             TranscriptRecord? reparsed = TranscriptRecord.TryParse(lines[i]);
             if (reparsed is null)
                 return false;
-            if (reparsed.Uuid != Records[i].Uuid || reparsed.ParentUuid != Records[i].ParentUuid)
+            if (reparsed.Uuid != expected[i].Uuid || reparsed.ParentUuid != expected[i].Parent)
+                return false;
+            // Nothing may still point at a removed record.
+            if (reparsed.ParentUuid is not null && removedUuids.Contains(reparsed.ParentUuid))
+                return false;
+            if (reparsed.Node["leafUuid"] is JsonValue rlv
+                && rlv.TryGetValue<string>(out string? rleaf) && removedUuids.Contains(rleaf))
                 return false;
         }
         if (lines[count - 1] != Records[^1].RawLine)

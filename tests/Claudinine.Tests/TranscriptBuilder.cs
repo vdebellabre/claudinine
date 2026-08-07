@@ -10,6 +10,9 @@ internal sealed class TranscriptBuilder
     private string? _lastUuid;
     private int _seq;
 
+    /// <summary>Uuid of the most recently added chained record.</summary>
+    public string? LastUuid => _lastUuid;
+
     public string NextUuid() => $"00000000-0000-0000-0000-{++_seq:D12}";
 
     public TranscriptBuilder UserPrompt(string text)
