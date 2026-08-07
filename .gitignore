@@ -5,3 +5,4 @@ tests/**/bin/
 *.user
 .vs/
 .idea/
+publish/
