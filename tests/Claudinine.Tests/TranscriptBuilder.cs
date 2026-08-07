@@ -231,6 +231,38 @@ internal sealed class TranscriptBuilder
     public TranscriptBuilder EditedTextFile(string filename, string snippet) =>
         Attachment("edited_text_file", ("filename", filename), ("snippet", snippet));
 
+    /// <summary>
+    /// A sequential tool call: use record + result carrier, the carrier bearing
+    /// the harness-written toolUseResult object (string for errored calls).
+    /// </summary>
+    public TranscriptBuilder ToolCall(string name, JsonObject input, string resultText,
+        JsonNode? toolUseResult = null)
+    {
+        string toolUseId = $"toolu_{_seq + 1:D4}";
+        Add("assistant", new JsonObject
+        {
+            ["role"] = "assistant",
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "tool_use",
+                ["id"] = toolUseId,
+                ["name"] = name,
+                ["input"] = input,
+            }),
+        });
+        Add("user", new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "tool_result",
+                ["tool_use_id"] = toolUseId,
+                ["content"] = resultText,
+            }),
+        }, toolUseResult: toolUseResult);
+        return this;
+    }
+
     public TranscriptBuilder RawLine(string line)
     {
         _lines.Add(line);
@@ -238,7 +270,8 @@ internal sealed class TranscriptBuilder
     }
 
     private void Add(string type, JsonObject message,
-        string? parent = null, string? sourceToolAssistantUuid = null)
+        string? parent = null, string? sourceToolAssistantUuid = null,
+        JsonNode? toolUseResult = null)
     {
         string uuid = NextUuid();
         var record = new JsonObject
@@ -251,6 +284,8 @@ internal sealed class TranscriptBuilder
         };
         if (sourceToolAssistantUuid is not null)
             record["sourceToolAssistantUUID"] = sourceToolAssistantUuid;
+        if (toolUseResult is not null)
+            record["toolUseResult"] = toolUseResult;
         _lastUuid = uuid;
         _lines.Add(record.ToJsonString());
     }
