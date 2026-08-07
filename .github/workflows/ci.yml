@@ -17,7 +17,9 @@ jobs:
           - { rid: win-arm64,   os: windows-11-arm }
           - { rid: linux-x64,   os: ubuntu-latest }
           - { rid: linux-arm64, os: ubuntu-24.04-arm }
-          - { rid: osx-x64,     os: macos-13 }
+          # macos-13 was retired (a job targeting it queues forever);
+          # macos-15-intel is GitHub's last Intel image, kept until ~2027.
+          - { rid: osx-x64,     os: macos-15-intel }
           - { rid: osx-arm64,   os: macos-latest }
     steps:
       - uses: actions/checkout@v4
