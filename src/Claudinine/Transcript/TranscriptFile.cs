@@ -67,7 +67,7 @@ internal sealed class TranscriptFile
         // remove or replace it; the rewrite layer itself may still rechain its
         // parentUuid when the records just before it were removed.
         if (Records[^1].Removed || Records[^1].Replacement is not null)
-            return false;
+            return Refuse("tail-touched");
 
         var byUuid = new Dictionary<string, TranscriptRecord>();
         foreach (TranscriptRecord r in Records)
@@ -96,6 +96,7 @@ internal sealed class TranscriptFile
         // Build the output, computing the expected chain as we go.
         var outLines = new List<string>();
         var expected = new List<(string? Uuid, string? Parent)>();
+        bool tailRewritten = false;
         foreach (TranscriptRecord rec in Records)
         {
             if (rec.Removed)
@@ -115,6 +116,8 @@ internal sealed class TranscriptFile
 
             if (newParent != rec.ParentUuid || newLeaf != origLeaf)
             {
+                if (ReferenceEquals(rec, Records[^1]))
+                    tailRewritten = true;
                 node ??= (JsonObject)rec.Node.DeepClone();
                 if (newParent != rec.ParentUuid)
                     node["parentUuid"] = newParent is null ? null : JsonValue.Create(newParent);
@@ -137,7 +140,7 @@ internal sealed class TranscriptFile
         }
 
         if (outLines.Count == 0)
-            return false; // never empty a transcript
+            return Refuse("empty"); // never empty a transcript
 
         var sb = new StringBuilder();
         for (int i = 0; i < outLines.Count; i++)
@@ -151,33 +154,37 @@ internal sealed class TranscriptFile
         string[] lines = rewritten.Split('\n');
         int count = EndsWithNewline ? lines.Length - 1 : lines.Length;
         if (count != expected.Count)
-            return false;
+            return Refuse("count-mismatch");
         for (int i = 0; i < count; i++)
         {
             TranscriptRecord? reparsed = TranscriptRecord.TryParse(lines[i]);
             if (reparsed is null)
-                return false;
+                return Refuse("reparse");
             if (reparsed.Uuid != expected[i].Uuid || reparsed.ParentUuid != expected[i].Parent)
-                return false;
+                return Refuse("chain-mismatch");
             // Nothing may still point at a removed record.
             if (reparsed.ParentUuid is not null && removedUuids.Contains(reparsed.ParentUuid))
-                return false;
+                return Refuse("dangling-parent");
             if (reparsed.Node["leafUuid"] is JsonValue rlv
                 && rlv.TryGetValue<string>(out string? rleaf) && removedUuids.Contains(rleaf))
-                return false;
+                return Refuse("dangling-leaf");
             // A result carrier pointing at a removed tool_use record means a rule
             // broke pair atomicity. Unlike parentUuid/leafUuid this is not an
             // ancestry link — remapping has no meaning, so fail the rewrite.
             if (reparsed.Node["sourceToolAssistantUUID"] is JsonValue rsv
                 && rsv.TryGetValue<string>(out string? rsrc) && removedUuids.Contains(rsrc))
-                return false;
+                return Refuse("dangling-source");
         }
         // The tail keeps its identity (uuid checked above via expected[^1]); it is
-        // byte-identical unless the rewrite layer had to rechain its parentUuid.
+        // byte-identical unless the rewrite layer itself had to rechain its
+        // parentUuid or remap its leafUuid (demanding byte-identity there silently
+        // aborted every pass on files ending in a leafUuid-bearing metadata record
+        // whose anchor was removed — same over-strictness bug as the old
+        // second-to-last-record collapse abort).
         if (expected[^1].Uuid != Records[^1].Uuid)
-            return false;
-        if (expected[^1].Parent == Records[^1].ParentUuid && lines[count - 1] != Records[^1].RawLine)
-            return false;
+            return Refuse("tail-uuid");
+        if (!tailRewritten && lines[count - 1] != Records[^1].RawLine)
+            return Refuse("tail-bytes");
 
         string temp = Path + ".claudinine-tmp";
         try
@@ -191,5 +198,13 @@ internal sealed class TranscriptFile
             try { File.Delete(temp); } catch { }
             return false;
         }
+    }
+
+    /// <summary>Fail-closed exit, naming the refused check when CLAUDININE_DEBUG is set.</summary>
+    private static bool Refuse(string reason)
+    {
+        if (Environment.GetEnvironmentVariable("CLAUDININE_DEBUG") is not null)
+            Console.Error.WriteLine($"[claudinine debug] rewrite refused: {reason}");
+        return false;
     }
 }

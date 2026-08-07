@@ -35,6 +35,13 @@ internal static class Compactor
             }
         }
 
-        transcript.TryRewrite();
+        bool ok = transcript.TryRewrite();
+        if (Environment.GetEnvironmentVariable("CLAUDININE_DEBUG") is not null)
+        {
+            int replaced = transcript.Records.Count(r => r.Replacement is not null);
+            int removed = transcript.Records.Count(r => r.Removed);
+            Console.Error.WriteLine(
+                $"[claudinine debug] replaced={replaced} removed={removed} rewriteOk={ok}");
+        }
     }
 }
