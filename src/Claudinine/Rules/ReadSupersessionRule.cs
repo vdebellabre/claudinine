@@ -84,7 +84,13 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 if (b["tool_use_id"]?.GetValue<string>() is not string toolUseId
                     || !superseded.TryGetValue(toolUseId, out List<ReadTarget>? targets))
                     continue;
-                if (RuleHelpers.ResultText(b).Length < MinResultChars)
+                string current = RuleHelpers.ResultText(b);
+                if (current.Length < MinResultChars)
+                    continue;
+                // The carrier may no longer hold the read's output at all: a
+                // chain-collapse digest reuses the anchor call's tool_use_id, and
+                // its content is long — MinResultChars alone won't skip it.
+                if (RuleHelpers.IsClaudinineStub(current))
                     continue;
 
                 // First hit on this record: clone it, then mutate the clone's

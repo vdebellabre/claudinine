@@ -60,6 +60,32 @@ public sealed class ReadToolDedupTests : IDisposable
     public void MissingPathRefused() => Assert.Empty(Extract(new JsonObject { ["offset"] = 1 }));
 
     [Fact]
+    public void ChainCollapseDigestCarrierNeverStomped()
+    {
+        // Regression (found 2026-08-07 on d8aa7b17): a chain-collapse digest
+        // reuses the anchor Read's tool_use_id, so on the NEXT pass this rule saw
+        // a long "result" for a superseded read and replaced the digest with its
+        // stub — destroying every other [ref] line the digest carried. Anything
+        // already claudinine-authored must be left alone.
+        string digest = "[claudinine: this turn originally ran 14 separate tool calls."
+            + new string('x', 500) + "]";
+        var b = new TranscriptBuilder();
+        b.UserPrompt("investigate");
+        b.ToolRead(@"C:\src\foo.cs", out _, digest, offset: 10, limit: 100);
+        for (int i = 0; i < 8; i++)
+        {
+            b.UserPrompt($"again ({i})");
+            b.ToolRead(@"C:\src\foo.cs", out _, LongOutput, offset: 10, limit: 100);
+        }
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        Assert.Contains(File.ReadAllLines(path), l => l.Contains("originally ran 14 separate tool calls"));
+    }
+
+    [Fact]
     public void EndToEndSupersession()
     {
         // One read per turn: keeps chain-collapse out of this dedup-focused test.
