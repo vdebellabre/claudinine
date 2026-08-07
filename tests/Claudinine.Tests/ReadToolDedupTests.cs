@@ -62,10 +62,12 @@ public sealed class ReadToolDedupTests : IDisposable
     [Fact]
     public void EndToEndSupersession()
     {
-        var b = new TranscriptBuilder().UserPrompt("look at foo");
+        // One read per turn: keeps chain-collapse out of this dedup-focused test.
+        var b = new TranscriptBuilder();
         var ids = new List<string>();
         for (int i = 0; i < 8; i++)
         {
+            b.UserPrompt($"look at foo ({i})");
             b.ToolRead(@"C:\src\foo.cs", out string id, LongOutput, offset: 10, limit: 100);
             ids.Add(id);
         }
@@ -87,7 +89,10 @@ public sealed class ReadToolDedupTests : IDisposable
         var b = new TranscriptBuilder().UserPrompt("look");
         b.ToolRead("f.cs", out string deepId, LongOutput, offset: 2500, limit: 50);
         for (int i = 0; i < 7; i++)
+        {
+            b.UserPrompt($"again ({i})"); // one read per turn: no chain-collapse here
             b.ToolRead("f.cs", out _, LongOutput); // no limit: claims only 1..2000
+        }
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
 

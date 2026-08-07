@@ -111,18 +111,21 @@ public sealed class ChainCollapseTests : IDisposable
     }
 
     [Fact]
-    public void RecentTurnIsNotCollapsed()
+    public void FreshSettledTurnCollapsesToo()
     {
+        // No age gate by design: the app never re-reads the file mid-session, so
+        // even the newest settled turn is fair game — the payout is at next load.
         var b = new TranscriptBuilder().UserPrompt("fresh work");
         for (int i = 0; i < 5; i++)
             b.BashRead($"sed -n '1,5p' f{i}.txt", out _, Output + i);
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
-        string before = File.ReadAllText(path);
+        int linesBefore = File.ReadAllLines(path).Length;
 
         Compactor.Run(path);
 
-        Assert.Equal(before, File.ReadAllText(path));
+        Assert.True(File.ReadAllLines(path).Length < linesBefore);
+        Assert.Contains("this turn originally ran 5 separate tool calls", File.ReadAllText(path));
     }
 
     [Fact]

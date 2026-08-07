@@ -63,7 +63,9 @@ internal sealed class TranscriptFile
             return true;
 
         // Tail-uuid invariant: the app chains the next append off the in-memory
-        // tail — the final record must survive byte-for-byte.
+        // tail uuid — the final record must survive with its uuid. Rules may not
+        // remove or replace it; the rewrite layer itself may still rechain its
+        // parentUuid when the records just before it were removed.
         if (Records[^1].Removed || Records[^1].Replacement is not null)
             return false;
 
@@ -164,7 +166,11 @@ internal sealed class TranscriptFile
                 && rlv.TryGetValue<string>(out string? rleaf) && removedUuids.Contains(rleaf))
                 return false;
         }
-        if (lines[count - 1] != Records[^1].RawLine)
+        // The tail keeps its identity (uuid checked above via expected[^1]); it is
+        // byte-identical unless the rewrite layer had to rechain its parentUuid.
+        if (expected[^1].Uuid != Records[^1].Uuid)
+            return false;
+        if (expected[^1].Parent == Records[^1].ParentUuid && lines[count - 1] != Records[^1].RawLine)
             return false;
 
         string temp = Path + ".claudinine-tmp";

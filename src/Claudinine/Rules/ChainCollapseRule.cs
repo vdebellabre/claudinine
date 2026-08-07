@@ -27,7 +27,6 @@ internal sealed class ChainCollapseRule : ICompactionRule
     public void Apply(TranscriptFile transcript)
     {
         var records = transcript.Records;
-        var age = new AgeIndex(records);
 
         // Turn boundaries: a REAL user message (plain-string content) is a hard
         // boundary; tool-result carriers use a list. Getting this wrong makes the
@@ -39,14 +38,16 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 bounds.Add(i);
         }
 
+        // No age gate — deliberately. The app never re-reads the file mid-session
+        // (canary-verified), so collapsing the freshest turn affects nothing live;
+        // the only consumer is the next load, and the POC's live test showed a
+        // fully-collapsed session retrieves rather than guesses. The in-flight
+        // guard below (a use with no result) is structural, not temporal.
         for (int b = 0; b < bounds.Count; b++)
         {
             int start = bounds[b] + 1;
             int end = b + 1 < bounds.Count ? bounds[b + 1] : records.Count;
             if (end <= start)
-                continue;
-            // The whole turn must be aged: its youngest record decides.
-            if (!age.IsMidAged(end - 1))
                 continue;
             CollapseTurn(records, start, end);
         }

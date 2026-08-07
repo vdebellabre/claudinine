@@ -29,7 +29,7 @@ internal static class Compactor
             {
                 rule.Apply(transcript);
             }
-            catch
+            catch when (Environment.GetEnvironmentVariable("CLAUDININE_DEBUG") is null)
             {
                 return; // a misbehaving rule poisons the pass, not the file
             }

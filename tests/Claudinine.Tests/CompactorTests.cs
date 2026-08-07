@@ -22,13 +22,19 @@ public sealed class CompactorTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    /// <summary>8 identical reads: cutoff leaves the first two eligible, recency keeps the rest.</summary>
+    /// <summary>
+    /// 8 identical reads, ONE PER TURN so chain-collapse (which collapses any
+    /// settled multi-call turn) stays out of these dedup-focused tests. Supersession
+    /// is whole-file, so the dedup behavior is identical: cutoff leaves the first
+    /// two eligible, recency keeps the rest.
+    /// </summary>
     private TranscriptBuilder EightIdenticalReads(out List<string> toolUseIds)
     {
-        var b = new TranscriptBuilder().UserPrompt("look at foo");
+        var b = new TranscriptBuilder();
         toolUseIds = [];
         for (int i = 0; i < 8; i++)
         {
+            b.UserPrompt($"look at foo ({i})");
             b.BashRead("sed -n '1,100p' src/foo.cs", out string id, LongOutput);
             toolUseIds.Add(id);
         }
@@ -147,9 +153,12 @@ public sealed class CompactorTests : IDisposable
     [Fact]
     public void ShortResultsAreNotWorthAStub()
     {
-        var b = new TranscriptBuilder().UserPrompt("look");
+        var b = new TranscriptBuilder();
         for (int i = 0; i < 8; i++)
+        {
+            b.UserPrompt($"look ({i})"); // one read per turn: dedup-only scenario
             b.BashRead("sed -n '1,100p' src/foo.cs", out _, "short output");
+        }
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
         string before = File.ReadAllText(path);
@@ -163,7 +172,10 @@ public sealed class CompactorTests : IDisposable
         var b = new TranscriptBuilder().UserPrompt("look");
         b.BashRead("sed -n '1,100p' src/foo.cs", out string wideId, LongOutput);
         for (int i = 0; i < 7; i++)
+        {
+            b.UserPrompt($"narrow ({i})"); // one read per turn: dedup-only scenario
             b.BashRead("sed -n '50,60p' src/foo.cs", out _, LongOutput); // narrower: no cover
+        }
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
 
