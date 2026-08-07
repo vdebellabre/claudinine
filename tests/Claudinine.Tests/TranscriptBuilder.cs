@@ -204,6 +204,33 @@ internal sealed class TranscriptBuilder
         return this;
     }
 
+    /// <summary>
+    /// On-chain attachment record as the app writes when a touched file was
+    /// modified out-of-band (snippet = the entire current file content).
+    /// </summary>
+    public TranscriptBuilder Attachment(string attachmentType, params (string Key, string Value)[] fields)
+    {
+        string uuid = NextUuid();
+        var attachment = new JsonObject { ["type"] = attachmentType };
+        foreach ((string key, string value) in fields)
+            attachment[key] = value;
+        var record = new JsonObject
+        {
+            ["parentUuid"] = _lastUuid,
+            ["isSidechain"] = false,
+            ["attachment"] = attachment,
+            ["type"] = "attachment",
+            ["uuid"] = uuid,
+            ["sessionId"] = "test-session",
+        };
+        _lastUuid = uuid;
+        _lines.Add(record.ToJsonString());
+        return this;
+    }
+
+    public TranscriptBuilder EditedTextFile(string filename, string snippet) =>
+        Attachment("edited_text_file", ("filename", filename), ("snippet", snippet));
+
     public TranscriptBuilder RawLine(string line)
     {
         _lines.Add(line);

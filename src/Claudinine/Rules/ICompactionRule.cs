@@ -39,5 +39,6 @@ internal static class RuleCatalog
         new MetadataKeepLastRule(),
         new QueueHistoryCollapseRule(),
         new StopHookSummaryStripRule(),
+        new EditedTextFileKeepLastRule(),
     ];
 }
