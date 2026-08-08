@@ -24,14 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Install exactly what src/global.json pins. Naming the file rather than a
-      # 10.0.x wildcard keeps one source of truth: rollForward is latestPatch, so
-      # a runner carrying a newer feature band (10.0.4xx) would otherwise satisfy
-      # setup-dotnet while global.json refused it, and every dotnet call would
-      # fail with "SDK not found".
+      # Install the newest 10.x the runner offers; src/global.json pins 10.0.302
+      # with rollForward latestMinor, so the build takes that newest 10.x and can
+      # never silently move to 11.x. Pointing setup-dotnet at global.json instead
+      # would install only the exact pinned build, leaving nothing to roll to.
       - uses: actions/setup-dotnet@v4
         with:
-          global-json-file: src/global.json
+          dotnet-version: 10.0.x
 
       # Every dotnet command runs from src/: global.json lives there (SDK + the
       # Microsoft.Testing.Platform runner opt-in) and is discovered by walking up
