@@ -1,8 +1,3 @@
-using Claudinine.Rules;
-using TUnit.Assertions;
-using TUnit.Assertions.Extensions;
-using TUnit.Core;
-
 // Mirror tests mutate CLAUDE_PLUGIN_DATA (process-wide), so keep runs sequential.
 [assembly: NotInParallel]
 

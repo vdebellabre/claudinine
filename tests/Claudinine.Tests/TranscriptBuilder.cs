@@ -1,6 +1,3 @@
-using System.Text;
-using System.Text.Json.Nodes;
-
 namespace Claudinine.Tests;
 
 /// <summary>Builds synthetic transcript JSONL shaped like the app's records.</summary>

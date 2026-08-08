@@ -1,8 +1,3 @@
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using Claudinine.Mirror;
-using Claudinine.Transcript;
-
 namespace Claudinine.Rules;
 
 /// <summary>

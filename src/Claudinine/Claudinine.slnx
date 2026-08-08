@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/github/">
+    <File Path="../../.github/workflows/ci.yml" />
+  </Folder>
   <Project Path="../../tests/Claudinine.Tests/Claudinine.Tests.csproj" />
   <Project Path="Claudinine.csproj" />
 </Solution>

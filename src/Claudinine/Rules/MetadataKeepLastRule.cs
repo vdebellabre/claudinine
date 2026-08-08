@@ -1,5 +1,3 @@
-using Claudinine.Transcript;
-
 namespace Claudinine.Rules;
 
 /// <summary>

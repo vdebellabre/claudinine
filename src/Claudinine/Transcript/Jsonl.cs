@@ -1,6 +1,3 @@
-using System.Text;
-using System.Text.Json.Nodes;
-
 namespace Claudinine.Transcript;
 
 /// <summary>

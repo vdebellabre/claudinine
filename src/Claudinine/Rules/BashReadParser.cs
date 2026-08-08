@@ -1,6 +1,3 @@
-using System.Text;
-using System.Text.RegularExpressions;
-
 namespace Claudinine.Rules;
 
 /// <summary>One file range a command reads. <c>End == null</c> means "to end of file".</summary>
