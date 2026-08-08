@@ -3,13 +3,14 @@
 # the SHA-256 that marketplace.json must pin.
 #
 # The archive carries only what an installed plugin needs at runtime: the
-# manifest, the hooks, the shims, and the six native binaries. Source and tests
-# are deliberately excluded -- they are what makes a git clone of this repo
-# heavy, which is the whole reason this archive exists.
+# manifest, the hooks, the commands, the shims, and the six native binaries.
+# Source and tests are deliberately excluded -- they are what makes a git clone
+# of this repo heavy, which is the whole reason this archive exists.
 #
 # Layout inside the zip (contents at the root, not wrapped in a folder):
 #   .claude-plugin/plugin.json
 #   hooks/hooks.json
+#   commands/*.md
 #   README.md
 #   bin/claudinine, bin/claudinine.cmd, bin/<rid>/claudinine[.exe]
 #
@@ -56,6 +57,14 @@ try {
     Copy-Item $manifestPath (Join-Path $stage '.claude-plugin/plugin.json')
     Copy-Item (Join-Path $repo 'hooks/hooks.json') (Join-Path $stage 'hooks/hooks.json')
     Copy-Item (Join-Path $repo 'README.md') (Join-Path $stage 'README.md')
+
+    # Slash commands. Copied as a directory because the set grows: a missing
+    # commands/ dir in the zip is a silent feature loss for installed users --
+    # the plugin works, minus every command.
+    $commandsSrc = Join-Path $repo 'commands'
+    if (Test-Path $commandsSrc) {
+        Copy-Item $commandsSrc (Join-Path $stage 'commands') -Recurse
+    }
     Copy-Item (Join-Path $repo 'bin/claudinine') (Join-Path $stage 'bin/claudinine')
     Copy-Item (Join-Path $repo 'bin/claudinine.cmd') (Join-Path $stage 'bin/claudinine.cmd')
 
@@ -90,7 +99,9 @@ try {
             foreach ($rid in $rids | Where-Object { -not $_.StartsWith('win-') }) {
                 & chmod '+x' "bin/$rid/claudinine"
             }
-            & zip -q -r -X $zip '.claude-plugin' 'hooks' 'bin' 'README.md'
+            $entries = @('.claude-plugin', 'hooks', 'bin', 'README.md')
+            if (Test-Path 'commands') { $entries += 'commands' }
+            & zip -q -r -X $zip @entries
             if ($LASTEXITCODE -ne 0) { throw "zip failed with exit code $LASTEXITCODE" }
         }
         finally { Pop-Location }
