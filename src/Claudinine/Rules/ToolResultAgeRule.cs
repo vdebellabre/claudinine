@@ -129,8 +129,8 @@ internal sealed class ToolResultAgeRule : ICompactionRule
     }
 
     /// <summary>
-    /// Old tier: "[claudinine: Bash npm test — 220 lines, 14.3KB]". Looks back a few
-    /// records for the matching tool_use to name the tool and its target.
+    /// Old tier: "[claudinine: Bash npm test — 220 lines, 14.3KB]". Scans back to
+    /// the turn boundary for the matching tool_use to name the tool and its target.
     /// When the result was a persisted-output stub, the sidecar path is appended so
     /// the full output stays reachable ("full output: C:\...\tool-results\x.txt").
     /// </summary>
@@ -141,11 +141,18 @@ internal sealed class ToolResultAgeRule : ICompactionRule
         string toolName = "", toolPath = "";
         if (toolUseId is not null)
         {
+            // The matching use always precedes its result within the same turn,
+            // but in the parallel-batch format (each use its own record, results
+            // in completion order) it can sit arbitrarily many records back — a
+            // fixed window produced anonymous stubs on large batches, so scan to
+            // the turn boundary instead.
             // Reads .Node, not CurrentNode, on purpose: anchor-input-stub runs
             // earlier in the catalog and may have replaced the input with its
             // pointer stub — the ORIGINAL input is what names this stub usefully.
-            for (int p = Math.Max(0, pos - 10); p <= pos && p < records.Count && toolName.Length == 0; p++)
+            for (int p = pos - 1; p >= 0 && toolName.Length == 0; p--)
             {
+                if (records[p].IsRealUserMessage())
+                    break; // turn boundary: the use cannot be earlier
                 foreach (JsonNode? n in RuleHelpers.ContentBlocks(records[p].Node))
                 {
                     if (n is not JsonObject u

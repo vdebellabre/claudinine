@@ -137,6 +137,42 @@ public sealed class NoiseRulesTests : IDisposable
     }
 
     [Fact]
+    public void OldTierStubNamesToolAcrossLargeParallelBatch()
+    {
+        // Batch format: each use is its OWN record and results arrive in
+        // completion order — answer the FIRST use LAST, so its use sits ~23
+        // records before its result, far past the old fixed 10-record lookback
+        // that produced anonymous "[claudinine — N lines…]" stubs.
+        var b = new TranscriptBuilder().UserPrompt("do the batch");
+        var uses = new List<(string Id, string Uuid)>();
+        for (int i = 0; i < 12; i++)
+        {
+            b.ToolUse($"sed -n '1,5p' batch{i}.txt", out string id, out string uuid);
+            uses.Add((id, uuid));
+        }
+        for (int i = 11; i >= 1; i--)
+            b.ToolResultFor(uses[i].Id, uses[i].Uuid, $"short {i}");
+        string bigOutput = string.Join("\n", Enumerable.Range(1, 200).Select(j => $"batch0 line {j}"));
+        b.ToolResultFor(uses[0].Id, uses[0].Uuid, bigOutput);
+        AgeBy(b, AgeIndex.OldAgeTurns + 5);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        // The rule alone: through the full catalog, chain-collapse would consume
+        // the batch first and the age rule would never see these results.
+        var transcript = Claudinine.Transcript.TranscriptFile.TryLoad(path)!;
+        new ToolResultAgeRule().Apply(transcript);
+
+        string stub = transcript.Records
+            .Where(r => r.Replacement is not null)
+            .SelectMany(r => RuleHelpers.ContentBlocks(r.Replacement!).OfType<JsonObject>())
+            .Single(x => x["tool_use_id"]?.GetValue<string>() == uses[0].Id)
+            ["content"]!.GetValue<string>();
+        Assert.StartsWith("[claudinine: Bash", stub); // named, not anonymous
+        Assert.Contains("batch0.txt", stub);
+    }
+
+    [Fact]
     public void RecentToolResultsUntouched()
     {
         string bigOutput = string.Join("\n", Enumerable.Range(1, 300).Select(i => $"line {i}"));
