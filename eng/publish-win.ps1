@@ -17,7 +17,9 @@ $sdk = Get-ChildItem $sdkRoot | Sort-Object Name -Descending | Select-Object -Fi
 $env:LIB = "$($vc.FullName)\lib\onecore\x64;$($sdk.FullName)\um\x64;$($sdk.FullName)\ucrt\x64"
 $env:PATH = "$($vc.FullName)\bin\Hostx64\x64;$env:PATH"
 
-dotnet publish "$repo/src/Claudinine" -c Release -r win-x64 -o "$repo/publish/win-x64" --nologo -p:IlcUseEnvironmentalTools=true
+# Target the csproj, not the directory: the directory resolves to
+# Claudinine.slnx, which also carries the (exe-type) test project — NETSDK1151.
+dotnet publish "$repo/src/Claudinine/Claudinine.csproj" -c Release -r win-x64 -o "$repo/publish/win-x64" --nologo -p:IlcUseEnvironmentalTools=true
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & "$repo/publish/win-x64/claudinine.exe" version

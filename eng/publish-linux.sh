@@ -5,7 +5,9 @@ set -e
 apt-get update -qq
 apt-get install -y -qq clang zlib1g-dev >/dev/null
 cd /repo
-dotnet publish src/Claudinine -c Release -r linux-x64 -o /out -v q --nologo
+# Target the csproj, not the directory: the directory resolves to
+# Claudinine.slnx, which also carries the (exe-type) test project — NETSDK1151.
+dotnet publish src/Claudinine/Claudinine.csproj -c Release -r linux-x64 -o /out -v q --nologo
 ls -l /out
 /out/claudinine version
 echo '{"hook_event_name":"SessionStart","transcript_path":"/nonexistent"}' | /out/claudinine hook
