@@ -22,9 +22,9 @@ jobs:
           - { rid: osx-x64,     os: macos-15-intel }
           - { rid: osx-arm64,   os: macos-latest }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           global-json-file: src/global.json
 
@@ -76,7 +76,7 @@ jobs:
       # Ship the binary only. `claudinine*` also matched the stripped symbol
       # files (claudinine.dbg / .pdb), which are bigger than the binary and are
       # never committed to bin/<rid>/.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: claudinine-${{ matrix.rid }}
           path: |
@@ -98,9 +98,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dl
           pattern: claudinine-*
