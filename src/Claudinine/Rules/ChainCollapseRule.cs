@@ -26,7 +26,9 @@ namespace Claudinine.Rules;
 /// </summary>
 internal sealed class ChainCollapseRule : ICompactionRule
 {
-    public string Name => "chain-collapse";
+    public const string RuleName = "chain-collapse";
+
+    public string Name => RuleName;
 
     /// <summary>Below this many calls the anchor+header overhead isn't worth it.</summary>
     private const int MinCalls = 2;

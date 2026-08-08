@@ -31,6 +31,9 @@ internal static class RuleCatalog
         // Chain-collapse runs before the age tiers so digest previews render from
         // (mostly) original content; whatever it leaves behind ages normally.
         new ChainCollapseRule(),
+        // Immediately after chain-collapse: slims the retrieval boilerplate of
+        // every carrier but the file's first, including carriers born this pass.
+        new CarrierHeaderDedupRule(),
         new ToolResultAgeRule(),
         new MegaBlockTrimRule(),
         new ImageStripRule(),
