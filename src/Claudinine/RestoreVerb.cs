@@ -109,7 +109,7 @@ internal static class RestoreVerb
         return 0;
     }
 
-    private readonly record struct Line(string Raw, string? Uuid, string? ParentUuid);
+    internal readonly record struct Line(string Raw, string? Uuid, string? ParentUuid);
 
     private static string? MirrorTarget(string mirrorPath)
     {
@@ -133,7 +133,7 @@ internal static class RestoreVerb
     /// carries a fork-heal separator — the only condition under which mirror
     /// order may deviate from original file order.
     /// </summary>
-    private static (List<Line> Lines, bool ForkMerged) ReadMirrors(List<string> mirrors)
+    internal static (List<Line> Lines, bool ForkMerged) ReadMirrors(List<string> mirrors)
     {
         var result = new List<Line>();
         var seenUuids = new HashSet<string>();

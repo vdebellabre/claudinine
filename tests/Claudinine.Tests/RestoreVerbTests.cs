@@ -67,6 +67,82 @@ public sealed class RestoreVerbTests : IDisposable
         HookRunner.Run(new MemoryStream(Encoding.UTF8.GetBytes(json)));
     }
 
+    // ---- ReadMirrors: cross-mirror merge. Unit seam on purpose — a real
+    // two-dir layout can't be reproduced end-to-end, because the home-based
+    // search directories aren't redirectable in tests (registry-backed on
+    // Windows), and this multiplicity logic is the subtlest code in the verb. ----
+
+    private string WriteRawMirror(string name, params string[] bodyLines)
+    {
+        Directory.CreateDirectory(MirrorsDir);
+        string path = Path.Combine(MirrorsDir, name);
+        const string header = """{"claudinine":{"v":"1","mirrorOf":"C:\\somewhere.jsonl"}}""";
+        File.WriteAllText(path,
+            string.Join("\n", new[] { header }.Concat(bodyLines)) + "\n", new UTF8Encoding(false));
+        return path;
+    }
+
+    private const string QueueOp =
+        """{"type":"queue-operation","operation":"enqueue","content":"x","sessionId":"s"}""";
+
+    [Fact]
+    public void UuidlessLinesMergeByMaxMultiplicityAcrossMirrors()
+    {
+        // Cross-context copies of the SAME session can hold the same uuid-less
+        // line a different number of times; the restore must reproduce the
+        // maximum — neither the sum (5) nor the first file's count (2).
+        string a = WriteRawMirror("a.jsonl", QueueOp, QueueOp);
+        string b = WriteRawMirror("b.jsonl", QueueOp, QueueOp, QueueOp);
+
+        (List<RestoreVerb.Line> lines, bool forkMerged) = RestoreVerb.ReadMirrors([a, b]);
+
+        Assert.False(forkMerged);
+        Assert.Equal(3, lines.Count(l => l.Raw == QueueOp));
+    }
+
+    [Fact]
+    public void MultiplicityMergeIsOrderIndependent()
+    {
+        string a = WriteRawMirror("a.jsonl", QueueOp, QueueOp);
+        string b = WriteRawMirror("b.jsonl", QueueOp, QueueOp, QueueOp);
+
+        // Larger file first: the smaller one must contribute nothing new.
+        (List<RestoreVerb.Line> lines, _) = RestoreVerb.ReadMirrors([b, a]);
+
+        Assert.Equal(3, lines.Count(l => l.Raw == QueueOp));
+    }
+
+    [Fact]
+    public void UuidRecordsDedupAcrossMirrorsFirstFileWins()
+    {
+        string a = WriteRawMirror("a.jsonl",
+            """{"type":"user","uuid":"u1","note":"from-a"}""");
+        string b = WriteRawMirror("b.jsonl",
+            """{"type":"user","uuid":"u1","note":"from-b"}""",
+            """{"type":"user","uuid":"u2","note":"only-b"}""");
+
+        (List<RestoreVerb.Line> lines, _) = RestoreVerb.ReadMirrors([a, b]);
+
+        RestoreVerb.Line u1 = Assert.Single(lines, l => l.Uuid == "u1");
+        Assert.Contains("from-a", u1.Raw);
+        Assert.Single(lines, l => l.Uuid == "u2");
+    }
+
+    [Fact]
+    public void ForkSeparatorSetsFlagButIsNotARecord()
+    {
+        string a = WriteRawMirror("a.jsonl",
+            """{"type":"user","uuid":"u1"}""",
+            """{"claudinine":{"v":"1","mergedFromFork":"parent-sid"}}""",
+            """{"type":"user","uuid":"u0"}""");
+
+        (List<RestoreVerb.Line> lines, bool forkMerged) = RestoreVerb.ReadMirrors([a]);
+
+        Assert.True(forkMerged);
+        Assert.Equal(2, lines.Count);
+        Assert.DoesNotContain(lines, l => l.Raw.Contains("mergedFromFork"));
+    }
+
     [Fact]
     public void RestoreRoundTripsToTheExactOriginal()
     {
