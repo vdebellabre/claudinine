@@ -79,20 +79,12 @@ public sealed class AnchorInputStubTests : IDisposable
         string pointer = ((JsonObject)UseBlock(records)["input"]!)["claudinine"]!.GetValue<string>();
         string refArg = pointer.Split("--ref ")[1].Split(' ')[0];
 
-        var sw = new StringWriter();
-        TextWriter orig = Console.Out;
-        Console.SetOut(sw);
-        try
-        {
-            int rc = GetVerb.Run(["test-session", "--ref", refArg, "--full"]);
-            await Assert.That(rc).IsEqualTo(0);
-        }
-        finally
-        {
-            Console.SetOut(orig);
-        }
+        // GetVerb writes to Console, which TUnit captures per test.
+        int rc = GetVerb.Run(["test-session", "--ref", refArg, "--full"]);
+        await Assert.That(rc).IsEqualTo(0);
+
         // The mirror still has the pristine use record: full original command.
-        await Assert.That(sw.ToString()).Contains(new string('x', 600));
+        await Assert.That(TestContext.Current!.GetStandardOutput()).Contains(new string('x', 600));
     }
 
     [Test]

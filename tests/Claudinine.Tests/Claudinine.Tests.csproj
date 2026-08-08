@@ -8,11 +8,6 @@
     <!-- TUnit runs on Microsoft.Testing.Platform: the test project is its own
          runner executable, not a VSTest-hosted library. -->
     <OutputType>Exe</OutputType>
-    <!-- TUnit0055 flags Console.SetOut. The verb tests capture stdout to assert on
-         what `claudinine get`/`restore` print, and every capture restores the
-         original writer in a finally. Runs are serialized ([assembly: NotInParallel]),
-         so no other test can observe the swap. -->
-    <NoWarn>$(NoWarn);TUnit0055</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

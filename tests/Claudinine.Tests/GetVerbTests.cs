@@ -69,15 +69,20 @@ public sealed class GetVerbTests : IDisposable
             string.Join("\n", lines) + "\n", new UTF8Encoding(false));
     }
 
+    /// <summary>
+    /// The verb writes straight to Console; TUnit already redirects it per test,
+    /// so we read its capture instead of swapping the writer ourselves. That
+    /// capture accumulates across a test, hence the slice from the pre-call
+    /// length: each Run returns only what that invocation printed.
+    /// </summary>
     private static (int Exit, string Out, string Err) Run(params string[] args)
     {
-        var stdout = new StringWriter();
-        var stderr = new StringWriter();
-        TextWriter origOut = Console.Out, origErr = Console.Error;
-        Console.SetOut(stdout);
-        Console.SetError(stderr);
-        try { return (GetVerb.Run(args), stdout.ToString(), stderr.ToString()); }
-        finally { Console.SetOut(origOut); Console.SetError(origErr); }
+        TestContext ctx = TestContext.Current!;
+        int before = ctx.GetStandardOutput().Length, beforeErr = ctx.GetErrorOutput().Length;
+        int exit = GetVerb.Run(args);
+        return (exit,
+            ctx.GetStandardOutput()[before..],
+            ctx.GetErrorOutput()[beforeErr..]);
     }
 
     [Test]

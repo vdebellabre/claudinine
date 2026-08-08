@@ -48,15 +48,12 @@ public sealed class RestoreVerbTests : IDisposable
         return b.WriteTo(_dir);
     }
 
-    private static int RunRestore(string[] args, bool compactionOn)
-    {
-        var sw = new StringWriter();
-        TextWriter origOut = Console.Out, origErr = Console.Error;
-        Console.SetOut(sw);
-        Console.SetError(sw);
-        try { return RestoreVerb.Run(args, compactionOn); }
-        finally { Console.SetOut(origOut); Console.SetError(origErr); }
-    }
+    /// <summary>
+    /// No output assertions here — only the exit code matters. The verb's chatter
+    /// goes to TUnit's per-test capture, which is reported only when a test fails.
+    /// </summary>
+    private static int RunRestore(string[] args, bool compactionOn) =>
+        RestoreVerb.Run(args, compactionOn);
 
     private static void RunHook(string transcriptPath, string eventName = "UserPromptSubmit")
     {

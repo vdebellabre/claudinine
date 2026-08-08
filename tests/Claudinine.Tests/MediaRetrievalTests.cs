@@ -45,14 +45,17 @@ public sealed class MediaRetrievalTests : IDisposable
         return b;
     }
 
+    /// <summary>
+    /// GetVerb writes straight to Console; TUnit already redirects it per test, so
+    /// we read its capture rather than swapping the writer. Slicing from the
+    /// pre-call length keeps repeat calls within one test from re-reporting.
+    /// </summary>
     private static string RunGet(string[] args, out int rc)
     {
-        var sw = new StringWriter();
-        TextWriter orig = Console.Out;
-        Console.SetOut(sw);
-        try { rc = GetVerb.Run(args); }
-        finally { Console.SetOut(orig); }
-        return sw.ToString();
+        TestContext ctx = TestContext.Current!;
+        int before = ctx.GetStandardOutput().Length;
+        rc = GetVerb.Run(args);
+        return ctx.GetStandardOutput()[before..];
     }
 
     /// <summary>All content-block texts of every record, stub texts included.</summary>
