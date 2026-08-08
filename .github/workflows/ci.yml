@@ -22,15 +22,17 @@ jobs:
           - { rid: osx-x64,     os: macos-15-intel }
           - { rid: osx-arm64,   os: macos-latest }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # Install the newest 10.x the runner offers; src/global.json pins 10.0.302
-      # with rollForward latestMinor, so the build takes that newest 10.x and can
-      # never silently move to 11.x. Pointing setup-dotnet at global.json instead
-      # would install only the exact pinned build, leaving nothing to roll to.
-      - uses: actions/setup-dotnet@v4
+      # src/global.json is the single source of truth for the SDK: it pins
+      # 10.0.302 with rollForward latestMinor, so the build takes the newest 10.x
+      # present and can never silently move to 11.x. setup-dotnet installs that
+      # exact build; the runner images also carry newer 10.x SDKs, which the
+      # roll-forward then picks up (verified on all six legs: pinning 10.0.100
+      # resolved to 10.0.302).
+      - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          global-json-file: src/global.json
 
       # Every dotnet command runs from src/: global.json lives there (SDK + the
       # Microsoft.Testing.Platform runner opt-in) and is discovered by walking up
@@ -68,7 +70,7 @@ jobs:
       # Ship the binary only. `claudinine*` also matched the stripped symbol
       # files (claudinine.dbg / .pdb), which are bigger than the binary and are
       # never committed to bin/<rid>/.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: claudinine-${{ matrix.rid }}
           path: |
@@ -90,9 +92,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dl
           pattern: claudinine-*
