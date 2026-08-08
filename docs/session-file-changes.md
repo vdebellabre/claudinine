@@ -55,7 +55,7 @@ The rules, in execution order, are declared in one catalog
 | `CarrierHeaderDedupRule` | The digest's retrieval instructions are identical in every digest, so only the first per file keeps the long form. |
 | `AnchorInputStubRule` | Replaces a collapsed turn's retained `tool_use.input` with a pointer plus a 90-character preview. |
 | `ToolResultAgeRule` | Age-tiered stubbing of old tool results. |
-| `MegaBlockTrimRule` / `ImageStripRule` | Trims oversized blocks; strips replayed image payloads. |
+| `MegaBlockTrimRule` / `ImageStripRule` | Trims oversized blocks; stubs old base64 media (pasted images, PDFs, tool screenshots) with a retrieval pointer — `claudinine get <sid> --ref <uuid> --media` decodes the mirrored original to a file the Read tool can view. |
 | dedup rules (bash-read, read, system-reminder, document) | Collapse byte-identical repeats. Lossless, and near-zero yield in practice. |
 | housekeeping rules | Drop superseded edits, stale reminders, queue history, hook-success noise. |
 

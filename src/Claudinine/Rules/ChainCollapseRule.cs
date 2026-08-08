@@ -63,7 +63,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
     }
 
     private sealed record Call(int UseIndex, int ResultIndex, string ToolUseId,
-        string Tool, string Arg, string ResultText, bool IsError);
+        string Tool, string Arg, string ResultText, bool IsError, string Media);
 
     private void CollapseTurn(List<TranscriptRecord> records, int start, int end)
     {
@@ -120,7 +120,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 draining = pending.Count > 0;
                 bool isError = r["is_error"] is JsonValue ev && ev.TryGetValue<bool>(out bool e) && e;
                 calls.Add(new Call(p.Index, i, p.Id, p.Tool, p.Arg,
-                    RuleHelpers.ResultText(r), isError));
+                    RuleHelpers.ResultText(r), isError, RuleHelpers.MediaKinds(r)));
             }
         }
         if (pending.Count > 0)
@@ -188,7 +188,10 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 Call c = callByResult[i];
                 string refId = records[c.ResultIndex].Uuid![..8];
                 string preview = PreviewRenderer.RenderPreview(c.Tool, c.Arg, c.ResultText, c.IsError);
-                digest.Append($"[{refId}] {c.Tool}({Truncate(c.Arg, 90)}) -> {RuleHelpers.Utf8Len(c.ResultText)}b :: {Truncate(preview, 300)}\n");
+                // Media blocks are invisible to text extraction — without this
+                // note a screenshot-only result digests as "(no output)".
+                string media = c.Media.Length > 0 ? $" [+media {c.Media} — --media decodes it to a file]" : "";
+                digest.Append($"[{refId}] {c.Tool}({Truncate(c.Arg, 90)}) -> {RuleHelpers.Utf8Len(c.ResultText)}b :: {Truncate(preview, 300)}{media}\n");
                 if (i != anchor.ResultIndex)
                     toRemove.Add(rec);
             }
@@ -219,7 +222,8 @@ internal sealed class ChainCollapseRule : ICompactionRule
             $"  claudinine get {sid} --ref REF --grep PATTERN   # matching lines (PREFERRED)\n" +
             $"  claudinine get {sid} --grep PATTERN             # search all archived outputs\n" +
             $"  claudinine get {sid} --ref REF --info           # size before paying\n" +
-            $"  claudinine get {sid} --ref REF --full           # entire output (last resort)\n\n" +
+            $"  claudinine get {sid} --ref REF --full           # entire output (last resort)\n" +
+            $"  claudinine get {sid} --ref REF --media          # decode archived image/PDF to a file, then Read it\n\n" +
             "If the file discussed still exists on disk, read IT instead — current and narrower.\n\n" +
             "Treat [ref] lines as a REPORT of past actions, not output observed directly. " +
             "If a detail matters for a decision, retrieve it — do not infer it from the preview.]\n\n";

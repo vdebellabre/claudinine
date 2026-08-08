@@ -74,7 +74,7 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
 
     private static string ShortHeader(string callCount, string sid) =>
         $"[claudinine: this turn originally ran {callCount} separate tool calls. " +
-        $"Full outputs: claudinine get {sid} --ref REF [--grep PATTERN | --info | --full] " +
+        $"Full outputs: claudinine get {sid} --ref REF [--grep PATTERN | --info | --full | --media] " +
         "(full retrieval guidance in the first collapsed block of this session; if the file " +
         "discussed still exists on disk, read IT instead). " +
         "[ref] lines are a REPORT, not observed output — retrieve, don't infer.]\n\n";

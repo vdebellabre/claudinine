@@ -255,7 +255,7 @@ public sealed class NoiseRulesTests : IDisposable
             .Where(x => x["type"]?.GetValue<string>() == "image")
             .ToList();
         Assert.Single(imageBlocks); // the recent one
-        Assert.Contains("old screenshot removed", AllText(path));
+        Assert.Contains("--media", AllText(path)); // the old one, stubbed with its retrieval pointer
     }
 
     [Fact]

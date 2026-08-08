@@ -131,7 +131,7 @@ internal sealed class TranscriptBuilder
         return this;
     }
 
-    public TranscriptBuilder RawImageMessage(string marker)
+    public TranscriptBuilder RawImageMessage(string marker, byte[]? data = null)
     {
         Add("user", new JsonObject
         {
@@ -145,9 +145,74 @@ internal sealed class TranscriptBuilder
                     {
                         ["type"] = "base64",
                         ["media_type"] = "image/png",
-                        ["data"] = Convert.ToBase64String(new byte[4096]),
+                        ["data"] = Convert.ToBase64String(data ?? new byte[4096]),
                     },
                 }),
+        });
+        return this;
+    }
+
+    /// <summary>User message carrying a base64 document block (pasted PDF).</summary>
+    public TranscriptBuilder RawDocumentMessage(string marker, byte[] data,
+        string mediaType = "application/pdf")
+    {
+        Add("user", new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = new JsonArray(
+                new JsonObject { ["type"] = "text", ["text"] = $"document {marker}" },
+                new JsonObject
+                {
+                    ["type"] = "document",
+                    ["source"] = new JsonObject
+                    {
+                        ["type"] = "base64",
+                        ["media_type"] = mediaType,
+                        ["data"] = Convert.ToBase64String(data),
+                    },
+                }),
+        });
+        return this;
+    }
+
+    /// <summary>
+    /// A tool call whose result carries a base64 screenshot nested in its content
+    /// array, as browser/computer tools return them.
+    /// </summary>
+    public TranscriptBuilder ScreenshotToolCall(out string toolUseId, byte[]? data = null)
+    {
+        toolUseId = $"toolu_{_seq + 1:D4}";
+        Add("assistant", new JsonObject
+        {
+            ["role"] = "assistant",
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "tool_use",
+                ["id"] = toolUseId,
+                ["name"] = "computer",
+                ["input"] = new JsonObject { ["action"] = "screenshot" },
+            }),
+        });
+        Add("user", new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "tool_result",
+                ["tool_use_id"] = toolUseId,
+                ["content"] = new JsonArray(
+                    new JsonObject { ["type"] = "text", ["text"] = "screenshot taken" },
+                    new JsonObject
+                    {
+                        ["type"] = "image",
+                        ["source"] = new JsonObject
+                        {
+                            ["type"] = "base64",
+                            ["media_type"] = "image/png",
+                            ["data"] = Convert.ToBase64String(data ?? new byte[4096]),
+                        },
+                    }),
+            }),
         });
         return this;
     }

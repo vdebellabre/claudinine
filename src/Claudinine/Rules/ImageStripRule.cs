@@ -4,18 +4,23 @@ using Claudinine.Transcript;
 namespace Claudinine.Rules;
 
 /// <summary>
-/// Strip old base64 image blocks — port of cozempic's image-strip. Screenshots in
-/// old turns are opaque blobs the model never revisits, and they dominate byte
-/// counts when present. Two deviations from the original: (1) recency is the same
-/// turn-age gate as the other rules instead of "keep newest 20% by count" — the
-/// count-based window is not idempotent under our per-turn reruns (each pass sees
-/// fewer images and strips again until one remains), while a record's age only
-/// grows; (2) a stripped image block becomes a text stub instead of being deleted,
-/// so a content array can never end up empty and block arity is preserved.
+/// Stub old base64 media blocks — images pasted into prompts, base64 document
+/// blocks (PDFs), and screenshots nested inside a tool_result's content array.
+/// Descends from cozempic's image-strip with two long-standing deviations
+/// (age-gated instead of keep-newest-by-count for idempotence under per-turn
+/// reruns; blocks are stubbed, never deleted, so a content array can't end up
+/// empty) plus the mirror retrieval loop: the stub names the exact command —
+/// `claudinine get &lt;sid&gt; --ref &lt;uuid&gt; --media` — which decodes the mirrored
+/// block to a file the Read tool renders, so the content re-enters context as
+/// fresh vision input instead of being lost. Legacy dead-end stubs ("re-request
+/// if needed") are upgraded in place to the retrieval form.
 /// </summary>
 internal sealed class ImageStripRule : ICompactionRule
 {
     public string Name => "image-strip";
+
+    /// <summary>The pre-0.1.6 stub text, upgraded retroactively when addressable.</summary>
+    private const string LegacyStubPrefix = "[claudinine: old screenshot removed";
 
     public void Apply(TranscriptFile transcript)
     {
@@ -31,22 +36,86 @@ internal sealed class ImageStripRule : ICompactionRule
                 continue; // recently shared — keep
 
             JsonObject node = RuleHelpers.CurrentNode(rec);
+            string? sid = node["sessionId"]?.GetValue<string>();
+            string? refPrefix = rec.Uuid is { Length: >= 8 } u ? u[..8] : null;
             JsonObject? clone = null;
             int bi = -1;
             foreach (JsonNode? block in RuleHelpers.ContentBlocks(node))
             {
                 bi++;
-                if (block is not JsonObject b || b["type"]?.GetValue<string>() != "image")
+                if (block is not JsonObject b)
                     continue;
-                clone ??= (JsonObject)node.DeepClone();
-                var cloneBlock = (JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(bi)!;
-                cloneBlock.Clear();
-                cloneBlock["type"] = "text";
-                cloneBlock["text"] = "[claudinine: old screenshot removed — re-request if needed]";
+                switch (b["type"]?.GetValue<string>())
+                {
+                    case "image":
+                    case "document" when SourceType(b) == "base64":
+                        Stub(ref clone, node, bi, b, sid, refPrefix);
+                        break;
+
+                    case "text" when sid is not null && refPrefix is not null
+                        && b["text"]?.GetValue<string>() is string t
+                        && t.StartsWith(LegacyStubPrefix, StringComparison.Ordinal):
+                        // The original media info is gone from a legacy stub;
+                        // "image" is all it ever replaced.
+                        clone ??= (JsonObject)node.DeepClone();
+                        WriteStub((JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(bi)!,
+                            "image", sid, refPrefix);
+                        break;
+
+                    case "tool_result" when b["content"] is JsonArray inner:
+                        for (int ti = 0; ti < inner.Count; ti++)
+                        {
+                            if (inner[ti] is not JsonObject ib
+                                || ib["type"]?.GetValue<string>() != "image")
+                                continue;
+                            clone ??= (JsonObject)node.DeepClone();
+                            var cloneResult = (JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(bi)!;
+                            var cloneInner = (JsonObject)((JsonArray)cloneResult["content"]!)[ti]!;
+                            WriteStub(cloneInner, Describe(ib), sid, refPrefix);
+                        }
+                        break;
+                }
             }
 
             if (clone is not null)
                 RuleHelpers.SetReplacement(rec, clone, Name);
         }
+    }
+
+    private static void Stub(ref JsonObject? clone, JsonObject node, int blockIndex,
+        JsonObject original, string? sid, string? refPrefix)
+    {
+        clone ??= (JsonObject)node.DeepClone();
+        var cloneBlock = (JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(blockIndex)!;
+        WriteStub(cloneBlock, Describe(original), sid, refPrefix);
+    }
+
+    private static void WriteStub(JsonObject cloneBlock, string label, string? sid, string? refPrefix)
+    {
+        string text = sid is not null && refPrefix is not null
+            ? $"[claudinine: {label} archived — claudinine get {sid} --ref {refPrefix} --media " +
+              "decodes it to a file; Read that file to view it]"
+            // No retrieval address (uuid-less or sessionId-less record): the
+            // mirror can't serve it, so keep the honest dead-end wording.
+            : $"[claudinine: old {label} removed — re-request if needed]";
+        cloneBlock.Clear();
+        cloneBlock["type"] = "text";
+        cloneBlock["text"] = text;
+    }
+
+    private static string? SourceType(JsonObject block) =>
+        (block["source"] as JsonObject)?["type"]?.GetValue<string>();
+
+    /// <summary>"image/png, 498KB" — enough to decide whether retrieval is worth it.</summary>
+    private static string Describe(JsonObject block)
+    {
+        var source = block["source"] as JsonObject;
+        string label = source?["media_type"]?.GetValue<string>()
+            ?? block["type"]?.GetValue<string>() ?? "image";
+        if (source?["data"]?.GetValue<string>() is string data && data.Length > 0)
+            label += $", {Math.Max(1, data.Length * 3L / 4 / 1024)}KB";
+        else if (SourceType(block) == "url")
+            label += ", url source";
+        return label;
     }
 }

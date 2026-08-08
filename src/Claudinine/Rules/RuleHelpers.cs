@@ -110,6 +110,24 @@ internal static class RuleHelpers
         content.StartsWith("[claudinine", StringComparison.Ordinal);
 
     /// <summary>
+    /// Media types of the non-text blocks (base64 images, documents) inside a
+    /// tool_result's content array, e.g. "image/png" or "image/png x2". Text
+    /// extraction is blind to these blocks, so without this summary a screenshot
+    /// result digests as "(no output)" and its existence is silently lost.
+    /// </summary>
+    public static string MediaKinds(JsonObject toolResultBlock)
+    {
+        if (toolResultBlock["content"] is not JsonArray parts)
+            return "";
+        var kinds = parts.OfType<JsonObject>()
+            .Where(p => p["type"]?.GetValue<string>() is "image" or "document")
+            .Select(p => (p["source"] as JsonObject)?["media_type"]?.GetValue<string>() ?? "media")
+            .ToList();
+        return string.Join("+", kinds.GroupBy(k => k)
+            .Select(g => g.Count() > 1 ? $"{g.Key} x{g.Count()}" : g.Key));
+    }
+
+    /// <summary>
     /// The human-meaningful argument of a tool_use input, for one-line previews:
     /// first non-empty well-known key, else the first non-empty string value.
     /// </summary>
