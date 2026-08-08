@@ -5,6 +5,7 @@
   <Folder Name="/solution/">
     <File Path="Directory.Build.props" />
     <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
   </Folder>
   <Project Path="Claudinine.Tests/Claudinine.Tests.csproj" />
   <Project Path="Claudinine/Claudinine.csproj" />
