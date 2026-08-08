@@ -1,5 +1,6 @@
 {
   "name": "claudinine",
+  "description": "Single-plugin marketplace for Claudinine, a silent Claude Code context optimizer.",
   "owner": {
     "name": "vdebellabre"
   },

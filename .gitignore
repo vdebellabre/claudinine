@@ -7,5 +7,9 @@ tests/**/bin/
 .idea/
 publish/
 
+# Plugin archives built by eng/pack-plugin.ps1; CI publishes them as release
+# assets rather than committing them.
+artifacts/
+
 # Local benchmarking only, never committed
 tests/POC reference/

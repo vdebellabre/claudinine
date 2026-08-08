@@ -60,3 +60,107 @@ jobs:
             publish/${{ matrix.rid }}/claudinine
             publish/${{ matrix.rid }}/claudinine.exe
           if-no-files-found: error
+
+  # Packages the six binaries as one zip for `archive`-source distribution and
+  # publishes it as a release asset, so installing the plugin does not require
+  # cloning this repo (whose .git carries every binary ever shipped).
+  #
+  # Runs on Linux for the `zip` CLI: it stores Unix permission bits, which
+  # Compress-Archive does not, and the shim plus the five POSIX binaries must
+  # extract executable.
+  package:
+    name: package
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+          pattern: claudinine-*
+          merge-multiple: false
+
+      # download-artifact names each directory claudinine-<rid>; pack-plugin
+      # expects <rid> directly under -BinRoot.
+      - name: Reshape artifact layout
+        run: |
+          mkdir -p bins
+          for d in dl/claudinine-*/; do
+            rid="$(basename "$d" | sed 's/^claudinine-//')"
+            mkdir -p "bins/$rid"
+            cp "$d"/claudinine "bins/$rid/" 2>/dev/null || true
+            cp "$d"/claudinine.exe "bins/$rid/" 2>/dev/null || true
+          done
+          ls -R bins
+
+      - name: Pack
+        id: pack
+        shell: pwsh
+        run: |
+          $r = ./eng/pack-plugin.ps1 -BinRoot bins -OutDir artifacts
+          if ($r.Bits -ne 'preserved') { throw "executable bits were not stored: $($r.Bits)" }
+          "version=$($r.Version)" >> $env:GITHUB_OUTPUT
+          "sha256=$($r.Sha256)"   >> $env:GITHUB_OUTPUT
+          "zip=$($r.Zip)"         >> $env:GITHUB_OUTPUT
+          Write-Host "packed $($r.Zip) ($($r.SizeMB) MB) sha256=$($r.Sha256)"
+
+      # The zip is the install payload, so verify the bits survived a real
+      # round-trip rather than trusting the packer.
+      - name: Verify archive
+        run: |
+          cd artifacts
+          unzip -q -o "claudinine-${{ steps.pack.outputs.version }}.zip" -d verify
+          test -x verify/bin/claudinine || { echo "shim not executable after extract"; exit 1; }
+          for rid in linux-x64 linux-arm64 osx-x64 osx-arm64; do
+            test -x "verify/bin/$rid/claudinine" || { echo "$rid binary not executable"; exit 1; }
+          done
+          test -f verify/.claude-plugin/plugin.json || { echo "manifest not at archive root"; exit 1; }
+          ./verify/bin/linux-x64/claudinine version
+          echo "archive verified"
+
+      # Only tagged releases get published; ordinary pushes stop at verification.
+      - name: Publish release
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.pack.outputs.version }}"
+          zip="artifacts/claudinine-${{ steps.pack.outputs.version }}.zip"
+          printf 'Plugin archive for `archive`-source installs.\n\nsha256: `%s`\n' \
+            '${{ steps.pack.outputs.sha256 }}' > notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag exists; uploading asset with --clobber"
+            gh release upload "$tag" "$zip" --clobber
+          else
+            gh release create "$tag" "$zip" --title "$tag" --notes-file notes.md
+          fi
+          echo "asset URL: $(gh release view "$tag" --json assets --jq '.assets[].url')"
+
+      # Repoints marketplace.json at the asset just published. Gated on the
+      # marketplace already using an archive source: until the desktop app ships
+      # Claude Code 2.1.224+, the entry deliberately stays on the relative-path
+      # source and this step is a no-op.
+      - name: Update marketplace pin
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $m = Get-Content .claude-plugin/marketplace.json -Raw | ConvertFrom-Json
+          $src = ($m.plugins | Where-Object { $_.name -eq 'claudinine' }).source
+          if ($src -isnot [string] -and $src.source -eq 'archive') {
+            ./eng/set-archive-source.ps1 -Sha256 '${{ steps.pack.outputs.sha256 }}' -Version '${{ steps.pack.outputs.version }}'
+            git config user.name  'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git add .claude-plugin/marketplace.json
+            if (git diff --cached --quiet) {
+              Write-Host 'marketplace pin already current'
+            } else {
+              git commit -m "pin archive ${{ steps.pack.outputs.version }}"
+              git push
+            }
+          }
+          else {
+            Write-Host 'marketplace still on relative-path source; skipping pin (needs Claude Code 2.1.224+)'
+          }
