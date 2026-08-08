@@ -4,6 +4,7 @@ return args switch
 {
     ["hook", ..] => HookRunner.Run(Console.OpenStandardInput()),
     ["get", .. var getArgs] => GetVerb.Run(getArgs),
+    ["clone", .. var cloneArgs] => CloneVerb.Run(cloneArgs),
     ["version", ..] or ["--version", ..] => Verbs.Version(),
     _ => Verbs.Usage(),
 };
@@ -20,7 +21,7 @@ namespace Claudinine
 
         public static int Usage()
         {
-            Console.Error.WriteLine("usage: claudinine <hook|get|version>");
+            Console.Error.WriteLine("usage: claudinine <hook|get|clone|version>");
             return 1;
         }
     }
