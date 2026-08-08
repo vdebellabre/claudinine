@@ -35,6 +35,7 @@ internal static class HookRunner
                 case "SessionStart":
                     Compactor.Run(input.TranscriptPath);
                     MirrorFile.CollectGarbage();
+                    SessionDirGc.Run(input.TranscriptPath, input.SessionId);
                     break;
             }
 
