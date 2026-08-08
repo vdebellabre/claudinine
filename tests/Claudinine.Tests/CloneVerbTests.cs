@@ -308,6 +308,20 @@ public sealed class CloneVerbTests : IDisposable
     }
 
     [Fact]
+    public void FailsOnAmbiguousPrefix()
+    {
+        // The safety rule: a prefix matching two distinct sessions matches nothing —
+        // cloning a guessed session would silently target the wrong history.
+        WriteTranscript($"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}");
+        string sibling = SourceId[..30] + "ffffff"; // same 8-char prefix, distinct id
+        File.WriteAllText(TranscriptPath(sibling),
+            $"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{sibling}\"}}\n",
+            new UTF8Encoding(false));
+
+        Assert.Equal(1, CloneVerb.Run([SourceId[..8]], _root));
+    }
+
+    [Fact]
     public void FailsWithoutArguments()
     {
         Assert.Equal(1, CloneVerb.Run([], _root));

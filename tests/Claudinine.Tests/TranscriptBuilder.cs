@@ -425,11 +425,14 @@ internal sealed class TranscriptBuilder
         _lines.Add(record.ToJsonString());
     }
 
-    public string WriteTo(string directory, string name = "test-session.jsonl")
+    public string WriteTo(string directory, string name = "test-session.jsonl",
+        string newline = "\n", bool trailingNewline = true)
     {
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, name);
-        File.WriteAllText(path, string.Join("\n", _lines) + "\n", new UTF8Encoding(false));
+        File.WriteAllText(path,
+            string.Join(newline, _lines) + (trailingNewline ? newline : ""),
+            new UTF8Encoding(false));
         return path;
     }
 }

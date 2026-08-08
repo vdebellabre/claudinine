@@ -285,6 +285,42 @@ public sealed class CompactorTests : IDisposable
         Assert.False(File.Exists(orphanMarker));
     }
 
+    // ---- platform line endings: dedicated preservation paths, previously untested ----
+
+    [Fact]
+    public void CrlfTranscriptStaysCrlfAndMirrorNormalizesToLf()
+    {
+        string path = EightIdenticalReads(out _).WriteTo(_dir, newline: "\r\n");
+
+        Compactor.Run(path);
+
+        string text = File.ReadAllText(path);
+        Assert.Contains("[claudinine", text); // compaction actually happened
+        string[] lines = text.Split('\n');
+        Assert.Equal("", lines[^1]); // trailing newline preserved
+        for (int i = 0; i < lines.Length - 1; i++)
+            Assert.EndsWith("\r", lines[i]); // replaced AND untouched records stay CRLF
+        Assert.DoesNotContain('\r', File.ReadAllText(MirrorFile.PathFor(path)));
+
+        Compactor.Run(path); // idempotent on its own CRLF output
+        Assert.Equal(text, File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void MissingTrailingNewlineIsPreserved()
+    {
+        string path = EightIdenticalReads(out _).WriteTo(_dir, trailingNewline: false);
+
+        Compactor.Run(path);
+
+        string text = File.ReadAllText(path);
+        Assert.Contains("[claudinine", text);
+        Assert.False(text.EndsWith('\n'));
+
+        Compactor.Run(path);
+        Assert.Equal(text, File.ReadAllText(path));
+    }
+
     // ---- load sentinels: fail closed on shapes we could corrupt ----
 
     [Fact]

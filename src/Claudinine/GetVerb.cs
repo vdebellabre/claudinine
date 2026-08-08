@@ -15,7 +15,9 @@ namespace Claudinine;
 /// base64 media blocks — pasted images, PDF documents, screenshots nested in
 /// tool_results — to files under the temp dir and prints their paths: base64 on
 /// stdout is useless to a model, but a decoded file re-enters context as fresh
-/// vision input via the Read tool. Exit 1 with a stderr hint when nothing matches.
+/// vision input via the Read tool. Bare `get &lt;session&gt;` defaults to the `--info`
+/// listing. Exit 1 with a stderr hint when nothing matches — including a
+/// `--ref --grep` whose record exists but holds no matching line.
 /// </summary>
 internal static class GetVerb
 {
@@ -61,7 +63,13 @@ internal static class GetVerb
             return 1;
         }
 
-        var matches = new List<(string Uuid, string Tool, string Arg, string Text)>();
+        // Bare `get <session>`: the --info listing is the only output that makes
+        // sense for the whole mirror (previously this printed nothing, exit 0 —
+        // indistinguishable from "everything was empty").
+        if (!info && !full && !media && refPrefix is null && grep is null)
+            info = true;
+
+        var matches = new List<(string Uuid, string Text)>();
         // A cross-context resume can mirror the same record into two dirs — the
         // copies are identical originals, so the first file to carry a uuid wins.
         var seenRecords = new HashSet<string>();
@@ -89,7 +97,7 @@ internal static class GetVerb
                     if (refPrefix is null && grep is not null
                         && !text.Contains(grep, StringComparison.OrdinalIgnoreCase))
                         continue;
-                    matches.Add((uuid, "", "", text));
+                    matches.Add((uuid, text));
                 }
                 // A --ref can also address a tool_use record: anchor-input stubs
                 // point here for the original input. Only when explicitly addressed
@@ -102,7 +110,7 @@ internal static class GetVerb
                     if (b["input"] is not JsonObject input)
                         continue;
                     string name = b["name"].GetString() ?? "?";
-                    matches.Add((uuid, "", "", $"{name} input: {input.ToJsonString(Json.Compact)}"));
+                    matches.Add((uuid, $"{name} input: {input.ToJsonString(Json.Compact)}"));
                 }
             }
         }
@@ -116,12 +124,14 @@ internal static class GetVerb
             return 1;
         }
 
-        foreach ((string uuid, _, _, string text) in matches)
+        bool printed = false;
+        foreach ((string uuid, string text) in matches)
         {
             string tag = RuleHelpers.RefPrefix(uuid);
             if (info)
             {
                 Console.WriteLine($"[{tag}] {RuleHelpers.Utf8Len(text)} bytes, {text.Split('\n').Length} lines (~{text.Length / 4} tokens)");
+                printed = true;
                 continue;
             }
             if (grep is not null)
@@ -129,15 +139,24 @@ internal static class GetVerb
                 foreach (string l in text.Split('\n'))
                 {
                     if (l.Contains(grep, StringComparison.OrdinalIgnoreCase))
+                    {
                         Console.WriteLine($"[{tag}] {l}");
+                        printed = true;
+                    }
                 }
                 continue;
             }
-            if (full || refPrefix is not null)
-            {
-                Console.WriteLine($"=== [{tag}] ===");
-                Console.WriteLine(text);
-            }
+            Console.WriteLine($"=== [{tag}] ===");
+            Console.WriteLine(text);
+            printed = true;
+        }
+        if (!printed)
+        {
+            // Only reachable via --ref --grep: the record exists (matches is
+            // non-empty) but no line matched. Silence here reads as "the output
+            // was empty" — a different claim than "nothing matched".
+            Console.Error.WriteLine($"no line of ref '{refPrefix}' matches '{grep}'");
+            return 1;
         }
         return 0;
     }
@@ -149,7 +168,7 @@ internal static class GetVerb
     /// ordinal) make repeated retrievals overwrite rather than accumulate.
     /// </summary>
     private static void DecodeMediaBlocks(JsonObject rec, string uuid,
-        List<(string Uuid, string Tool, string Arg, string Text)> matches)
+        List<(string Uuid, string Text)> matches)
     {
         var lines = new List<string>();
         int n = 0;
@@ -170,7 +189,7 @@ internal static class GetVerb
             }
         }
         if (lines.Count > 0)
-            matches.Add((uuid, "", "", string.Join("\n", lines)));
+            matches.Add((uuid, string.Join("\n", lines)));
     }
 
     private static void DecodeOne(JsonObject block, string uuid, int index, List<string> lines)
