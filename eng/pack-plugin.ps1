@@ -32,6 +32,11 @@ $repo = Split-Path -Parent $PSScriptRoot
 if (-not $BinRoot) { $BinRoot = Join-Path $repo 'bin' }
 if (-not $OutDir)  { $OutDir  = Join-Path $repo 'artifacts' }
 
+# Absolute from here on: the staging copy below reads from $BinRoot while the zip
+# CLI runs with a different cwd, so relative inputs must not be re-resolved.
+if (-not (Test-Path $BinRoot)) { throw "BinRoot does not exist: $BinRoot" }
+$BinRoot = (Resolve-Path $BinRoot).Path
+
 $rids = @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')
 
 # Version is the plugin's identity and the update signal: the archive file name
@@ -62,7 +67,11 @@ try {
         Copy-Item $src (Join-Path $stage "bin/$rid/$exe")
     }
 
+    # Resolve to an absolute path: the zip CLI below runs with the staging dir as
+    # its cwd, so a relative -OutDir would land inside the staging dir (or fail
+    # outright, as `zip` exit 15 "cannot open output file").
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+    $OutDir = (Resolve-Path $OutDir).Path
     $zip = Join-Path $OutDir "claudinine-$version.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
 
