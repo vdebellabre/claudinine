@@ -24,13 +24,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Install the newest 10.x the runner offers; src/global.json pins 10.0.302
-      # with rollForward latestMinor, so the build takes that newest 10.x and can
-      # never silently move to 11.x. Pointing setup-dotnet at global.json instead
-      # would install only the exact pinned build, leaving nothing to roll to.
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          global-json-file: src/global.json
+
+      # Temporary: shows which SDK global.json actually resolved to, so the run
+      # proves whether rollForward: latestMinor moved off the pinned 10.0.100.
+      # `--list-sdks` is what setup-dotnet plus the runner image made available.
+      - name: SDK resolution
+        working-directory: src
+        shell: bash
+        run: |
+          echo "pinned in global.json: $(grep -o '\"version\": \"[^\"]*\"' global.json | head -1)"
+          echo "resolved by dotnet   : $(dotnet --version)"
+          echo "--- installed SDKs ---"
+          dotnet --list-sdks
 
       # Every dotnet command runs from src/: global.json lives there (SDK + the
       # Microsoft.Testing.Platform runner opt-in) and is discovered by walking up
