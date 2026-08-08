@@ -24,7 +24,7 @@ internal sealed class MegaBlockTrimRule : ICompactionRule
 
         for (int pos = 0; pos < records.Count; pos++)
         {
-            TranscriptRecord rec = records[pos];
+            var rec = records[pos];
             if (rec.IsProtected())
                 continue;
             if (rec.Type is "summary" or "queue-operation")
@@ -32,10 +32,10 @@ internal sealed class MegaBlockTrimRule : ICompactionRule
             if (!age.IsMidAged(pos))
                 continue; // active tail — leave alone (deviation, see class doc)
 
-            JsonObject node = RuleHelpers.CurrentNode(rec);
+            var node = RuleHelpers.CurrentNode(rec);
             JsonObject? clone = null;
             int bi = -1;
-            foreach (JsonNode? block in RuleHelpers.ContentBlocks(node))
+            foreach (var block in RuleHelpers.ContentBlocks(node))
             {
                 bi++;
                 if (block is not JsonObject b)

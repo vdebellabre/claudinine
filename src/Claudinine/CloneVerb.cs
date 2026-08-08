@@ -124,7 +124,7 @@ internal static class CloneVerb
         // Fully materialized before the target is created: a read failure never
         // leaves a half-written clone on disk at all.
         var outLines = new List<string>();
-        foreach ((string line, JsonObject? node) in Jsonl.ReadRecords(source))
+        foreach ((string line, var node) in Jsonl.ReadRecords(source))
         {
             if (node is null)
             {
@@ -210,7 +210,7 @@ internal static class CloneVerb
                 foreach (string key in obj.Select(kv => kv.Key).ToList())
                 {
                     if (obj[key] is JsonValue value
-                        && value.TryGetValue<string>(out string? text)
+                        && value.TryGetValue(out string? text)
                         && text.Contains(sourcePhrase, StringComparison.OrdinalIgnoreCase))
                     {
                         obj[key] = text.Replace(sourcePhrase, targetPhrase, StringComparison.OrdinalIgnoreCase);
@@ -225,7 +225,7 @@ internal static class CloneVerb
                 for (int i = 0; i < array.Count; i++)
                 {
                     if (array[i] is JsonValue value
-                        && value.TryGetValue<string>(out string? text)
+                        && value.TryGetValue(out string? text)
                         && text.Contains(sourcePhrase, StringComparison.OrdinalIgnoreCase))
                     {
                         array[i] = text.Replace(sourcePhrase, targetPhrase, StringComparison.OrdinalIgnoreCase);
@@ -264,7 +264,7 @@ internal static class CloneVerb
     {
         var outLines = new List<string>();
         bool first = true;
-        foreach ((string line, JsonObject? node) in Jsonl.ReadRecords(sourceMirror))
+        foreach ((string line, var node) in Jsonl.ReadRecords(sourceMirror))
         {
             if (first)
             {
@@ -302,7 +302,7 @@ internal static class CloneVerb
     /// (cheap hit for the common case), then every project the app knows about — a
     /// clone may well target a session from another repo.
     /// </summary>
-    private static IReadOnlyList<string> ProjectDirectories(string home)
+    private static List<string> ProjectDirectories(string home)
     {
         var dirs = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

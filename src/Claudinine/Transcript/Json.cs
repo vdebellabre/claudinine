@@ -23,5 +23,5 @@ internal static class Json
     /// optional strings through this instead.
     /// </summary>
     public static string? GetString(this JsonNode? node) =>
-        node is JsonValue v && v.TryGetValue<string>(out string? s) ? s : null;
+        node is JsonValue v && v.TryGetValue(out string? s) ? s : null;
 }

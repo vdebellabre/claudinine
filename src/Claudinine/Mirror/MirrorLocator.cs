@@ -10,15 +10,15 @@ internal static class MirrorLocator
     public static string MirrorsDirectory()
     {
         string root = Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA")
-            ?? System.IO.Path.Combine(
+            ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claudinine");
-        return System.IO.Path.Combine(root, "mirrors");
+        return Path.Combine(root, "mirrors");
     }
 
     public static string PathFor(string transcriptPath) =>
-        System.IO.Path.Combine(
+        Path.Combine(
             MirrorsDirectory(),
-            System.IO.Path.GetFileNameWithoutExtension(transcriptPath) + ".jsonl");
+            Path.GetFileNameWithoutExtension(transcriptPath) + ".jsonl");
 
     /// <summary>
     /// Directories to probe when resolving a mirror for READING. Writes always use
@@ -39,19 +39,19 @@ internal static class MirrorLocator
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void Add(string dir)
         {
-            if (Directory.Exists(dir) && seen.Add(System.IO.Path.GetFullPath(dir)))
+            if (Directory.Exists(dir) && seen.Add(Path.GetFullPath(dir)))
                 dirs.Add(dir);
         }
 
         if (!string.IsNullOrEmpty(pluginData))
-            Add(System.IO.Path.Combine(pluginData, "mirrors"));
-        string dataRoot = System.IO.Path.Combine(home, ".claude", "plugins", "data");
+            Add(Path.Combine(pluginData, "mirrors"));
+        string dataRoot = Path.Combine(home, ".claude", "plugins", "data");
         if (Directory.Exists(dataRoot))
         {
             foreach (string plugin in Directory.EnumerateDirectories(dataRoot, "claudinine-*"))
-                Add(System.IO.Path.Combine(plugin, "mirrors"));
+                Add(Path.Combine(plugin, "mirrors"));
         }
-        Add(System.IO.Path.Combine(home, ".claudinine", "mirrors"));
+        Add(Path.Combine(home, ".claudinine", "mirrors"));
         return dirs;
     }
 
@@ -70,10 +70,10 @@ internal static class MirrorLocator
         var sources = new List<string>();
         foreach (string dir in SearchDirectories())
         {
-            string candidate = System.IO.Path.Combine(dir, sessionId + ".jsonl");
+            string candidate = Path.Combine(dir, sessionId + ".jsonl");
             if (File.Exists(candidate)
-                && !string.Equals(System.IO.Path.GetFullPath(candidate),
-                    System.IO.Path.GetFullPath(ownMirrorPath), StringComparison.OrdinalIgnoreCase))
+                && !string.Equals(Path.GetFullPath(candidate),
+                    Path.GetFullPath(ownMirrorPath), StringComparison.OrdinalIgnoreCase))
             {
                 sources.Add(candidate);
             }

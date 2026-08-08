@@ -20,7 +20,7 @@ internal readonly record struct ReadTarget(string Path, int Start, int? End)
         return End >= other.End;
     }
 
-    public override string ToString() => $"{Path}:{Start}-{(End?.ToString() ?? "EOF")}";
+    public override string ToString() => $"{Path}:{Start}-{End?.ToString() ?? "EOF"}";
 }
 
 /// <summary>
@@ -60,7 +60,7 @@ internal static partial class BashReadParser
         if (string.IsNullOrEmpty(cmd) || UnsafeShell().IsMatch(cmd))
             return none;
 
-        List<string>? tokens = ShellTokenizer.TrySplit(cmd);
+        var tokens = ShellTokenizer.TrySplit(cmd);
         if (tokens is null || tokens.Count == 0)
             return none;
 
@@ -89,7 +89,7 @@ internal static partial class BashReadParser
             if (seg.Count == 0) continue;
             if (IsLiteralEcho(seg))
                 continue; // separator noise; its output is reproducible from the command text
-            List<ReadTarget>? got = ParseOne(seg);
+            var got = ParseOne(seg);
             if (got is null || got.Count == 0)
                 return none; // fail closed: one unrecognized segment poisons the command
             sawRead = true;
@@ -120,75 +120,78 @@ internal static partial class BashReadParser
         switch (verb)
         {
             case "cat":
-            {
-                var paths = args.Where(LooksLikePath).ToList();
-                // Any flag (-n, -A, …) changes the output shape; refuse rather than guess.
-                if (paths.Count != args.Count || paths.Count == 0) return null;
-                return paths.Select(p => new ReadTarget(p, 1, null)).ToList();
-            }
+                {
+                    var paths = args.Where(LooksLikePath).ToList();
+                    // Any flag (-n, -A, …) changes the output shape; refuse rather than guess.
+                    if (paths.Count != args.Count || paths.Count == 0) return null;
+                    return [.. paths.Select(p => new ReadTarget(p, 1, null))];
+                }
 
             case "head":
             case "tail":
-            {
-                int? n = null;
-                var paths = new List<string>();
-                for (int i = 0; i < args.Count; i++)
                 {
-                    string a = args[i];
-                    if (a is "-n" or "--lines")
+                    int? n = null;
+                    var paths = new List<string>();
+                    for (int i = 0; i < args.Count; i++)
                     {
-                        if (i + 1 >= args.Count) return null;
-                        if (!int.TryParse(args[i + 1].TrimStart('+'), out int parsed)) return null;
-                        n = parsed;
-                        i++;
-                        continue;
+                        string a = args[i];
+                        if (a is "-n" or "--lines")
+                        {
+                            if (i + 1 >= args.Count) return null;
+                            if (!int.TryParse(args[i + 1].TrimStart('+'), out int parsed)) return null;
+                            n = parsed;
+                            i++;
+                            continue;
+                        }
+                        var m = DashNumber().Match(a);
+                        if (m.Success)
+                        {
+                            n = int.Parse(m.Groups[1].Value);
+                            continue;
+                        }
+                        if (!LooksLikePath(a)) return null; // unknown flag
+                        paths.Add(a);
                     }
-                    Match m = DashNumber().Match(a);
-                    if (m.Success)
-                    {
-                        n = int.Parse(m.Groups[1].Value);
-                        continue;
-                    }
-                    if (!LooksLikePath(a)) return null; // unknown flag
-                    paths.Add(a);
+                    if (paths.Count != 1 || n is null) return null;
+                    // `tail -n N` is relative to EOF — not resolvable to absolute line
+                    // numbers without reading the file, which may have changed since.
+                    if (verb == "tail") return null;
+                    return [new ReadTarget(paths[0], 1, n)];
                 }
-                if (paths.Count != 1 || n is null) return null;
-                // `tail -n N` is relative to EOF — not resolvable to absolute line
-                // numbers without reading the file, which may have changed since.
-                if (verb == "tail") return null;
-                return [new ReadTarget(paths[0], 1, n)];
-            }
 
             case "sed":
-            {
-                // Accept exactly: sed -n <expr> <file>, where <expr> is one or
-                // more ';'-separated print ranges ('10,20p', '42p', '5,9p;30,40p').
-                if (args.Count != 3 || args[0] != "-n") return null;
-                string expr = args[1], path = args[2];
-                if (!LooksLikePath(path)) return null;
-                var targets = new List<ReadTarget>();
-                foreach (string part in expr.Split(';'))
                 {
-                    Match m = SedRange().Match(part);
-                    if (m.Success)
+                    // Accept exactly: sed -n <expr> <file>, where <expr> is one or
+                    // more ';'-separated print ranges ('10,20p', '42p', '5,9p;30,40p').
+                    if (args.Count != 3 || args[0] != "-n") return null;
+                    string expr = args[1], path = args[2];
+                    if (!LooksLikePath(path)) return null;
+                    var targets = new List<ReadTarget>();
+                    foreach (string part in expr.Split(';'))
                     {
-                        if (!int.TryParse(m.Groups[1].Value, out int a) ||
-                            !int.TryParse(m.Groups[2].Value, out int b) || a > b)
-                            return null;
-                        targets.Add(new ReadTarget(path, a, b));
-                        continue;
+                        var m = SedRange().Match(part);
+                        if (m.Success)
+                        {
+                            if (!int.TryParse(m.Groups[1].Value, out int a) ||
+                                !int.TryParse(m.Groups[2].Value, out int b) || a > b)
+                            {
+                                return null;
+                            }
+
+                            targets.Add(new ReadTarget(path, a, b));
+                            continue;
+                        }
+                        m = SedSingle().Match(part);
+                        if (m.Success)
+                        {
+                            if (!int.TryParse(m.Groups[1].Value, out int a)) return null;
+                            targets.Add(new ReadTarget(path, a, a));
+                            continue;
+                        }
+                        return null; // any non-print part poisons the sed
                     }
-                    m = SedSingle().Match(part);
-                    if (m.Success)
-                    {
-                        if (!int.TryParse(m.Groups[1].Value, out int a)) return null;
-                        targets.Add(new ReadTarget(path, a, a));
-                        continue;
-                    }
-                    return null; // any non-print part poisons the sed
+                    return targets.Count > 0 ? targets : null;
                 }
-                return targets.Count > 0 ? targets : null;
-            }
         }
         return null;
     }

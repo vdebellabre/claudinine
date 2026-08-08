@@ -27,12 +27,10 @@ internal static class RuleHelpers
         rec.Replacement = clone;
     }
 
-    public static IEnumerable<JsonNode?> ContentBlocks(JsonObject record)
-    {
-        if (record["message"] is JsonObject m && m["content"] is JsonArray blocks)
-            return blocks;
-        return [];
-    }
+    public static IEnumerable<JsonNode?> ContentBlocks(JsonObject record) =>
+        record["message"] is JsonObject m && m["content"] is JsonArray blocks
+        ? blocks
+        : [];
 
     /// <summary>
     /// The write half of the read-CurrentNode / mutate-clone-only convention:
@@ -55,24 +53,25 @@ internal static class RuleHelpers
     {
         if (block is not JsonObject b)
             return "";
-        JsonNode? result = FirstNonEmpty(b["text"], b["thinking"], b["content"]);
+        var result = FirstNonEmpty(b["text"], b["thinking"], b["content"]);
         if (result is JsonArray list)
+        {
             return string.Join(" ", list.OfType<JsonObject>()
                 .Select(sub => sub["text"])
                 .OfType<JsonValue>()
-                .Select(v => v.TryGetValue<string>(out string? s) ? s : null)
+                .Select(v => v.TryGetValue(out string? s) ? s : null)
                 .Where(s => s is not null));
-        if (result is JsonValue value && value.TryGetValue<string>(out string? text))
-            return text;
-        return "";
+        }
+
+        return result is JsonValue value && value.TryGetValue(out string? text) ? text : "";
     }
 
     private static JsonNode? FirstNonEmpty(params JsonNode?[] candidates)
     {
-        foreach (JsonNode? c in candidates)
+        foreach (var c in candidates)
         {
             if (c is JsonArray) return c;
-            if (c is JsonValue v && v.TryGetValue<string>(out string? s) && s.Length > 0) return c;
+            if (c is JsonValue v && v.TryGetValue(out string? s) && s.Length > 0) return c;
         }
         return null;
     }
@@ -80,12 +79,15 @@ internal static class RuleHelpers
     /// <summary>tool_result payload text: plain string, or concatenated text sub-blocks.</summary>
     public static string ResultText(JsonObject block)
     {
-        JsonNode? c = block["content"];
-        if (c is JsonValue v && v.TryGetValue<string>(out string? s))
+        var c = block["content"];
+        if (c is JsonValue v && v.TryGetValue(out string? s))
             return s;
         if (c is JsonArray parts)
+        {
             return string.Concat(parts.OfType<JsonObject>()
                 .Select(p => p["text"].GetString() ?? ""));
+        }
+
         return "";
     }
 
@@ -184,11 +186,11 @@ internal static class RuleHelpers
             return "";
         foreach (string key in (string[])["command", "file_path", "path", "pattern", "url", "query", "prompt"])
         {
-            if (input[key] is JsonValue v && v.TryGetValue<string>(out string? s) && s.Length > 0)
+            if (input[key] is JsonValue v && v.TryGetValue(out string? s) && s.Length > 0)
                 return s.ReplaceLineEndings(" ");
         }
         return input.Select(kv => kv.Value).OfType<JsonValue>()
-            .Select(v => v.TryGetValue<string>(out string? s) ? s : null)
+            .Select(v => v.TryGetValue(out string? s) ? s : null)
             .FirstOrDefault(s => !string.IsNullOrEmpty(s))?.ReplaceLineEndings(" ") ?? "";
     }
 
@@ -203,12 +205,15 @@ internal static class RuleHelpers
     {
         if (record["type"].GetString() != "user")
             return false;
-        JsonNode? content = (record["message"] as JsonObject)?["content"];
+        var content = (record["message"] as JsonObject)?["content"];
         if (content is JsonValue v && v.TryGetValue<string>(out _))
             return true;
         if (content is JsonArray list)
+        {
             return !list.OfType<JsonObject>()
                 .Any(b => b["type"].GetString() == "tool_result");
+        }
+
         return false;
     }
 }

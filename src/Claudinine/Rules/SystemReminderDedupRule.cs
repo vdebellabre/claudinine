@@ -26,23 +26,23 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
     {
         var seen = new HashSet<string>();
 
-        foreach (TranscriptRecord rec in transcript.Records)
+        foreach (var rec in transcript.Records)
         {
             if (rec.IsProtected())
                 continue;
 
-            JsonObject node = RuleHelpers.CurrentNode(rec);
+            var node = RuleHelpers.CurrentNode(rec);
 
             // Reminders are injected into plain-string user prompts too. Write the
             // deduped text back as a STRING — cozempic coerced these to block
             // lists, silently breaking the "real user message has string content"
             // invariant that turn detection relies on.
             if ((node["message"] as JsonObject)?["content"] is JsonValue sv
-                && sv.TryGetValue<string>(out string? promptText))
+                && sv.TryGetValue(out string? promptText))
             {
                 if (DedupIn(promptText, seen) is string dedupedPrompt)
                 {
-                    JsonObject stringClone = (JsonObject)node.DeepClone();
+                    var stringClone = (JsonObject)node.DeepClone();
                     ((JsonObject)stringClone["message"]!)["content"] = dedupedPrompt;
                     RuleHelpers.SetReplacement(rec, stringClone, Name);
                 }
@@ -51,7 +51,7 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
 
             JsonObject? clone = null;
             int blockIndex = -1;
-            foreach (JsonNode? block in RuleHelpers.ContentBlocks(node))
+            foreach (var block in RuleHelpers.ContentBlocks(node))
             {
                 blockIndex++;
                 if (block is not JsonObject b)
@@ -64,7 +64,7 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
                 bool isText = btype == "text";
                 string? text = isText
                     ? (b["text"] as JsonValue).GetString()
-                    : (b["content"] as JsonValue) is JsonValue cv && cv.TryGetValue<string>(out string? cs) ? cs : null;
+                    : b["content"] as JsonValue is JsonValue cv && cv.TryGetValue(out string? cs) ? cs : null;
                 if (string.IsNullOrEmpty(text))
                     continue;
 

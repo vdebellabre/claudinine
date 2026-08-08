@@ -49,7 +49,7 @@ internal sealed class TranscriptFile
         {
             if (lines[i].Length == 0)
                 return null; // blank interior line: not a shape we know
-            TranscriptRecord? rec = TranscriptRecord.TryParse(lines[i]);
+            var rec = TranscriptRecord.TryParse(lines[i]);
             if (rec is null)
                 return null; // format sentinel
             records.Add(rec);
@@ -88,7 +88,7 @@ internal sealed class TranscriptFile
             return Refuse("tail-touched");
 
         var byUuid = new Dictionary<string, TranscriptRecord>();
-        foreach (TranscriptRecord r in Records)
+        foreach (var r in Records)
         {
             if (r.Uuid is not null)
                 byUuid.TryAdd(r.Uuid, r);
@@ -115,19 +115,19 @@ internal sealed class TranscriptFile
         var outLines = new List<string>();
         var expected = new List<(string? Uuid, string? Parent)>();
         bool tailRewritten = false;
-        foreach (TranscriptRecord rec in Records)
+        foreach (var rec in Records)
         {
             if (rec.Removed)
                 continue;
 
-            JsonObject? node = rec.Replacement;
+            var node = rec.Replacement;
 
             string? newParent = rec.ParentUuid;
             if (newParent is not null && removedUuids.Contains(newParent))
                 newParent = SurvivingAncestor(newParent);
 
             string? origLeaf = (node ?? rec.Node)["leafUuid"] is JsonValue lv
-                && lv.TryGetValue<string>(out string? l) ? l : null;
+                && lv.TryGetValue(out string? l) ? l : null;
             string? newLeaf = origLeaf is not null && removedUuids.Contains(origLeaf)
                 ? SurvivingAncestor(origLeaf)
                 : origLeaf;
@@ -175,7 +175,7 @@ internal sealed class TranscriptFile
             return Refuse("count-mismatch");
         for (int i = 0; i < count; i++)
         {
-            TranscriptRecord? reparsed = TranscriptRecord.TryParse(lines[i]);
+            var reparsed = TranscriptRecord.TryParse(lines[i]);
             if (reparsed is null)
                 return Refuse("reparse");
             if (reparsed.Uuid != expected[i].Uuid || reparsed.ParentUuid != expected[i].Parent)
@@ -184,14 +184,18 @@ internal sealed class TranscriptFile
             if (reparsed.ParentUuid is not null && removedUuids.Contains(reparsed.ParentUuid))
                 return Refuse("dangling-parent");
             if (reparsed.Node["leafUuid"] is JsonValue rlv
-                && rlv.TryGetValue<string>(out string? rleaf) && removedUuids.Contains(rleaf))
+                && rlv.TryGetValue(out string? rleaf) && removedUuids.Contains(rleaf))
+            {
                 return Refuse("dangling-leaf");
+            }
             // A result carrier pointing at a removed tool_use record means a rule
             // broke pair atomicity. Unlike parentUuid/leafUuid this is not an
             // ancestry link — remapping has no meaning, so fail the rewrite.
             if (reparsed.Node["sourceToolAssistantUUID"] is JsonValue rsv
-                && rsv.TryGetValue<string>(out string? rsrc) && removedUuids.Contains(rsrc))
+                && rsv.TryGetValue(out string? rsrc) && removedUuids.Contains(rsrc))
+            {
                 return Refuse("dangling-source");
+            }
         }
         // The tail keeps its identity (uuid checked above via expected[^1]); it is
         // byte-identical unless the rewrite layer itself had to rechain its

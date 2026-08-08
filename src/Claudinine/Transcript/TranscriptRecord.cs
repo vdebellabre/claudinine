@@ -63,15 +63,19 @@ internal sealed class TranscriptRecord
     {
         if (Type is "content-replacement" or "marble-origami-commit"
             or "marble-origami-snapshot" or "worktree-state" or "task-summary")
+        {
             return true;
+        }
+
         if (Type == "user" && IsTruthy(Node["isCompactSummary"]))
             return true;
         if (Type == "system" &&
             Node["subtype"].GetString() is "compact_boundary" or "microcompact_boundary")
+        {
             return true;
-        if (IsTruthy(Node["isVisibleInTranscriptOnly"]))
-            return true;
-        return false;
+        }
+
+        return IsTruthy(Node["isVisibleInTranscriptOnly"]);
     }
 
     /// <summary>
@@ -88,5 +92,5 @@ internal sealed class TranscriptRecord
         && v.TryGetValue<string>(out _);
 
     private static bool IsTruthy(JsonNode? n) =>
-        n is JsonValue v && v.TryGetValue<bool>(out bool b) && b;
+        n is JsonValue v && v.TryGetValue(out bool b) && b;
 }

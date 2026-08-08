@@ -39,7 +39,7 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
         var lastFullView = new Dictionary<string, int>(StringComparer.Ordinal);
         for (int i = 0; i < records.Count; i++)
         {
-            TranscriptRecord rec = records[i];
+            var rec = records[i];
             if (NoticeFilename(rec) is string noticed)
             {
                 lastFullView[noticed] = i;
@@ -52,7 +52,7 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
 
         for (int i = 0; i < records.Count; i++)
         {
-            TranscriptRecord rec = records[i];
+            var rec = records[i];
             if (NoticeFilename(rec) is string file && lastFullView[file] > i && !rec.IsProtected())
                 rec.Removed = true;
         }
@@ -72,11 +72,13 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
     {
         if (rec.Type != "assistant" || rec.Node["message"]?["content"] is not JsonArray content)
             return;
-        foreach (JsonNode? block in content)
+        foreach (var block in content)
         {
             if (block is JsonObject b && b["type"].GetString() == "tool_use"
                 && b["id"].GetString() is string id && b["name"].GetString() is string name)
+            {
                 toolNames[id] = name;
+            }
         }
     }
 
@@ -97,7 +99,9 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
             && GetInt(file["startLine"]) == 1
             && GetInt(file["numLines"]) is int numLines
             && GetInt(file["totalLines"]) is int totalLines && numLines == totalLines)
+        {
             return file["filePath"].GetString() is { Length: > 0 } read ? read : null;
+        }
 
         if (toolName == "Write" && result["type"].GetString() is "create" or "update")
             return result["filePath"].GetString() is { Length: > 0 } written ? written : null;
@@ -109,15 +113,17 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
     {
         if (rec.Node["message"]?["content"] is not JsonArray content)
             return null;
-        foreach (JsonNode? block in content)
+        foreach (var block in content)
         {
             if (block is JsonObject b && b["type"].GetString() == "tool_result"
                 && b["tool_use_id"].GetString() is string id)
+            {
                 return toolNames.TryGetValue(id, out string? name) ? name : null;
+            }
         }
         return null;
     }
 
     private static int? GetInt(JsonNode? n) =>
-        n is JsonValue v && v.TryGetValue<int>(out int i) ? i : null;
+        n is JsonValue v && v.TryGetValue(out int i) ? i : null;
 }

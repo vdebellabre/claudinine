@@ -14,7 +14,7 @@ internal static class HookRunner
     {
         try
         {
-            HookInput? input = JsonSerializer.Deserialize(stdin, ClaudinineJsonContext.Default.HookInput);
+            var input = JsonSerializer.Deserialize(stdin, ClaudinineJsonContext.Default.HookInput);
             if (input?.TranscriptPath is null || !File.Exists(input.TranscriptPath))
                 return 0;
 

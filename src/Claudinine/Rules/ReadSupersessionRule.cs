@@ -30,11 +30,11 @@ internal abstract class ReadSupersessionRule : ICompactionRule
     {
         // Pass 1: every eligible read, in file order.
         var reads = new List<(string ToolUseId, List<ReadTarget> Targets)>();
-        foreach (TranscriptRecord rec in transcript.Records)
+        foreach (var rec in transcript.Records)
         {
             if (rec.IsProtected())
                 continue;
-            foreach (JsonNode? block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
+            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
             {
                 if (block is not JsonObject b)
                     continue;
@@ -58,7 +58,7 @@ internal abstract class ReadSupersessionRule : ICompactionRule
         int cutoff = reads.Count - RecencyKeep;
         for (int i = 0; i < reads.Count && i < cutoff; i++)
         {
-            (string toolUseId, List<ReadTarget> targets) = reads[i];
+            (string toolUseId, var targets) = reads[i];
             bool allCovered = targets.All(t =>
                 reads.Skip(i + 1).Any(later => later.Targets.Any(lt => lt.Covers(t))));
             if (allCovered)
@@ -69,21 +69,24 @@ internal abstract class ReadSupersessionRule : ICompactionRule
 
         // Pass 3: stub the matching tool_result payloads. Idempotence comes from
         // MinResultChars: a stub is short, so a second pass skips it naturally.
-        foreach (TranscriptRecord rec in transcript.Records)
+        foreach (var rec in transcript.Records)
         {
             if (rec.IsProtected())
                 continue;
 
             JsonObject? clone = null;
-            foreach (JsonNode? block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
+            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
             {
                 if (block is not JsonObject b)
                     continue;
                 if (b["type"].GetString() != "tool_result")
                     continue;
                 if (b["tool_use_id"].GetString() is not string toolUseId
-                    || !superseded.TryGetValue(toolUseId, out List<ReadTarget>? targets))
+                    || !superseded.TryGetValue(toolUseId, out var targets))
+                {
                     continue;
+                }
+
                 string current = RuleHelpers.ResultText(b);
                 if (current.Length < MinResultChars)
                     continue;
@@ -96,7 +99,7 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 // First hit on this record: clone it, then mutate the clone's
                 // corresponding block (never the original parse).
                 clone ??= (JsonObject)RuleHelpers.CurrentNode(rec).DeepClone();
-                foreach (JsonNode? cb in RuleHelpers.ContentBlocks(clone))
+                foreach (var cb in RuleHelpers.ContentBlocks(clone))
                 {
                     if (cb is JsonObject cbo && cbo["tool_use_id"].GetString() == toolUseId)
                     {

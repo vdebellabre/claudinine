@@ -24,10 +24,10 @@ internal sealed class HookSuccessStripRule : ICompactionRule
         var records = transcript.Records;
         for (int i = 0; i < records.Count - 1; i++) // tail excluded by loop bound
         {
-            TranscriptRecord rec = records[i];
+            var rec = records[i];
             if (rec.Type != "attachment" || rec.IsProtected())
                 continue;
-            if (rec.Node["isSidechain"] is JsonValue sc && sc.TryGetValue<bool>(out bool b) && b)
+            if (rec.Node["isSidechain"] is JsonValue sc && sc.TryGetValue(out bool b) && b)
                 continue;
             if (rec.Node["attachment"] is not JsonObject att)
                 continue;

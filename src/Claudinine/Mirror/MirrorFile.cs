@@ -28,7 +28,7 @@ internal static class MirrorFile
         try
         {
             mirrorPath ??= MirrorLocator.PathFor(transcript.Path);
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(mirrorPath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(mirrorPath)!);
 
             // Identity: uuid when present; identical uuid-less lines (repeated
             // queue-operations…) are tracked by content hash WITH multiplicity, so
@@ -38,7 +38,7 @@ internal static class MirrorFile
             bool hasHeader = false;
             if (File.Exists(mirrorPath))
             {
-                foreach ((string line, JsonObject? node) in Jsonl.ReadRecords(mirrorPath))
+                foreach (var (line, node) in Jsonl.ReadRecords(mirrorPath))
                 {
                     if (!hasHeader) { hasHeader = true; continue; }
                     Register(IdentityOf(line, node), seen, seenCounts);
@@ -47,9 +47,9 @@ internal static class MirrorFile
 
             var toAppend = new List<string>();
             if (!hasHeader)
-                toAppend.Add(MirrorFormat.Line("mirrorOf", System.IO.Path.GetFullPath(transcript.Path)));
+                toAppend.Add(MirrorFormat.Line("mirrorOf", Path.GetFullPath(transcript.Path)));
             var transcriptCounts = new Dictionary<string, int>();
-            foreach (TranscriptRecord rec in transcript.Records)
+            foreach (var rec in transcript.Records)
             {
                 if (rec.Node["claudinine"] is not null)
                     continue; // already a stub; its original is already mirrored
@@ -97,7 +97,7 @@ internal static class MirrorFile
         try
         {
             string mirrorPath = MirrorLocator.PathFor(transcript.Path);
-            List<string> sources = MirrorLocator.ParentMirrorFiles(parentSessionId, mirrorPath);
+            var sources = MirrorLocator.ParentMirrorFiles(parentSessionId, mirrorPath);
             if (sources.Count == 0)
                 return false;
 
@@ -106,7 +106,7 @@ internal static class MirrorFile
             bool hasHeader = false;
             if (File.Exists(mirrorPath))
             {
-                foreach ((string _, JsonObject? node) in Jsonl.ReadRecords(mirrorPath))
+                foreach ((string _, var node) in Jsonl.ReadRecords(mirrorPath))
                 {
                     if (!hasHeader) { hasHeader = true; continue; }
                     if (node?["uuid"].GetString() is string uuid)
@@ -114,10 +114,10 @@ internal static class MirrorFile
                 }
             }
 
-            string targetSid = System.IO.Path.GetFileNameWithoutExtension(transcript.Path);
+            string targetSid = Path.GetFileNameWithoutExtension(transcript.Path);
             var toAppend = new List<string>();
             if (!hasHeader)
-                toAppend.Add(MirrorFormat.Line("mirrorOf", System.IO.Path.GetFullPath(transcript.Path)));
+                toAppend.Add(MirrorFormat.Line("mirrorOf", Path.GetFullPath(transcript.Path)));
             // Merged records land at the mirror's END although they are
             // chronologically the session's OLDEST — this separator is how a
             // restore knows the suffix needs a chain-aware reorder. Mirrors
@@ -127,7 +127,7 @@ internal static class MirrorFile
             int preludeLines = toAppend.Count;
             foreach (string source in sources)
             {
-                foreach ((string _, JsonObject? rec) in Jsonl.ReadRecords(source))
+                foreach ((string _, var rec) in Jsonl.ReadRecords(source))
                 {
                     // The uuid requirement also skips the parent mirror's header.
                     if (rec?["uuid"].GetString() is not string uuid)
@@ -163,14 +163,14 @@ internal static class MirrorFile
     {
         try
         {
-            List<string> sources = MirrorLocator.ParentMirrorFiles(
+            var sources = MirrorLocator.ParentMirrorFiles(
                 sessionId, MirrorLocator.PathFor(transcript.Path));
             if (sources.Count == 0)
                 return null;
             var uuids = new HashSet<string>();
             foreach (string source in sources)
             {
-                foreach ((string _, JsonObject? node) in Jsonl.ReadRecords(source))
+                foreach ((string _, var node) in Jsonl.ReadRecords(source))
                 {
                     if (node?["uuid"].GetString() is string uuid)
                         uuids.Add(uuid);

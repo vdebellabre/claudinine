@@ -26,15 +26,15 @@ internal sealed class QueueHistoryCollapseRule : ICompactionRule
 
         var queues = new Dictionary<string, List<string>>();
         var ops = new List<TranscriptRecord>();
-        foreach (TranscriptRecord rec in records)
+        foreach (var rec in records)
         {
             if (rec.Type != "queue-operation")
                 continue;
             if (rec.IsProtected())
                 return;
-            JsonObject node = rec.Node;
+            var node = rec.Node;
             string sid = node["sessionId"].GetString() ?? "";
-            if (!queues.TryGetValue(sid, out List<string>? queue))
+            if (!queues.TryGetValue(sid, out var queue))
                 queues[sid] = queue = [];
             string? content = node["content"].GetString();
             switch (node["operation"].GetString())
@@ -56,7 +56,7 @@ internal sealed class QueueHistoryCollapseRule : ICompactionRule
         if (ops.Count == 0 || queues.Values.Any(q => q.Count > 0))
             return; // nothing to do, or messages still pending: keep full history
 
-        foreach (TranscriptRecord rec in ops)
+        foreach (var rec in ops)
             rec.Removed = true;
     }
 }

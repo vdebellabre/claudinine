@@ -25,12 +25,12 @@ internal sealed class DocumentDedupRule : ICompactionRule
     {
         // Pass 1: hash every big-enough block, in file order.
         var occurrences = new Dictionary<string, List<(TranscriptRecord Rec, int BlockIndex)>>();
-        foreach (TranscriptRecord rec in transcript.Records)
+        foreach (var rec in transcript.Records)
         {
             if (rec.IsProtected())
                 continue;
             int bi = -1;
-            foreach (JsonNode? block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
+            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
             {
                 bi++;
                 string text = RuleHelpers.TextOf(block);
@@ -48,9 +48,9 @@ internal sealed class DocumentDedupRule : ICompactionRule
         {
             if (list.Count <= 1)
                 continue;
-            foreach ((TranscriptRecord rec, int blockIndex) in list.Skip(1))
+            foreach ((var rec, int blockIndex) in list.Skip(1))
             {
-                JsonObject node = RuleHelpers.CurrentNode(rec);
+                var node = RuleHelpers.CurrentNode(rec);
                 if (RuleHelpers.ContentBlocks(node).ElementAtOrDefault(blockIndex) is not JsonObject block)
                     continue;
                 // Only text and string tool_results, like the original.

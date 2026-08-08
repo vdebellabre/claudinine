@@ -30,20 +30,22 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
     public void Apply(TranscriptFile transcript)
     {
         bool fullHeaderSeen = false;
-        foreach (TranscriptRecord rec in transcript.Records)
+        foreach (var rec in transcript.Records)
         {
             if (rec.Removed || rec.Type != "user")
                 continue;
-            JsonObject node = RuleHelpers.CurrentNode(rec);
-            foreach (JsonObject block in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
+            var node = RuleHelpers.CurrentNode(rec);
+            foreach (var block in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
                 .Where(b => b["type"].GetString() == "tool_result"))
             {
                 // Carrier content is a plain string by construction (ChainCollapseRule
                 // sets it directly); anything else is not ours.
-                if (block["content"] is not JsonValue v || !v.TryGetValue<string>(out string? content)
+                if (block["content"] is not JsonValue v || !v.TryGetValue(out string? content)
                     || !content.StartsWith(HeaderPrefix, StringComparison.Ordinal)
                     || !content.Contains(FullMarker, StringComparison.Ordinal))
+                {
                     continue; // short already (idempotence) or not a carrier
+                }
 
                 if (!fullHeaderSeen)
                 {
@@ -59,8 +61,8 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
 
                 string rewritten = ShortHeader(callCount, sid) + content[(end + FullHeaderEnd.Length)..];
 
-                JsonObject clone = (JsonObject)node.DeepClone();
-                foreach (JsonObject cb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
+                var clone = (JsonObject)node.DeepClone();
+                foreach (var cb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
                     .Where(b => b["type"].GetString() == "tool_result"))
                 {
                     cb["content"] = rewritten;

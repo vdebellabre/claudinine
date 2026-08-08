@@ -53,10 +53,10 @@ internal static class GetVerb
             return 1;
         }
 
-        List<string> mirrorPaths = MirrorLocator.FindSessionMirrors(session);
+        var mirrorPaths = MirrorLocator.FindSessionMirrors(session);
         if (mirrorPaths.Count == 0)
         {
-            IReadOnlyList<string> searched = MirrorLocator.SearchDirectories();
+            var searched = MirrorLocator.SearchDirectories();
             Console.Error.WriteLine(
                 $"no mirror found for session '{session}' (searched: " +
                 (searched.Count == 0 ? "no mirror directory exists" : string.Join("; ", searched)) + ")");
@@ -75,7 +75,7 @@ internal static class GetVerb
         var seenRecords = new HashSet<string>();
         foreach (string mirrorPath in mirrorPaths)
         {
-            foreach ((string _, JsonObject? rec) in Jsonl.ReadRecords(mirrorPath, skipFirst: true))
+            foreach ((string _, var rec) in Jsonl.ReadRecords(mirrorPath, skipFirst: true))
             {
                 if (rec?["uuid"].GetString() is not string uuid)
                     continue;
@@ -88,7 +88,7 @@ internal static class GetVerb
                     DecodeMediaBlocks(rec, uuid, matches);
                     continue;
                 }
-                foreach (JsonObject b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
+                foreach (var b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
                     .Where(x => x["type"].GetString() == "tool_result"))
                 {
                     string text = RuleHelpers.ResultText(b);
@@ -96,7 +96,10 @@ internal static class GetVerb
                         continue;
                     if (refPrefix is null && grep is not null
                         && !text.Contains(grep, StringComparison.OrdinalIgnoreCase))
+                    {
                         continue;
+                    }
+
                     matches.Add((uuid, text));
                 }
                 // A --ref can also address a tool_use record: anchor-input stubs
@@ -104,7 +107,7 @@ internal static class GetVerb
                 // — plain --grep stays an output search, not an input search.
                 if (refPrefix is null)
                     continue;
-                foreach (JsonObject b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
+                foreach (var b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
                     .Where(x => x["type"].GetString() == "tool_use"))
                 {
                     if (b["input"] is not JsonObject input)
@@ -172,7 +175,7 @@ internal static class GetVerb
     {
         var lines = new List<string>();
         int n = 0;
-        foreach (JsonObject b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>())
+        foreach (var b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>())
         {
             string? btype = b["type"].GetString();
             if (btype is "image" or "document")
@@ -181,7 +184,7 @@ internal static class GetVerb
             }
             else if (btype == "tool_result" && b["content"] is JsonArray inner)
             {
-                foreach (JsonObject ib in inner.OfType<JsonObject>()
+                foreach (var ib in inner.OfType<JsonObject>()
                     .Where(x => x["type"].GetString() is "image" or "document"))
                 {
                     DecodeOne(ib, uuid, n++, lines);
@@ -215,9 +218,9 @@ internal static class GetVerb
             return;
         }
         string mediaType = source["media_type"].GetString() ?? "application/octet-stream";
-        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "claudinine", "media");
+        string dir = Path.Combine(Path.GetTempPath(), "claudinine", "media");
         Directory.CreateDirectory(dir);
-        string path = System.IO.Path.Combine(dir, $"{RuleHelpers.RefPrefix(uuid)}-{index}{Extension(mediaType)}");
+        string path = Path.Combine(dir, $"{RuleHelpers.RefPrefix(uuid)}-{index}{Extension(mediaType)}");
         File.WriteAllBytes(path, bytes);
         lines.Add($"wrote {path} ({mediaType}, {Math.Max(1, bytes.Length / 1024)}KB) — use the Read tool on this file to view it");
     }

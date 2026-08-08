@@ -24,13 +24,13 @@ internal sealed class AgeIndex
     public AgeIndex(List<TranscriptRecord> records)
     {
         int totalTurns = 0;
-        var turnOf = new int[records.Count];
+        int[] turnOf = new int[records.Count];
         int totalResults = 0;
-        var resultsThrough = new int[records.Count];
+        int[] resultsThrough = new int[records.Count];
 
         for (int i = 0; i < records.Count; i++)
         {
-            JsonObject node = records[i].Node;
+            var node = records[i].Node;
             if (RuleHelpers.IsUserPrompt(node))
                 totalTurns++;
             turnOf[i] = totalTurns;

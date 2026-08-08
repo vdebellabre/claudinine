@@ -46,11 +46,11 @@ internal sealed partial class ForkHealRule : ICompactionRule
 
         var flagged = new List<(TranscriptRecord Rec, HashSet<string> Sids)>();
         var foreignSids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (TranscriptRecord rec in records)
+        foreach (var rec in records)
         {
             if (rec.Removed || rec.IsProtected())
                 continue;
-            JsonObject node = RuleHelpers.CurrentNode(rec);
+            var node = RuleHelpers.CurrentNode(rec);
             if (node["claudinine"] is null)
                 continue; // only our own rewrites embed retrieval commands
             var sids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -69,7 +69,7 @@ internal sealed partial class ForkHealRule : ICompactionRule
         var healed = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (string sid in foreignSids)
         {
-            HashSet<string>? parentUuids = MirrorFile.MirrorUuidsOf(sid, transcript);
+            var parentUuids = MirrorFile.MirrorUuidsOf(sid, transcript);
             if (parentUuids is null)
                 continue; // no such mirror: stray token, or the parent is gone
             bool genuineFork = flagged.Any(f => f.Sids.Contains(sid)
@@ -82,7 +82,7 @@ internal sealed partial class ForkHealRule : ICompactionRule
         if (healed.Count == 0)
             return;
 
-        foreach ((TranscriptRecord rec, HashSet<string> sids) in flagged)
+        foreach ((var rec, var sids) in flagged)
         {
             // Tail guard: the file's final record must never be replaced. A fork
             // can end exactly at a marked carrier; it heals on a later pass.
@@ -94,7 +94,7 @@ internal sealed partial class ForkHealRule : ICompactionRule
                 && rec.Uuid is not null && parentUuids.Contains(rec.Uuid)).ToList();
             if (retarget.Count == 0)
                 continue;
-            JsonObject node = RuleHelpers.CurrentNode(rec);
+            var node = RuleHelpers.CurrentNode(rec);
             var clone = (JsonObject)node.DeepClone();
             foreach (string sid in retarget)
                 RetargetStrings(clone, sid, currentSid);
@@ -114,10 +114,10 @@ internal sealed partial class ForkHealRule : ICompactionRule
                     CollectForeignSids(kv.Value, currentSid, sids);
                 break;
             case JsonArray array:
-                foreach (JsonNode? item in array)
+                foreach (var item in array)
                     CollectForeignSids(item, currentSid, sids);
                 break;
-            case JsonValue value when value.TryGetValue<string>(out string? text):
+            case JsonValue value when value.TryGetValue(out string? text):
                 foreach (Match m in GetCommand().Matches(text))
                 {
                     string sid = m.Groups[1].Value;
@@ -136,7 +136,7 @@ internal sealed partial class ForkHealRule : ICompactionRule
                 foreach (string key in obj.Select(kv => kv.Key).ToList())
                 {
                     if (obj[key] is JsonValue value
-                        && value.TryGetValue<string>(out string? text)
+                        && value.TryGetValue(out string? text)
                         && text.Contains(fromSid, StringComparison.OrdinalIgnoreCase))
                     {
                         obj[key] = text.Replace(fromSid, toSid, StringComparison.OrdinalIgnoreCase);
@@ -151,7 +151,7 @@ internal sealed partial class ForkHealRule : ICompactionRule
                 for (int i = 0; i < array.Count; i++)
                 {
                     if (array[i] is JsonValue value
-                        && value.TryGetValue<string>(out string? text)
+                        && value.TryGetValue(out string? text)
                         && text.Contains(fromSid, StringComparison.OrdinalIgnoreCase))
                     {
                         array[i] = text.Replace(fromSid, toSid, StringComparison.OrdinalIgnoreCase);

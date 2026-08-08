@@ -19,7 +19,7 @@ internal static class SkipMarkers
     {
         foreach (string dir in MirrorLocator.SearchDirectories())
         {
-            if (File.Exists(System.IO.Path.Combine(dir, sessionId + ".skip")))
+            if (File.Exists(Path.Combine(dir, sessionId + ".skip")))
                 return true;
         }
         return false;
@@ -27,17 +27,17 @@ internal static class SkipMarkers
 
     public static void Write(string sessionId, string transcriptPath)
     {
-        string content = MirrorFormat.Line("skipCompactionOf", System.IO.Path.GetFullPath(transcriptPath));
+        string content = MirrorFormat.Line("skipCompactionOf", Path.GetFullPath(transcriptPath));
         var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string mirror in MirrorLocator.FindSessionMirrors(sessionId))
-            dirs.Add(System.IO.Path.GetDirectoryName(mirror)!);
+            dirs.Add(Path.GetDirectoryName(mirror)!);
         Directory.CreateDirectory(MirrorLocator.MirrorsDirectory());
         dirs.Add(MirrorLocator.MirrorsDirectory());
         foreach (string dir in dirs)
         {
             try
             {
-                File.WriteAllText(System.IO.Path.Combine(dir, sessionId + ".skip"),
+                File.WriteAllText(Path.Combine(dir, sessionId + ".skip"),
                     content + "\n", new UTF8Encoding(false));
             }
             catch
@@ -51,7 +51,7 @@ internal static class SkipMarkers
     {
         foreach (string dir in MirrorLocator.SearchDirectories())
         {
-            try { File.Delete(System.IO.Path.Combine(dir, sessionId + ".skip")); } catch { }
+            try { File.Delete(Path.Combine(dir, sessionId + ".skip")); } catch { }
         }
     }
 

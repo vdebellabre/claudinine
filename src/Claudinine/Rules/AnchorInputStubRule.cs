@@ -40,7 +40,7 @@ internal sealed class AnchorInputStubRule : ICompactionRule
         {
             if (records[i].Removed || records[i].Type != "assistant")
                 continue;
-            foreach (JsonObject b in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(records[i]))
+            foreach (var b in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(records[i]))
                 .OfType<JsonObject>()
                 .Where(x => x["type"].GetString() == "tool_use"))
             {
@@ -49,20 +49,26 @@ internal sealed class AnchorInputStubRule : ICompactionRule
             }
         }
 
-        foreach (TranscriptRecord rec in records)
+        foreach (var rec in records)
         {
             if (rec.Removed || rec.Type != "user")
                 continue;
-            foreach (JsonObject block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec))
+            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec))
                 .OfType<JsonObject>()
                 .Where(b => b["type"].GetString() == "tool_result"))
             {
-                if (block["content"] is not JsonValue v || !v.TryGetValue<string>(out string? content)
+                if (block["content"] is not JsonValue v || !v.TryGetValue(out string? content)
                     || !content.StartsWith(CarrierPrefix, StringComparison.Ordinal))
+                {
                     continue; // not a collapse carrier
+                }
+
                 if (block["tool_use_id"].GetString() is not string useId
                     || !useIndexById.TryGetValue(useId, out int useIdx))
+                {
                     continue;
+                }
+
                 StubAnchorInput(records[useIdx], useId);
             }
         }
@@ -70,8 +76,8 @@ internal sealed class AnchorInputStubRule : ICompactionRule
 
     private void StubAnchorInput(TranscriptRecord useRec, string useId)
     {
-        JsonObject node = RuleHelpers.CurrentNode(useRec);
-        JsonObject? use = RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
+        var node = RuleHelpers.CurrentNode(useRec);
+        var use = RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
             .FirstOrDefault(b => b["type"].GetString() == "tool_use"
                 && b["id"].GetString() == useId);
         if (use?["input"] is not JsonObject input)
@@ -87,8 +93,8 @@ internal sealed class AnchorInputStubRule : ICompactionRule
             return;
 
         string preview = RuleHelpers.PrimaryArg(use);
-        JsonObject clone = (JsonObject)node.DeepClone();
-        foreach (JsonObject cb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
+        var clone = (JsonObject)node.DeepClone();
+        foreach (var cb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
             .Where(b => b["type"].GetString() == "tool_use"
                 && b["id"].GetString() == useId))
         {

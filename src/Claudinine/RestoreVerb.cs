@@ -34,17 +34,17 @@ internal static class RestoreVerb
             return 1;
         }
 
-        List<string> mirrors = MirrorLocator.FindSessionMirrors(args[0]);
+        var mirrors = MirrorLocator.FindSessionMirrors(args[0]);
         if (mirrors.Count == 0)
         {
-            IReadOnlyList<string> searched = MirrorLocator.SearchDirectories();
+            var searched = MirrorLocator.SearchDirectories();
             Console.Error.WriteLine(
                 $"no mirror found for session '{args[0]}' (searched: " +
                 (searched.Count == 0 ? "no mirror directory exists" : string.Join("; ", searched)) + ")");
             return 1;
         }
 
-        string sid = System.IO.Path.GetFileNameWithoutExtension(mirrors[0]);
+        string sid = Path.GetFileNameWithoutExtension(mirrors[0]);
         string? transcriptPath = MirrorTarget(mirrors[0]);
         if (transcriptPath is null || !File.Exists(transcriptPath))
         {
@@ -53,7 +53,7 @@ internal static class RestoreVerb
             return 1;
         }
 
-        TranscriptFile? transcript = TranscriptFile.TryLoad(transcriptPath);
+        var transcript = TranscriptFile.TryLoad(transcriptPath);
         if (transcript is null)
         {
             Console.Error.WriteLine($"cannot load transcript: {transcriptPath}");
@@ -73,7 +73,7 @@ internal static class RestoreVerb
             return 1;
         }
 
-        (List<Line> restored, bool forkMerged) = ReadMirrors(mirrors);
+        (var restored, bool forkMerged) = ReadMirrors(mirrors);
         if (restored.Count == 0)
         {
             Console.Error.WriteLine("mirror holds no records; nothing changed");
@@ -142,7 +142,7 @@ internal static class RestoreVerb
         foreach (string mirror in mirrors)
         {
             var fileCounts = new Dictionary<string, int>();
-            foreach ((string line, JsonObject? rec) in Jsonl.ReadRecords(mirror, skipFirst: true))
+            foreach ((string line, var rec) in Jsonl.ReadRecords(mirror, skipFirst: true))
             {
                 if (rec?["claudinine"]?["mergedFromFork"] is not null)
                 {
@@ -194,7 +194,7 @@ internal static class RestoreVerb
         bool Blocked(Line l) =>
             l.ParentUuid is string p && position.ContainsKey(p) && !emitted.Contains(p);
         var ready = new Queue<Line>();
-        foreach (Line line in lines)
+        foreach (var line in lines)
         {
             if (Blocked(line))
             {
@@ -206,14 +206,14 @@ internal static class RestoreVerb
             ready.Enqueue(line);
             while (ready.Count > 0)
             {
-                Line e = ready.Dequeue();
+                var e = ready.Dequeue();
                 result.Add(e);
                 if (e.Uuid is not string u)
                     continue;
                 emitted.Add(u);
                 if (deferred.Remove(u, out var unblocked))
                 {
-                    foreach (Line k in unblocked)
+                    foreach (var k in unblocked)
                         ready.Enqueue(k);
                 }
             }
@@ -230,7 +230,7 @@ internal static class RestoreVerb
     {
         var restoredUuids = new HashSet<string>(
             restored.Where(l => l.Uuid is not null).Select(l => l.Uuid!));
-        foreach (TranscriptRecord rec in transcript.Records)
+        foreach (var rec in transcript.Records)
         {
             if (rec.Uuid is string uuid && !restoredUuids.Contains(uuid))
                 return $"mirror does not cover live record {Rules.RuleHelpers.RefPrefix(uuid)}";
@@ -240,8 +240,8 @@ internal static class RestoreVerb
 
         // The app chains future appends off the in-memory tail: the restored
         // file must end on the same record the live file ends on.
-        TranscriptRecord liveTail = transcript.Records[^1];
-        Line restoredTail = restored[^1];
+        var liveTail = transcript.Records[^1];
+        var restoredTail = restored[^1];
         if (liveTail.Uuid is string tailUuid)
         {
             if (restoredTail.Uuid != tailUuid)

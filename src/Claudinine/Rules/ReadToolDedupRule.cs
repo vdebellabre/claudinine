@@ -26,8 +26,10 @@ internal sealed class ReadToolDedupRule : ReadSupersessionRule
         if (toolUseBlock["input"] is not JsonObject input)
             return none;
         if (input["file_path"] is not JsonValue pathValue
-            || !pathValue.TryGetValue<string>(out string? path) || path.Length == 0)
+            || !pathValue.TryGetValue(out string? path) || path.Length == 0)
+        {
             return none;
+        }
         // Page-ranged PDF reads etc. aren't line-addressed; refuse anything with
         // input fields we don't fully understand beyond the three known ones.
         foreach (var (key, _) in input)
@@ -39,7 +41,7 @@ internal sealed class ReadToolDedupRule : ReadSupersessionRule
         int start = 1;
         if (input["offset"] is JsonValue ov)
         {
-            if (!ov.TryGetValue<int>(out int offset) || offset < 0)
+            if (!ov.TryGetValue(out int offset) || offset < 0)
                 return none;
             // The app treats offset as the 1-based start line; 0 behaves as 1.
             start = Math.Max(offset, 1);
@@ -48,7 +50,7 @@ internal sealed class ReadToolDedupRule : ReadSupersessionRule
         int limit = DefaultReadLimit;
         if (input["limit"] is JsonValue lv)
         {
-            if (!lv.TryGetValue<int>(out int explicitLimit) || explicitLimit <= 0)
+            if (!lv.TryGetValue(out int explicitLimit) || explicitLimit <= 0)
                 return none;
             limit = explicitLimit;
         }

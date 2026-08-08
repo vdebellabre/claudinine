@@ -29,18 +29,18 @@ internal sealed class ImageStripRule : ICompactionRule
 
         for (int pos = 0; pos < records.Count; pos++)
         {
-            TranscriptRecord rec = records[pos];
+            var rec = records[pos];
             if (rec.IsProtected())
                 continue;
             if (!age.IsMidAged(pos))
                 continue; // recently shared — keep
 
-            JsonObject node = RuleHelpers.CurrentNode(rec);
+            var node = RuleHelpers.CurrentNode(rec);
             string? sid = node["sessionId"].GetString();
             string? refPrefix = rec.Uuid is string u ? RuleHelpers.RefPrefix(u) : null;
             JsonObject? clone = null;
             int bi = -1;
-            foreach (JsonNode? block in RuleHelpers.ContentBlocks(node))
+            foreach (var block in RuleHelpers.ContentBlocks(node))
             {
                 bi++;
                 if (block is not JsonObject b)
@@ -66,7 +66,10 @@ internal sealed class ImageStripRule : ICompactionRule
                         {
                             if (inner[ti] is not JsonObject ib
                                 || ib["type"].GetString() != "image")
+                            {
                                 continue;
+                            }
+
                             var cloneResult = RuleHelpers.CloneBlockAt(ref clone, node, bi);
                             var cloneInner = (JsonObject)((JsonArray)cloneResult["content"]!)[ti]!;
                             WriteStub(cloneInner, Describe(ib), sid, refPrefix);
@@ -80,12 +83,10 @@ internal sealed class ImageStripRule : ICompactionRule
         }
     }
 
-    private static void Stub(ref JsonObject? clone, JsonObject node, int blockIndex,
-        JsonObject original, string? sid, string? refPrefix)
-    {
-        WriteStub(RuleHelpers.CloneBlockAt(ref clone, node, blockIndex),
-            Describe(original), sid, refPrefix);
-    }
+    private static void Stub(
+        ref JsonObject? clone, JsonObject node, int blockIndex,
+        JsonObject original, string? sid, string? refPrefix) =>
+        WriteStub(RuleHelpers.CloneBlockAt(ref clone, node, blockIndex), Describe(original), sid, refPrefix);
 
     private static void WriteStub(JsonObject cloneBlock, string label, string? sid, string? refPrefix)
     {

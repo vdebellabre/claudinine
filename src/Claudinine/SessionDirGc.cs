@@ -70,8 +70,8 @@ internal static class SessionDirGc
     /// </summary>
     private static DateTime NewestTimestampUtc(string dir)
     {
-        DateTime newest = Directory.GetCreationTimeUtc(dir);
-        DateTime w = Directory.GetLastWriteTimeUtc(dir);
+        var newest = Directory.GetCreationTimeUtc(dir);
+        var w = Directory.GetLastWriteTimeUtc(dir);
         if (w > newest) newest = w;
         foreach (string entry in Directory.EnumerateFileSystemEntries(dir, "*", SearchOption.AllDirectories))
         {
@@ -101,7 +101,7 @@ internal static class SessionDirGc
                 if (c != '-')
                     return false;
             }
-            else if (c is not ((>= '0' and <= '9') or (>= 'a' and <= 'f')))
+            else if (c is not (>= '0' and <= '9' or >= 'a' and <= 'f'))
             {
                 return false;
             }

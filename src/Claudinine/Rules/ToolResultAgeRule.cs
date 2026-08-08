@@ -35,22 +35,22 @@ internal sealed class ToolResultAgeRule : ICompactionRule
 
         for (int pos = 0; pos < records.Count; pos++)
         {
-            TranscriptRecord rec = records[pos];
+            var rec = records[pos];
             if (rec.IsProtected())
                 continue;
 
             if (!age.IsMidAged(pos))
                 continue; // recent — keep verbatim
 
-            JsonObject node = RuleHelpers.CurrentNode(rec);
+            var node = RuleHelpers.CurrentNode(rec);
             JsonObject? clone = null;
             int bi = -1;
-            foreach (JsonNode? block in RuleHelpers.ContentBlocks(node))
+            foreach (var block in RuleHelpers.ContentBlocks(node))
             {
                 bi++;
                 if (block is not JsonObject b || b["type"].GetString() != "tool_result")
                     continue;
-                if (b["content"] is not JsonValue cv || !cv.TryGetValue<string>(out string? content))
+                if (b["content"] is not JsonValue cv || !cv.TryGetValue(out string? content))
                     continue;
                 if (content.Length < MinContentChars || RuleHelpers.IsClaudinineStub(content))
                     continue;
@@ -153,12 +153,15 @@ internal sealed class ToolResultAgeRule : ICompactionRule
             {
                 if (records[p].IsRealUserMessage())
                     break; // turn boundary: the use cannot be earlier
-                foreach (JsonNode? n in RuleHelpers.ContentBlocks(records[p].Node))
+                foreach (var n in RuleHelpers.ContentBlocks(records[p].Node))
                 {
                     if (n is not JsonObject u
                         || u["type"].GetString() != "tool_use"
                         || u["id"].GetString() != toolUseId)
+                    {
                         continue;
+                    }
+
                     toolName = u["name"].GetString() ?? "";
                     if (u["input"] is JsonObject input)
                     {

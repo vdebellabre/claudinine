@@ -19,7 +19,7 @@ internal static class Compactor
     /// </summary>
     public static void MirrorOnly(string transcriptPath)
     {
-        TranscriptFile? transcript = TranscriptFile.TryLoad(transcriptPath);
+        var transcript = TranscriptFile.TryLoad(transcriptPath);
         if (transcript is null)
             return;
         bool mirrored = MirrorFile.TryAppendMissing(transcript);
@@ -28,7 +28,7 @@ internal static class Compactor
 
     public static void Run(string transcriptPath)
     {
-        TranscriptFile? transcript = TranscriptFile.TryLoad(transcriptPath);
+        var transcript = TranscriptFile.TryLoad(transcriptPath);
         if (transcript is null)
             return; // unreadable or unfamiliar shape: do nothing silently
 
@@ -37,7 +37,7 @@ internal static class Compactor
         if (!MirrorFile.TryAppendMissing(transcript))
             return;
 
-        foreach (ICompactionRule rule in RuleCatalog.All)
+        foreach (var rule in RuleCatalog.All)
         {
             try
             {

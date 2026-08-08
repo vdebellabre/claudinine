@@ -34,7 +34,7 @@ internal sealed class TaskReminderKeepLastRule : ICompactionRule
         }
         for (int i = 0; i < last; i++)
         {
-            TranscriptRecord rec = records[i];
+            var rec = records[i];
             if (IsMainChainReminder(rec) && !rec.IsProtected())
                 rec.Removed = true;
         }
@@ -43,7 +43,7 @@ internal sealed class TaskReminderKeepLastRule : ICompactionRule
     private static bool IsMainChainReminder(TranscriptRecord rec) =>
         rec.Type == "attachment"
         && rec.Node["attachment"] is JsonObject att
-        && att["type"] is JsonValue v && v.TryGetValue<string>(out string? t)
+        && att["type"] is JsonValue v && v.TryGetValue(out string? t)
         && t == "task_reminder"
-        && !(rec.Node["isSidechain"] is JsonValue sc && sc.TryGetValue<bool>(out bool b) && b);
+        && !(rec.Node["isSidechain"] is JsonValue sc && sc.TryGetValue(out bool b) && b);
 }

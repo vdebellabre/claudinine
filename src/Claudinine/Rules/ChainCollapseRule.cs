@@ -85,12 +85,12 @@ internal sealed class ChainCollapseRule : ICompactionRule
 
         for (int i = start; i < end; i++)
         {
-            TranscriptRecord rec = records[i];
+            var rec = records[i];
             if (rec.IsProtected())
                 return;
-            if (rec.Node["isSidechain"] is JsonValue sv && sv.TryGetValue<bool>(out bool sc) && sc)
+            if (rec.Node["isSidechain"] is JsonValue sv && sv.TryGetValue(out bool sc) && sc)
                 return;
-            JsonObject node = RuleHelpers.CurrentNode(rec);
+            var node = RuleHelpers.CurrentNode(rec);
             string? type = rec.Type;
 
             if (type == "assistant")
@@ -103,7 +103,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 {
                     if (draining)
                         return; // new use while the batch is partially answered
-                    JsonObject u = uses[0];
+                    var u = uses[0];
                     if (u["id"].GetString() is not string id || id.Length == 0)
                         return;
                     pending.Add((i, id, u["name"].GetString() ?? "?", RuleHelpers.PrimaryArg(u)));
@@ -117,7 +117,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                     continue; // an image share or similar — leave it alone, keep scanning
                 if (results.Count > 1 || blocks.Count != results.Count)
                     return; // legacy multi-result or mixed carrier: don't touch
-                JsonObject r = results[0];
+                var r = results[0];
                 int match = pending.FindIndex(p => p.Id == r["tool_use_id"].GetString());
                 if (match < 0)
                     return; // orphan or duplicate result
@@ -126,7 +126,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 var p = pending[match];
                 pending.RemoveAt(match);
                 draining = pending.Count > 0;
-                bool isError = r["is_error"] is JsonValue ev && ev.TryGetValue<bool>(out bool e) && e;
+                bool isError = r["is_error"] is JsonValue ev && ev.TryGetValue(out bool e) && e;
                 calls.Add(new Call(p.Index, i, p.Id, p.Tool, p.Arg,
                     RuleHelpers.ResultText(r), isError, RuleHelpers.MediaKinds(r)));
             }
@@ -140,11 +140,13 @@ internal sealed class ChainCollapseRule : ICompactionRule
         // results arrived out of order, the first RESULT's pair would leave the
         // batch's first use outside the span (its result removed, the use kept —
         // API-invalid); the first USE's pair also keeps the survivor chain linear.
-        Call anchor = calls.MinBy(c => c.UseIndex)!;
-        TranscriptRecord anchorResult = records[anchor.ResultIndex];
+        var anchor = calls.MinBy(c => c.UseIndex)!;
+        var anchorResult = records[anchor.ResultIndex];
         if ((RuleHelpers.CurrentNode(anchorResult)["claudinine"] as JsonObject)?["rule"]
                 .GetString() == Name)
+        {
             return; // already collapsed (idempotence)
+        }
 
         int spanStart = anchor.UseIndex;
         int spanEnd = calls.Max(c => c.ResultIndex);
@@ -168,8 +170,8 @@ internal sealed class ChainCollapseRule : ICompactionRule
 
         for (int i = spanStart; i <= spanEnd; i++)
         {
-            TranscriptRecord rec = records[i];
-            JsonObject node = RuleHelpers.CurrentNode(rec);
+            var rec = records[i];
+            var node = RuleHelpers.CurrentNode(rec);
 
             if (rec.Type == "assistant" && (useIndexes.Contains(i) || IsProseOnly(node)))
             {
@@ -182,7 +184,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 // kept whole, so its text stays in place, not duplicated here.
                 if (!isAnchorUse)
                 {
-                    foreach (JsonObject tb in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
+                    foreach (var tb in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
                         .Where(x => x["type"].GetString() == "text"))
                     {
                         string t = tb["text"].GetString()?.Trim() ?? "";
@@ -193,7 +195,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
             }
             else if (resultIndexes.Contains(i))
             {
-                Call c = callByResult[i];
+                var c = callByResult[i];
                 string refId = RuleHelpers.RefPrefix(records[c.ResultIndex].Uuid!);
                 string preview = PreviewRenderer.RenderPreview(c.Tool, c.Arg, c.ResultText, c.IsError);
                 // Media blocks are invisible to text extraction — without this
@@ -208,10 +210,10 @@ internal sealed class ChainCollapseRule : ICompactionRule
         }
 
         // Commit: removals + anchor carrier replacement.
-        foreach (TranscriptRecord rec in toRemove)
+        foreach (var rec in toRemove)
             rec.Removed = true;
-        JsonObject clone = (JsonObject)RuleHelpers.CurrentNode(anchorResult).DeepClone();
-        foreach (JsonObject rb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
+        var clone = (JsonObject)RuleHelpers.CurrentNode(anchorResult).DeepClone();
+        foreach (var rb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
             .Where(x => x["tool_use_id"].GetString() == anchor.ToolUseId))
         {
             rb["content"] = digest.ToString().TrimEnd('\n');

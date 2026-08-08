@@ -1,27 +1,35 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <AssemblyName>claudinine</AssemblyName>
-    <!-- Keep in sync with .claude-plugin/plugin.json -->
-    <Version>0.1.6</Version>
-    <RootNamespace>Claudinine</RootNamespace>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-  </PropertyGroup>
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<AssemblyName>claudinine</AssemblyName>
+		<!-- Keep in sync with .claude-plugin/plugin.json -->
+		<Version>0.1.6</Version>
+		<RootNamespace>Claudinine</RootNamespace>
+		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+		<NoWarn>$(NOWARN);IDE0058</NoWarn>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <InternalsVisibleTo Include="Claudinine.Tests" />
-  </ItemGroup>
+	<ItemGroup>
+		<InternalsVisibleTo Include="Claudinine.Tests" />
+	</ItemGroup>
 
-  <PropertyGroup>
-    <PublishAot>true</PublishAot>
-    <InvariantGlobalization>true</InvariantGlobalization>
-    <StripSymbols>true</StripSymbols>
-    <OptimizationPreference>Size</OptimizationPreference>
-    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
-  </PropertyGroup>
+	<ItemGroup>
+	  <PackageReference Include="Roslynator.Analyzers" Version="4.16.0">
+	    <PrivateAssets>all</PrivateAssets>
+	    <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+	  </PackageReference>
+	</ItemGroup>
+
+	<PropertyGroup>
+		<PublishAot>true</PublishAot>
+		<InvariantGlobalization>true</InvariantGlobalization>
+		<StripSymbols>true</StripSymbols>
+		<OptimizationPreference>Size</OptimizationPreference>
+		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+	</PropertyGroup>
 
 </Project>
