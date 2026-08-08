@@ -5,26 +5,45 @@ session transcripts at the boundaries where Claude Code re-reads them (session
 start/resume/clear, pre-compact), so the next load starts lean. Install and
 forget: no dashboards, no reports, no chatter.
 
+Measured on a 95-transcript corpus of real sessions: **152.6 MB → 35.8 MB
+(77%)**. Savings scale *with* session size — small sessions are prose-dominated
+and compact ~43%, sessions over 3 MB compact ~79% — because the win comes from
+tool output, not from text. Byte percentages understate the API-token saving by
+roughly 3.5×, since JSON envelope overhead dilutes the bytes but not the tokens.
+
+## What actually earns the savings
+
+Most of the yield is **chain-collapse**: a turn that ran many tool calls becomes
+one digest record listing each call with a short preview, and the full outputs
+move to a sidecar mirror. The rest comes from the aging and trim family
+(age-tiered tool-result stubs, mega-block trim, image strip) and from
+record-level housekeeping (superseded file edits, stale reminder blocks, queue
+history).
+
+Exact-duplicate deduplication is also implemented (bash reads, `Read` results,
+system reminders, documents), but be aware it contributes **~0% on real session
+profiles** — identical byte-for-byte re-reads are rare in practice. It is kept
+because it is cheap and lossless, not because it is where the win is.
+
 ## How it works
 
 - **UserPromptSubmit** — after each of your prompts, the turn that just
-  finished is mirrored to a sidecar file, then compacted in the live
-  transcript (duplicate bash reads deduplicated, later: archive stubs and
-  chain-collapse).
+  finished is mirrored to a sidecar file, then compacted in the live transcript.
 - **SessionEnd** — the final turn gets the same treatment, leaving the file
   clean at rest.
 - **SessionStart / PreCompact** — full-scan repair for crash leftovers, plus
-  mirror garbage collection.
+  garbage collection of mirrors and orphaned session directories.
 
 Compaction never touches the live in-memory context of a running session —
 the payout arrives at the next transcript load ("your next session starts
-lean"). Every rewrite is validated (all lines parse, uuid chain intact, tail
-record preserved) before an atomic swap; anything unexpected means the file is
-left untouched.
+lean"). Every rewrite is validated before an atomic swap, and any failed check
+leaves the original untouched. See [docs/session-file-changes.md](docs/session-file-changes.md)
+for exactly what is modified, why, and what the safety guarantees are.
 
 Note: the transcript also backs the session scrollback, so compacted tool
 outputs appear as short stubs when you scroll back after a resume. The full
-originals are always preserved in the per-session mirror.
+originals are preserved in the per-session mirror, retrievable with
+`claudinine get <session-id> --ref <ref> [--grep P | --info | --full]`.
 
 ## Engineering
 
