@@ -151,6 +151,24 @@ public sealed class CompactorTests : IDisposable
     }
 
     [Fact]
+    public void RewriteRefusesWhenFileGrewBetweenLoadAndSwap()
+    {
+        // The app appends live during a turn; a record landing after our load
+        // would be silently discarded by the swap — and mirror-first means it
+        // was never mirrored either. The pre-swap length re-check must refuse.
+        string path = EightIdenticalReads(out _).WriteTo(_dir);
+        var transcript = Claudinine.Transcript.TranscriptFile.TryLoad(path)!;
+        transcript.Records[1].Replacement =
+            (JsonObject)transcript.Records[1].Node.DeepClone();
+
+        File.AppendAllText(path, """{"type":"user","uuid":"late-append"}""" + "\n");
+        string withLateAppend = File.ReadAllText(path);
+
+        Assert.False(transcript.TryRewrite());
+        Assert.Equal(withLateAppend, File.ReadAllText(path)); // late record survives
+    }
+
+    [Fact]
     public void RewriteRefusesResultWhoseToolUseWasRemoved()
     {
         // Pair atomicity: a surviving result carrier whose tool_use record was

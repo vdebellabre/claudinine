@@ -13,6 +13,9 @@ internal sealed class TranscriptFile
     public required List<TranscriptRecord> Records { get; init; }
     public required bool EndsWithNewline { get; init; }
 
+    /// <summary>On-disk byte length at load time — the swap re-checks it (see TryRewrite).</summary>
+    public required long LoadedLength { get; init; }
+
     public static TranscriptFile? TryLoad(string path)
     {
         // Strict decode: the default UTF8 decoder silently swaps invalid bytes for
@@ -20,11 +23,13 @@ internal sealed class TranscriptFile
         // could corrupt instead of abort. Refuse a BOM the same way: the app never
         // writes one, and ReadAllText would strip it invisibly.
         string text;
+        long loadedLength;
         try
         {
             byte[] bytes = File.ReadAllBytes(path);
             if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
                 return null;
+            loadedLength = bytes.Length;
             text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
                 .GetString(bytes);
         }
@@ -52,7 +57,13 @@ internal sealed class TranscriptFile
         if (records.Count == 0)
             return null;
 
-        return new TranscriptFile { Path = path, Records = records, EndsWithNewline = endsWithNewline };
+        return new TranscriptFile
+        {
+            Path = path,
+            Records = records,
+            EndsWithNewline = endsWithNewline,
+            LoadedLength = loadedLength,
+        };
     }
 
     public bool HasChanges => Records.Any(r => r.Replacement is not null || r.Removed);
@@ -192,6 +203,22 @@ internal sealed class TranscriptFile
             return Refuse("tail-uuid");
         if (!tailRewritten && lines[count - 1] != Records[^1].RawLine)
             return Refuse("tail-bytes");
+
+        // The app appends live during a turn; a record landing between load and
+        // swap would be silently discarded by the rename — and mirror-first means
+        // a lost record was never mirrored either. Appends only ever grow the
+        // file, so a length re-check right before the swap shrinks the race
+        // window to ~zero without locking. Hooks fire at quiet points; a length
+        // change here means this pass raced something — leave the file alone.
+        try
+        {
+            if (new FileInfo(Path).Length != LoadedLength)
+                return Refuse("file-changed");
+        }
+        catch
+        {
+            return Refuse("file-changed");
+        }
 
         try
         {
