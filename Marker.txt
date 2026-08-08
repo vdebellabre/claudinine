@@ -1,3 +1,0 @@
-This is a marker for a canary test run.
-Checking how attachments are reloaded in the context.
-This is a manually added line.
