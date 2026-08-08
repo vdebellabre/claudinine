@@ -29,6 +29,41 @@ internal static class MirrorFile
             System.IO.Path.GetFileNameWithoutExtension(transcriptPath) + ".jsonl");
 
     /// <summary>
+    /// Directories to probe when resolving a mirror for READING. Writes always use
+    /// MirrorsDirectory() — hooks have CLAUDE_PLUGIN_DATA set. But `get` typically
+    /// runs from the session's Bash tool, which does NOT inherit that variable
+    /// (verified live 2026-08-08), and the app hands a different data dir to each
+    /// install context (claudinine-inline for desktop, claudinine-&lt;marketplace&gt;
+    /// for CLI), so a read must look everywhere mirrors are known to land.
+    /// </summary>
+    public static IReadOnlyList<string> SearchDirectories() =>
+        SearchDirectories(
+            Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    internal static IReadOnlyList<string> SearchDirectories(string? pluginData, string home)
+    {
+        var dirs = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Add(string dir)
+        {
+            if (Directory.Exists(dir) && seen.Add(System.IO.Path.GetFullPath(dir)))
+                dirs.Add(dir);
+        }
+
+        if (!string.IsNullOrEmpty(pluginData))
+            Add(System.IO.Path.Combine(pluginData, "mirrors"));
+        string dataRoot = System.IO.Path.Combine(home, ".claude", "plugins", "data");
+        if (Directory.Exists(dataRoot))
+        {
+            foreach (string plugin in Directory.EnumerateDirectories(dataRoot, "claudinine-*"))
+                Add(System.IO.Path.Combine(plugin, "mirrors"));
+        }
+        Add(System.IO.Path.Combine(home, ".claudinine", "mirrors"));
+        return dirs;
+    }
+
+    /// <summary>
     /// Append every transcript record not yet mirrored. Must succeed BEFORE any
     /// compaction (mirror-first invariant): nothing is ever stubbed that is not
     /// already mirrored. Records that already carry a claudinine marker are skipped —

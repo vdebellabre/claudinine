@@ -40,35 +40,46 @@ internal static class GetVerb
             }
         }
 
-        string? mirrorPath = FindMirror(session);
-        if (mirrorPath is null)
+        List<string> mirrorPaths = FindMirrors(session);
+        if (mirrorPaths.Count == 0)
         {
-            Console.Error.WriteLine($"no mirror found for session '{session}' under {MirrorFile.MirrorsDirectory()}");
+            IReadOnlyList<string> searched = MirrorFile.SearchDirectories();
+            Console.Error.WriteLine(
+                $"no mirror found for session '{session}' (searched: " +
+                (searched.Count == 0 ? "no mirror directory exists" : string.Join("; ", searched)) + ")");
             return 1;
         }
 
         var matches = new List<(string Uuid, string Tool, string Arg, string Text)>();
-        bool first = true;
-        foreach (string line in File.ReadLines(mirrorPath, Encoding.UTF8))
+        // A cross-context resume can mirror the same record into two dirs — the
+        // copies are identical originals, so the first file to carry a uuid wins.
+        var seenRecords = new HashSet<string>();
+        foreach (string mirrorPath in mirrorPaths)
         {
-            if (line.Length == 0) continue;
-            if (first) { first = false; continue; } // header
-            JsonObject? rec;
-            try { rec = JsonNode.Parse(line) as JsonObject; } catch { continue; }
-            if (rec?["uuid"]?.GetValue<string>() is not string uuid)
-                continue;
-            if (refPrefix is not null && !uuid.StartsWith(refPrefix, StringComparison.OrdinalIgnoreCase))
-                continue;
-            foreach (JsonObject b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
-                .Where(x => x["type"]?.GetValue<string>() == "tool_result"))
+            bool first = true;
+            foreach (string line in File.ReadLines(mirrorPath, Encoding.UTF8))
             {
-                string text = RuleHelpers.ResultText(b);
-                if (text.Length == 0)
+                if (line.Length == 0) continue;
+                if (first) { first = false; continue; } // header
+                JsonObject? rec;
+                try { rec = JsonNode.Parse(line) as JsonObject; } catch { continue; }
+                if (rec?["uuid"]?.GetValue<string>() is not string uuid)
                     continue;
-                if (refPrefix is null && grep is not null
-                    && !text.Contains(grep, StringComparison.OrdinalIgnoreCase))
+                if (!seenRecords.Add(uuid))
                     continue;
-                matches.Add((uuid, "", "", text));
+                if (refPrefix is not null && !uuid.StartsWith(refPrefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                foreach (JsonObject b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
+                    .Where(x => x["type"]?.GetValue<string>() == "tool_result"))
+                {
+                    string text = RuleHelpers.ResultText(b);
+                    if (text.Length == 0)
+                        continue;
+                    if (refPrefix is null && grep is not null
+                        && !text.Contains(grep, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    matches.Add((uuid, "", "", text));
+                }
             }
         }
 
@@ -106,16 +117,30 @@ internal static class GetVerb
         return 0;
     }
 
-    /// <summary>Match a mirror by session-id prefix (refs use 8-char prefixes; so can sessions).</summary>
-    private static string? FindMirror(string session)
+    /// <summary>
+    /// Match mirrors by session-id prefix (refs use 8-char prefixes; so can
+    /// sessions) across every known mirror directory. The same session may have a
+    /// mirror in several dirs (cross-context resume) — all of them are returned; a
+    /// prefix that resolves to more than one distinct session id matches nothing.
+    /// </summary>
+    private static List<string> FindMirrors(string session)
     {
-        string dir = MirrorFile.MirrorsDirectory();
-        if (!Directory.Exists(dir))
-            return null;
-        string exact = System.IO.Path.Combine(dir, session + ".jsonl");
-        if (File.Exists(exact))
+        var exact = new List<string>();
+        var byPrefix = new List<string>();
+        foreach (string dir in MirrorFile.SearchDirectories())
+        {
+            string candidate = System.IO.Path.Combine(dir, session + ".jsonl");
+            if (File.Exists(candidate))
+                exact.Add(candidate);
+            else
+                byPrefix.AddRange(Directory.EnumerateFiles(dir, session + "*.jsonl"));
+        }
+        if (exact.Count > 0)
             return exact;
-        var candidates = Directory.EnumerateFiles(dir, session + "*.jsonl").ToList();
-        return candidates.Count == 1 ? candidates[0] : null;
+        int distinct = byPrefix
+            .Select(p => System.IO.Path.GetFileNameWithoutExtension(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        return distinct == 1 ? byPrefix : [];
     }
 }
