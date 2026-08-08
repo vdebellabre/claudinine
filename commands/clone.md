@@ -20,9 +20,11 @@ Run the clone for the current session:
 
 Then report to the user, based on the output above:
 
-- If it succeeded, tell them the clone is ready and that they resume it by opening
-  the session picker (`/resume`) and choosing the entry marked **(compacted)** —
-  it carries this session's title plus that suffix. Give them the new session id.
+- If it succeeded, tell them the clone is ready and give them the new session id.
+  To resume it, they pick the entry marked **(compacted)** — it carries this
+  session's title plus that suffix — from wherever their client lists sessions:
+  the session/history list in the desktop app, or `/resume` in the terminal CLI.
+  Do not tell a desktop-app user to run `/resume`; that command is CLI-only.
 - Mention that **this session is untouched**: nothing was archived or deleted, and
   a clone they never resume costs only disk. Cleaning up the old session is their
   separate, explicit call.
