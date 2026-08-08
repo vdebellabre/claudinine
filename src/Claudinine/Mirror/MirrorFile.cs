@@ -143,6 +143,149 @@ internal static class MirrorFile
     }
 
     /// <summary>
+    /// Merge a fork parent's mirror into this transcript's own mirror. When the
+    /// desktop forks a conversation to a new session id, the pre-fork originals
+    /// exist only in the parent's mirror — which CollectGarbage deletes the moment
+    /// the parent transcript is aged out, killing retrieval for the LIVE fork.
+    /// Only uuid-bearing records are merged (retrieval addresses by uuid; uuid-less
+    /// metadata has no retrieval value), deduplicated against the target, with
+    /// sessionId rebound so the mirror reads as this session's own history.
+    /// Returns true only when a parent mirror was found and the merge is durable —
+    /// the caller's license to retarget digest refs at this session.
+    /// </summary>
+    public static bool TryAdoptForkParent(string parentSessionId, TranscriptFile transcript)
+    {
+        try
+        {
+            string mirrorPath = PathFor(transcript.Path);
+            List<string> sources = ParentMirrorFiles(parentSessionId, mirrorPath);
+            if (sources.Count == 0)
+                return false;
+
+            Directory.CreateDirectory(MirrorsDirectory());
+            var seen = new HashSet<string>();
+            bool hasHeader = false;
+            if (File.Exists(mirrorPath))
+            {
+                foreach (string line in File.ReadLines(mirrorPath, Encoding.UTF8))
+                {
+                    if (line.Length == 0) continue;
+                    if (!hasHeader) { hasHeader = true; continue; }
+                    if (UuidOf(line) is string uuid)
+                        seen.Add(uuid);
+                }
+            }
+
+            string targetSid = System.IO.Path.GetFileNameWithoutExtension(transcript.Path);
+            var toAppend = new List<string>();
+            if (!hasHeader)
+            {
+                var header = new JsonObject
+                {
+                    ["claudinine"] = new JsonObject
+                    {
+                        ["v"] = HeaderVersion,
+                        ["mirrorOf"] = System.IO.Path.GetFullPath(transcript.Path),
+                    },
+                };
+                toAppend.Add(header.ToJsonString(Json.Compact));
+            }
+            foreach (string source in sources)
+            {
+                foreach (string rawLine in File.ReadLines(source, Encoding.UTF8))
+                {
+                    string line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
+                    if (line.Length == 0) continue;
+                    JsonObject? rec;
+                    try { rec = JsonNode.Parse(line) as JsonObject; } catch { continue; }
+                    // The uuid requirement also skips the parent mirror's header.
+                    if (rec?["uuid"]?.GetValue<string>() is not string uuid)
+                        continue;
+                    if (!seen.Add(uuid))
+                        continue;
+                    if (rec["sessionId"] is not null)
+                        rec["sessionId"] = targetSid;
+                    toAppend.Add(rec.ToJsonString(Json.Compact));
+                }
+            }
+            if (toAppend.Count == 0)
+                return true; // already merged on an earlier pass
+
+            using var stream = new FileStream(mirrorPath, FileMode.Append, FileAccess.Write, FileShare.Read);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+            foreach (string line in toAppend)
+                writer.Write(line + "\n");
+            writer.Flush();
+            stream.Flush(flushToDisk: true); // refs are only retargeted once this is real
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? UuidOf(string line)
+    {
+        try
+        {
+            return (JsonNode.Parse(line) as JsonObject)?["uuid"]?.GetValue<string>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Every uuid held by a session's mirror(s), or null when no mirror exists.
+    /// This is the fork-vs-quote discriminator: a record genuinely copied by a
+    /// fork was mirrored by the parent under the SAME uuid, while a record that
+    /// merely quotes another session's retrieval command never appears in that
+    /// session's mirror.
+    /// </summary>
+    public static HashSet<string>? MirrorUuidsOf(string sessionId, TranscriptFile transcript)
+    {
+        try
+        {
+            List<string> sources = ParentMirrorFiles(sessionId, PathFor(transcript.Path));
+            if (sources.Count == 0)
+                return null;
+            var uuids = new HashSet<string>();
+            foreach (string source in sources)
+            {
+                foreach (string line in File.ReadLines(source, Encoding.UTF8))
+                {
+                    if (line.Length > 0 && UuidOf(line) is string uuid)
+                        uuids.Add(uuid);
+                }
+            }
+            return uuids;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A session's mirror files across all known dirs, never our own.</summary>
+    private static List<string> ParentMirrorFiles(string sessionId, string ownMirrorPath)
+    {
+        var sources = new List<string>();
+        foreach (string dir in SearchDirectories())
+        {
+            string candidate = System.IO.Path.Combine(dir, sessionId + ".jsonl");
+            if (File.Exists(candidate)
+                && !string.Equals(System.IO.Path.GetFullPath(candidate),
+                    System.IO.Path.GetFullPath(ownMirrorPath), StringComparison.OrdinalIgnoreCase))
+            {
+                sources.Add(candidate);
+            }
+        }
+        return sources;
+    }
+
+    /// <summary>
     /// Delete mirrors whose transcript no longer exists (the app ages transcripts
     /// out itself). Run at SessionStart; failures are ignored record by record.
     /// </summary>

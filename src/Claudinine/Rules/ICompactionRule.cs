@@ -24,6 +24,10 @@ internal static class RuleCatalog
     /// </summary>
     public static readonly ICompactionRule[] All =
     [
+        // First: after a desktop fork, merge the parent's mirror and retarget
+        // digest refs BEFORE any rule reads or rewrites those digests, so e.g.
+        // carrier-header-dedup parses the healed session id, not the stale one.
+        new ForkHealRule(),
         new BashReadDedupRule(),
         new ReadToolDedupRule(),
         new SystemReminderDedupRule(),
