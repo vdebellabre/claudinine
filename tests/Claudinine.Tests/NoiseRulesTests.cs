@@ -131,6 +131,84 @@ public sealed class NoiseRulesTests : IDisposable
         Assert.Equal(before, AllText(path));
     }
 
+    // Real shape from the corpus: Claude Code overflows large tool output to a
+    // sidecar under the session dir and leaves this stub. The absolute path is the
+    // only pointer to that file — nothing ever garbage-collects it — so compaction
+    // must never drop it.
+    private static string PersistedOutput(string path) =>
+        "<persisted-output>\nOutput too large (40.5KB). Full output saved to: " + path
+        + "\n\nPreview (first 2KB):\n"
+        + string.Join("\n", Enumerable.Range(1, 60).Select(i => $"preview line {i} " + new string('p', 30)));
+
+    // AllText returns raw JSONL, where a Windows path is backslash-escaped — assert
+    // on the decoded tool_result value instead of the wire bytes.
+    private static string ResultContent(string transcriptPath, string toolUseId) => Load(transcriptPath)
+        .Select(r => (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>()
+            .FirstOrDefault(x => x["tool_use_id"]?.GetValue<string>() == toolUseId))
+        .FirstOrDefault(x => x is not null)?["content"]?.GetValue<string>() ?? "";
+
+    [Fact]
+    public void OldPersistedOutputStubKeepsSidecarPath()
+    {
+        const string sidecar = @"C:\Users\u\.claude\projects\proj\sess\tool-results\byqro8ep6.txt";
+        var b = new TranscriptBuilder().UserPrompt("start");
+        b.BashRead("git diff", out string id, PersistedOutput(sidecar));
+        AgeBy(b, AgeIndex.OldAgeTurns + 5);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string content = ResultContent(path, id);
+        Assert.StartsWith("[claudinine", content);
+        Assert.Contains(sidecar, content);                  // pointer survives stubbing
+        Assert.DoesNotContain("preview line 42", content);  // preview itself still dropped
+    }
+
+    [Fact]
+    public void MidAgePersistedOutputLeftIntact()
+    {
+        // Trim keeps head/tail halves; a large enough preview could push the path
+        // line out of both, so the mid tier must skip persisted-output blocks.
+        const string sidecar = @"C:\Users\u\.claude\projects\proj\sess\tool-results\mid123.txt";
+        string big = PersistedOutput(sidecar) + "\n"
+            + string.Join("\n", Enumerable.Range(1, 400).Select(i => $"tail line {i} " + new string('t', 40)));
+        var b = new TranscriptBuilder().UserPrompt("start");
+        b.BashRead("git diff", out string id, big);
+        AgeBy(b, AgeIndex.MidAgeTurns + 2);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string content = ResultContent(path, id);
+        Assert.Contains(sidecar, content);
+        Assert.DoesNotContain("trimmed by claudinine", content);
+    }
+
+    [Fact]
+    public void CollapsedDigestPreviewKeepsSidecarPath()
+    {
+        // Sidecar refs live in multi-tool turns, so chain-collapse — not the age
+        // rule — is what usually rewrites them. Its preview must carry the path.
+        const string sidecar = @"C:\Users\u\.claude\projects\proj\sess\tool-results\bj0jrua4n.txt";
+        string preview = PreviewRenderer.RenderPreview("Bash", "git diff", PersistedOutput(sidecar));
+        Assert.Contains(sidecar, preview);
+        // A diff body full of "error:" must not outrank the path.
+        string withError = PersistedOutput(sidecar) + "\nerror: something failed\n";
+        Assert.Contains(sidecar, PreviewRenderer.RenderPreview("Bash", "git diff", withError));
+    }
+
+    [Fact]
+    public void PersistedOutputPathParsing()
+    {
+        Assert.Equal(@"C:\a b\c.txt",
+            RuleHelpers.PersistedOutputPath(PersistedOutput(@"C:\a b\c.txt")));
+        Assert.Null(RuleHelpers.PersistedOutputPath("ordinary tool output"));
+        // Guard against a malformed stub yielding an empty path.
+        Assert.Null(RuleHelpers.PersistedOutputPath("<persisted-output>\nno marker here"));
+    }
+
     [Fact]
     public void MidAgeJsonGetsMinified()
     {

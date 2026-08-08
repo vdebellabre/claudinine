@@ -62,8 +62,16 @@ internal sealed class ToolResultAgeRule : ICompactionRule
                 if (!age.IsOld(pos) && alreadyTrimmed)
                     continue;
 
+                // Persisted-output stubs point at a sidecar file that nothing ever
+                // collects; the path must survive any rewrite (see PersistedOutputPath).
+                // Stubbing carries it explicitly; trimming can't guarantee the path
+                // line lands inside a kept half, so leave those blocks alone.
+                string? persisted = RuleHelpers.PersistedOutputPath(content);
+                if (persisted is not null && !age.IsOld(pos))
+                    continue;
+
                 string newContent = age.IsOld(pos)
-                    ? BuildStub(b, content, records, pos)
+                    ? BuildStub(b, content, records, pos, persisted)
                     : TrimOversized(Minify(content));
                 if (newContent == content || newContent.Length >= content.Length)
                     continue;
@@ -137,9 +145,11 @@ internal sealed class ToolResultAgeRule : ICompactionRule
     /// <summary>
     /// Old tier: "[claudinine: Bash npm test — 220 lines, 14.3KB]". Looks back a few
     /// records for the matching tool_use to name the tool and its target.
+    /// When the result was a persisted-output stub, the sidecar path is appended so
+    /// the full output stays reachable ("full output: C:\...\tool-results\x.txt").
     /// </summary>
     private static string BuildStub(JsonObject block, string content,
-        List<TranscriptRecord> records, int pos)
+        List<TranscriptRecord> records, int pos, string? persistedPath = null)
     {
         string? toolUseId = block["tool_use_id"]?.GetValue<string>();
         string toolName = "", toolPath = "";
@@ -170,7 +180,9 @@ internal sealed class ToolResultAgeRule : ICompactionRule
         string parts = "[claudinine";
         if (toolName.Length > 0) parts += $": {toolName}";
         if (toolPath.Length > 0) parts += $" {toolPath}";
-        parts += $" — {lineCount} lines, {content.Length / 1024.0:F1}KB]";
+        parts += $" — {lineCount} lines, {content.Length / 1024.0:F1}KB";
+        if (persistedPath is not null) parts += $"; full output: {persistedPath}";
+        parts += "]";
         return parts;
     }
 

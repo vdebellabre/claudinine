@@ -53,6 +53,13 @@ internal static partial class PreviewRenderer
         arg ??= "";
         string prefix = isError ? "[ERROR] " : "";
 
+        // Claude Code overflowed this result to a sidecar file and kept only a
+        // preview. The path is the whole verdict — and the only pointer to a file
+        // nothing garbage-collects — so it must survive collapse, ahead of every
+        // heuristic below (an overflowed diff routinely contains "error:").
+        if (RuleHelpers.PersistedOutputPath(text) is string sidecar)
+            return prefix + $"output persisted to {sidecar}";
+
         if (arg.Contains("pytest") || text[..Math.Min(400, text.Length)].Contains("pytest"))
         {
             string? p = PytestPreview(text);

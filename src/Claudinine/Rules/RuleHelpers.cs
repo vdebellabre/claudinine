@@ -83,6 +83,29 @@ internal static class RuleHelpers
     /// True if this content is one of our own stubs — rules must never re-process
     /// those (a stub re-stubbed becomes "1 lines, 0.1KB" nonsense).
     /// </summary>
+    /// <summary>
+    /// Claude Code overflows large tool output to a sidecar under the session
+    /// directory and leaves a "&lt;persisted-output&gt;" stub carrying the absolute
+    /// path plus a preview. That path is the ONLY pointer to the file (nothing
+    /// garbage-collects it), so any rule that rewrites such a block must carry the
+    /// path through — dropping it strands the sidecar on disk forever.
+    /// Returns the path, or null when the content is not a persisted-output stub.
+    /// </summary>
+    public static string? PersistedOutputPath(string content)
+    {
+        if (!content.Contains("<persisted-output>", StringComparison.Ordinal))
+            return null;
+        const string marker = "Full output saved to: ";
+        int i = content.IndexOf(marker, StringComparison.Ordinal);
+        if (i < 0)
+            return null;
+        int start = i + marker.Length;
+        int end = content.IndexOf('\n', start);
+        if (end < 0) end = content.Length;
+        string path = content[start..end].Trim();
+        return path.Length > 0 ? path : null;
+    }
+
     public static bool IsClaudinineStub(string content) =>
         content.StartsWith("[claudinine", StringComparison.Ordinal);
 
