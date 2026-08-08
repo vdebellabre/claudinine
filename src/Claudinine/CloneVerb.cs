@@ -121,64 +121,53 @@ internal static class CloneVerb
         string? lastTitle = null;
         bool sawTitle = false;
 
-        using (var stream = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
+        // Fully materialized before the target is created: a read failure never
+        // leaves a half-written clone on disk at all.
+        var outLines = new List<string>();
+        foreach ((string line, JsonObject? node) in Jsonl.ReadRecords(source))
         {
-            foreach (string rawLine in File.ReadLines(source, Encoding.UTF8))
+            if (node is null)
             {
-                string line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
-                if (line.Length == 0)
-                    continue;
-
-                JsonObject? node;
-                try { node = JsonNode.Parse(line) as JsonObject; }
-                catch { node = null; }
-
-                if (node is null)
-                {
-                    // Unparseable line: copy verbatim rather than drop history.
-                    writer.Write(line + "\n");
-                    continue;
-                }
-
-                RebindSessionId(node, targetId);
-                RewriteRetrievalCommands(node, sourceId, targetId);
-
-                if (node["type"].GetString() == "custom-title")
-                {
-                    // Titles are appended repeatedly, last-wins. Suffix each one so the
-                    // clone is distinguishable no matter which the app reads.
-                    string? original = node["customTitle"].GetString();
-                    if (original is not null)
-                    {
-                        string suffixed = Suffixed(original);
-                        node["customTitle"] = suffixed;
-                        lastTitle = suffixed;
-                        sawTitle = true;
-                    }
-                }
-
-                writer.Write(node.ToJsonString(Json.Compact) + "\n");
+                // Unparseable line: copy verbatim rather than drop history.
+                outLines.Add(line);
+                continue;
             }
 
-            if (!sawTitle)
+            RebindSessionId(node, targetId);
+            RewriteRetrievalCommands(node, sourceId, targetId);
+
+            if (node["type"].GetString() == "custom-title")
             {
-                // No title in the source: the app derives one from the first prompt, so
-                // both sessions would read alike. Give the clone an explicit one.
-                lastTitle = Suffixed(Rules.RuleHelpers.RefPrefix(sourceId));
-                var titleRecord = new JsonObject
+                // Titles are appended repeatedly, last-wins. Suffix each one so the
+                // clone is distinguishable no matter which the app reads.
+                string? original = node["customTitle"].GetString();
+                if (original is not null)
                 {
-                    ["type"] = "custom-title",
-                    ["customTitle"] = lastTitle,
-                    ["sessionId"] = targetId,
-                };
-                writer.Write(titleRecord.ToJsonString(Json.Compact) + "\n");
+                    string suffixed = Suffixed(original);
+                    node["customTitle"] = suffixed;
+                    lastTitle = suffixed;
+                    sawTitle = true;
+                }
             }
 
-            writer.Flush();
-            stream.Flush(flushToDisk: true);
+            outLines.Add(node.ToJsonString(Json.Compact));
         }
 
+        if (!sawTitle)
+        {
+            // No title in the source: the app derives one from the first prompt, so
+            // both sessions would read alike. Give the clone an explicit one.
+            lastTitle = Suffixed(Rules.RuleHelpers.RefPrefix(sourceId));
+            var titleRecord = new JsonObject
+            {
+                ["type"] = "custom-title",
+                ["customTitle"] = lastTitle,
+                ["sessionId"] = targetId,
+            };
+            outLines.Add(titleRecord.ToJsonString(Json.Compact));
+        }
+
+        Jsonl.WriteLinesDurably(target, FileMode.CreateNew, outLines);
         return lastTitle;
     }
 
@@ -273,60 +262,40 @@ internal static class CloneVerb
     private static void CloneMirror(
         string sourceMirror, string targetMirror, string targetId, string targetTranscript)
     {
-        using var stream = new FileStream(targetMirror, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+        var outLines = new List<string>();
         bool first = true;
-        foreach (string rawLine in File.ReadLines(sourceMirror, Encoding.UTF8))
+        foreach ((string line, JsonObject? node) in Jsonl.ReadRecords(sourceMirror))
         {
-            string line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
-            if (line.Length == 0)
-                continue;
-
             if (first)
             {
                 first = false;
-                if (JsonNode.Parse(line) is JsonObject header
-                    && header["claudinine"] is JsonObject meta)
+                if (node?["claudinine"] is JsonObject meta)
                 {
                     meta["mirrorOf"] = Path.GetFullPath(targetTranscript);
-                    writer.Write(header.ToJsonString(Json.Compact) + "\n");
+                    outLines.Add(node.ToJsonString(Json.Compact));
                     continue;
                 }
             }
 
             // Mirror bodies are pristine originals — the whole point of the mirror.
             // Only the session binding moves; retrieval matches on uuid, untouched.
-            if (JsonNode.Parse(line) is JsonObject rec)
+            if (node is not null)
             {
-                RebindSessionId(rec, targetId);
-                writer.Write(rec.ToJsonString(Json.Compact) + "\n");
+                RebindSessionId(node, targetId);
+                outLines.Add(node.ToJsonString(Json.Compact));
             }
             else
             {
-                writer.Write(line + "\n");
+                outLines.Add(line);
             }
         }
-        writer.Flush();
-        stream.Flush(flushToDisk: true);
+        Jsonl.WriteLinesDurably(targetMirror, FileMode.CreateNew, outLines);
     }
 
     /// <summary>Resolve a session id (exact, else unique prefix) to its transcript.</summary>
-    private static string? FindTranscript(string session, string home)
-    {
-        var byPrefix = new List<string>();
-        foreach (string dir in ProjectDirectories(home))
-        {
-            string candidate = Path.Combine(dir, session + ".jsonl");
-            if (File.Exists(candidate))
-                return candidate;
-            byPrefix.AddRange(Directory.EnumerateFiles(dir, session + "*.jsonl"));
-        }
-        int distinct = byPrefix
-            .Select(p => Path.GetFileNameWithoutExtension(p))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-        return distinct == 1 ? byPrefix[0] : null;
-    }
+    private static string? FindTranscript(string session, string home) =>
+        SessionResolver.ResolveByIdOrUniquePrefix(ProjectDirectories(home), session)
+            .FirstOrDefault();
 
     /// <summary>
     /// Project transcript directories. The current session's own project dir first

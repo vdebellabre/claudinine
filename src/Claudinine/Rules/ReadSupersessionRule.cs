@@ -34,7 +34,7 @@ internal abstract class ReadSupersessionRule : ICompactionRule
         {
             if (rec.IsProtected())
                 continue;
-            foreach (JsonNode? block in ContentBlocks(rec.Node))
+            foreach (JsonNode? block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
             {
                 if (block is not JsonObject b)
                     continue;
@@ -109,7 +109,4 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 RuleHelpers.SetReplacement(rec, clone, Name);
         }
     }
-
-    private static IEnumerable<JsonNode?> ContentBlocks(JsonObject record) =>
-        RuleHelpers.ContentBlocks(record);
 }

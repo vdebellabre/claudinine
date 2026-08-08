@@ -74,7 +74,12 @@ internal sealed class TranscriptRecord
         return false;
     }
 
-    /// <summary>A real user turn: message.content is a plain string (tool-result carriers use a list).</summary>
+    /// <summary>
+    /// A real user turn: message.content is a plain string (tool-result carriers
+    /// use a list). DELIBERATELY narrower than RuleHelpers.IsUserPrompt (the age
+    /// clock): an image-share user message ticks the clock but must not act as a
+    /// chain-collapse turn boundary.
+    /// </summary>
     public bool IsRealUserMessage() =>
         Type == "user"
         && !IsTruthy(Node["isCompactSummary"])

@@ -28,7 +28,7 @@ internal sealed class AnchorInputStubRule : ICompactionRule
     /// <summary>Below this input size the stub saves nothing worth a rewrite.</summary>
     private const int MinInputChars = 300;
 
-    private const string CarrierPrefix = "[claudinine: this turn originally ran ";
+    private const string CarrierPrefix = ChainCollapseRule.CarrierPrefix;
 
     public void Apply(TranscriptFile transcript)
     {

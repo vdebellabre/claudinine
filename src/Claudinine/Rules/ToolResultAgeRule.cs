@@ -54,11 +54,10 @@ internal sealed class ToolResultAgeRule : ICompactionRule
                     continue;
                 if (content.Length < MinContentChars || RuleHelpers.IsClaudinineStub(content))
                     continue;
-                // Never re-TRIM our own trim output (multibyte content can trim to
-                // just over the byte cap — each pass would then shave a sliver off
-                // the previous pass's tail). Stubbing trimmed content when it ages
-                // into the old tier is still fine (and much smaller).
-                bool alreadyTrimmed = content.Contains("trimmed by claudinine]", StringComparison.Ordinal);
+                // Never re-TRIM our own trim output (see TrimSentinel). Stubbing
+                // trimmed content when it ages into the old tier is still fine
+                // (and much smaller).
+                bool alreadyTrimmed = content.Contains(RuleHelpers.TrimSentinel, StringComparison.Ordinal);
                 if (!age.IsOld(pos) && alreadyTrimmed)
                     continue;
 
@@ -76,8 +75,7 @@ internal sealed class ToolResultAgeRule : ICompactionRule
                 if (newContent == content || newContent.Length >= content.Length)
                     continue;
 
-                clone ??= (JsonObject)node.DeepClone();
-                ((JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(bi)!)["content"] = newContent;
+                RuleHelpers.CloneBlockAt(ref clone, node, bi)["content"] = newContent;
             }
 
             if (clone is not null)
@@ -114,18 +112,12 @@ internal sealed class ToolResultAgeRule : ICompactionRule
     }
 
     /// <summary>
-    /// Head/tail trim for content still over the size caps after minification.
-    /// The kept budget lands strictly UNDER the caps (marker included) so a second
-    /// pass sees an in-budget result and does nothing — trim must be a fixpoint,
-    /// not shave a sliver off its own output every pass.
+    /// Head/tail trim for content still over the size caps after minification:
+    /// line-capped here, byte-capped via the shared fixpoint-safe helper.
     /// </summary>
     internal static string TrimOversized(string content)
     {
-        int bytes = RuleHelpers.Utf8Len(content);
         string[] lines = content.Split('\n');
-        if (bytes <= TrimMaxBytes && lines.Length <= TrimMaxLines)
-            return content;
-
         if (lines.Length > TrimMaxLines)
         {
             int keep = TrimMaxLines / 2 - 1; // + 1 marker line = 99 ≤ cap
@@ -133,13 +125,7 @@ internal sealed class ToolResultAgeRule : ICompactionRule
                 + $"\n... [{lines.Length - 2 * keep} lines trimmed by claudinine] ...\n"
                 + string.Join('\n', lines[^keep..]);
         }
-
-        // Character-indexed halves like the original (byte counts reported, char
-        // slices taken); 100 chars of headroom cover the marker.
-        int half = Math.Min(TrimMaxBytes / 2 - 100, content.Length / 2);
-        return content[..half]
-            + $"\n... [{bytes - TrimMaxBytes} bytes trimmed by claudinine] ...\n"
-            + content[^half..];
+        return RuleHelpers.HeadTailTrimBytes(content, TrimMaxBytes);
     }
 
     /// <summary>
@@ -155,7 +141,10 @@ internal sealed class ToolResultAgeRule : ICompactionRule
         string toolName = "", toolPath = "";
         if (toolUseId is not null)
         {
-            for (int p = Math.Max(0, pos - 10); p <= pos && p < records.Count; p++)
+            // Reads .Node, not CurrentNode, on purpose: anchor-input-stub runs
+            // earlier in the catalog and may have replaced the input with its
+            // pointer stub — the ORIGINAL input is what names this stub usefully.
+            for (int p = Math.Max(0, pos - 10); p <= pos && p < records.Count && toolName.Length == 0; p++)
             {
                 foreach (JsonNode? n in RuleHelpers.ContentBlocks(records[p].Node))
                 {
@@ -169,9 +158,10 @@ internal sealed class ToolResultAgeRule : ICompactionRule
                         toolPath = StringField(input, "file_path")
                             ?? StringField(input, "path")
                             ?? StringField(input, "pattern")
-                            ?? Truncate(StringField(input, "command"), 80)
+                            ?? RuleHelpers.Truncate(StringField(input, "command"), 80)
                             ?? "";
                     }
+                    break;
                 }
             }
         }
@@ -180,15 +170,13 @@ internal sealed class ToolResultAgeRule : ICompactionRule
         string parts = "[claudinine";
         if (toolName.Length > 0) parts += $": {toolName}";
         if (toolPath.Length > 0) parts += $" {toolPath}";
-        parts += $" — {lineCount} lines, {content.Length / 1024.0:F1}KB";
+        parts += $" — {lineCount} lines, {RuleHelpers.Utf8Len(content) / 1024.0:F1}KB";
         if (persistedPath is not null) parts += $"; full output: {persistedPath}";
         parts += "]";
         return parts;
     }
 
+    /// <summary>Like GetString, but empty reads as absent so ?? chains fall through.</summary>
     private static string? StringField(JsonObject obj, string key) =>
-        obj[key] is JsonValue v && v.TryGetValue<string>(out string? s) && s.Length > 0 ? s : null;
-
-    private static string? Truncate(string? s, int max) =>
-        s is null ? null : s.Length <= max ? s : s[..max];
+        obj[key].GetString() is { Length: > 0 } s ? s : null;
 }

@@ -35,6 +35,18 @@ internal static class RuleHelpers
     }
 
     /// <summary>
+    /// The write half of the read-CurrentNode / mutate-clone-only convention:
+    /// lazily deep-clone the record's node, then hand back the clone's content
+    /// block at <paramref name="blockIndex"/> for mutation. The original parse is
+    /// never touched (see <see cref="TranscriptRecord.Node"/>).
+    /// </summary>
+    public static JsonObject CloneBlockAt(ref JsonObject? clone, JsonObject node, int blockIndex)
+    {
+        clone ??= (JsonObject)node.DeepClone();
+        return (JsonObject)ContentBlocks(clone).ElementAt(blockIndex)!;
+    }
+
+    /// <summary>
     /// Text content of a block, any type (cozempic's text_of): text, else thinking,
     /// else content; list content joins sub-block texts with a space. Never throws
     /// on untrusted shapes.
@@ -87,9 +99,33 @@ internal static class RuleHelpers
     public static string RefPrefix(string uuid) => uuid.Length >= 8 ? uuid[..8] : uuid;
 
     /// <summary>
-    /// True if this content is one of our own stubs — rules must never re-process
-    /// those (a stub re-stubbed becomes "1 lines, 0.1KB" nonsense).
+    /// Fixpoint sentinel present in every head/tail-trim marker: content carrying
+    /// it is our own trim output and must never be re-trimmed (multibyte content
+    /// can trim to just over a byte cap — each pass would then shave a sliver off
+    /// the previous pass's tail).
     /// </summary>
+    public const string TrimSentinel = "trimmed by claudinine]";
+
+    /// <summary>
+    /// Byte-capped head/tail trim shared by the mid-age tier and mega-block-trim.
+    /// The kept budget lands strictly UNDER the cap (marker included, 100 chars of
+    /// headroom) so a second pass sees an in-budget result and does nothing —
+    /// trim must be a fixpoint. Character-indexed halves, byte counts reported.
+    /// </summary>
+    public static string HeadTailTrimBytes(string text, int maxBytes)
+    {
+        int bytes = Utf8Len(text);
+        if (bytes <= maxBytes)
+            return text;
+        int half = Math.Min(maxBytes / 2 - 100, text.Length / 2);
+        return text[..half]
+            + $"\n... [{bytes - maxBytes} bytes trimmed by claudinine] ...\n"
+            + text[^half..];
+    }
+
+    public static string? Truncate(string? s, int max) =>
+        s is null || s.Length <= max ? s : s[..max];
+
     /// <summary>
     /// Claude Code overflows large tool output to a sidecar under the session
     /// directory and leaves a "&lt;persisted-output&gt;" stub carrying the absolute
@@ -113,6 +149,10 @@ internal static class RuleHelpers
         return path.Length > 0 ? path : null;
     }
 
+    /// <summary>
+    /// True if this content is one of our own stubs — rules must never re-process
+    /// those (a stub re-stubbed becomes "1 lines, 0.1KB" nonsense).
+    /// </summary>
     public static bool IsClaudinineStub(string content) =>
         content.StartsWith("[claudinine", StringComparison.Ordinal);
 
@@ -155,6 +195,9 @@ internal static class RuleHelpers
     /// <summary>
     /// A real user prompt for turn counting (cozempic's _is_user_prompt): type user,
     /// content either a plain string or a list with no tool_result blocks.
+    /// DELIBERATELY broader than <see cref="TranscriptRecord.IsRealUserMessage"/>
+    /// (chain-collapse's turn boundary, string content only): an image-share user
+    /// message advances the age clock but is not a collapse boundary.
     /// </summary>
     public static bool IsUserPrompt(JsonObject record)
     {

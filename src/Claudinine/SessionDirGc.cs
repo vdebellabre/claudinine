@@ -51,11 +51,11 @@ internal static class SessionDirGc
         {
             if (DateTime.UtcNow - NewestTimestampUtc(dir) < Grace)
             {
-                Debug($"gc: kept session dir {name} (inside grace window)");
+                Dbg.Log($"gc: kept session dir {name} (inside grace window)");
                 return;
             }
             Directory.Delete(dir, recursive: true);
-            Debug($"gc: deleted orphan session dir {name}");
+            Dbg.Log($"gc: deleted orphan session dir {name}");
         }
         catch
         {
@@ -107,11 +107,5 @@ internal static class SessionDirGc
             }
         }
         return true;
-    }
-
-    private static void Debug(string message)
-    {
-        if (Environment.GetEnvironmentVariable("CLAUDININE_DEBUG") is not null)
-            Console.Error.WriteLine($"[claudinine debug] {message}");
     }
 }

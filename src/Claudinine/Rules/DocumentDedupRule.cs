@@ -48,29 +48,24 @@ internal sealed class DocumentDedupRule : ICompactionRule
                 JsonObject node = RuleHelpers.CurrentNode(rec);
                 if (RuleHelpers.ContentBlocks(node).ElementAtOrDefault(blockIndex) is not JsonObject block)
                     continue;
-                string? btype = block["type"].GetString();
+                // Only text and string tool_results, like the original.
+                string? field = block["type"].GetString() switch
+                {
+                    "text" => "text",
+                    "tool_result" when block["content"] is JsonValue cv
+                        && cv.TryGetValue<string>(out _) => "content",
+                    _ => null,
+                };
+                if (field is null)
+                    continue;
 
                 string preview = RuleHelpers.TextOf(block);
                 preview = preview[..Math.Min(80, preview.Length)].Replace('\n', ' ');
 
-                JsonObject clone = (JsonObject)node.DeepClone();
-                JsonObject cloneBlock = (JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(blockIndex)!;
-                if (btype == "text")
-                {
-                    cloneBlock["text"] =
-                        $"[claudinine: duplicate content removed — first seen earlier: {preview}...]";
-                }
-                else if (btype == "tool_result" && block["content"] is JsonValue cv
-                         && cv.TryGetValue<string>(out _))
-                {
-                    cloneBlock["content"] =
-                        $"[claudinine: duplicate content removed — first seen earlier: {preview}...]";
-                }
-                else
-                {
-                    continue; // only text and string tool_results, like the original
-                }
-                RuleHelpers.SetReplacement(rec, clone, Name);
+                JsonObject? clone = null;
+                RuleHelpers.CloneBlockAt(ref clone, node, blockIndex)[field] =
+                    $"[claudinine: duplicate content removed — first seen earlier: {preview}...]";
+                RuleHelpers.SetReplacement(rec, clone!, Name);
             }
         }
     }

@@ -33,11 +33,11 @@ internal sealed class QueueHistoryCollapseRule : ICompactionRule
             if (rec.IsProtected())
                 return;
             JsonObject node = rec.Node;
-            string sid = ReadString(node["sessionId"]) ?? "";
+            string sid = node["sessionId"].GetString() ?? "";
             if (!queues.TryGetValue(sid, out List<string>? queue))
                 queues[sid] = queue = [];
-            string? content = ReadString(node["content"]);
-            switch (ReadString(node["operation"]))
+            string? content = node["content"].GetString();
+            switch (node["operation"].GetString())
             {
                 case "enqueue" when content is not null:
                     queue.Add(content);
@@ -59,7 +59,4 @@ internal sealed class QueueHistoryCollapseRule : ICompactionRule
         foreach (TranscriptRecord rec in ops)
             rec.Removed = true;
     }
-
-    private static string? ReadString(JsonNode? n) =>
-        n is JsonValue v && v.TryGetValue<string>(out string? s) ? s : null;
 }

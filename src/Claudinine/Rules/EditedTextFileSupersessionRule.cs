@@ -63,9 +63,9 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
     {
         if (rec.Type != "attachment" || rec.Node["attachment"] is not JsonObject att)
             return null;
-        if (GetString(att["type"]) != "edited_text_file")
+        if (att["type"].GetString() != "edited_text_file")
             return null;
-        return GetString(att["filename"]) is { Length: > 0 } file ? file : null;
+        return att["filename"].GetString() is { Length: > 0 } file ? file : null;
     }
 
     private static void CollectToolUses(TranscriptRecord rec, Dictionary<string, string> toolNames)
@@ -74,8 +74,8 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
             return;
         foreach (JsonNode? block in content)
         {
-            if (block is JsonObject b && GetString(b["type"]) == "tool_use"
-                && GetString(b["id"]) is string id && GetString(b["name"]) is string name)
+            if (block is JsonObject b && b["type"].GetString() == "tool_use"
+                && b["id"].GetString() is string id && b["name"].GetString() is string name)
                 toolNames[id] = name;
         }
     }
@@ -92,15 +92,15 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
         string? toolName = ResultToolName(rec, toolNames);
 
         if (toolName == "Read"
-            && GetString(result["type"]) == "text"
+            && result["type"].GetString() == "text"
             && result["file"] is JsonObject file
             && GetInt(file["startLine"]) == 1
             && GetInt(file["numLines"]) is int numLines
             && GetInt(file["totalLines"]) is int totalLines && numLines == totalLines)
-            return GetString(file["filePath"]) is { Length: > 0 } read ? read : null;
+            return file["filePath"].GetString() is { Length: > 0 } read ? read : null;
 
-        if (toolName == "Write" && GetString(result["type"]) is "create" or "update")
-            return GetString(result["filePath"]) is { Length: > 0 } written ? written : null;
+        if (toolName == "Write" && result["type"].GetString() is "create" or "update")
+            return result["filePath"].GetString() is { Length: > 0 } written ? written : null;
 
         return null;
     }
@@ -111,15 +111,12 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
             return null;
         foreach (JsonNode? block in content)
         {
-            if (block is JsonObject b && GetString(b["type"]) == "tool_result"
-                && GetString(b["tool_use_id"]) is string id)
+            if (block is JsonObject b && b["type"].GetString() == "tool_result"
+                && b["tool_use_id"].GetString() is string id)
                 return toolNames.TryGetValue(id, out string? name) ? name : null;
         }
         return null;
     }
-
-    private static string? GetString(JsonNode? n) =>
-        n is JsonValue v && v.TryGetValue<string>(out string? s) ? s : null;
 
     private static int? GetInt(JsonNode? n) =>
         n is JsonValue v && v.TryGetValue<int>(out int i) ? i : null;

@@ -19,10 +19,6 @@ namespace Claudinine;
 /// </summary>
 internal static class GetVerb
 {
-    /// <summary>Human/model-readable JSON: no "-style escaping of quotes and symbols.</summary>
-    private static readonly System.Text.Json.JsonSerializerOptions RelaxedJson =
-        new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-
     public static int Run(string[] args)
     {
         if (args.Length == 0)
@@ -71,13 +67,8 @@ internal static class GetVerb
         var seenRecords = new HashSet<string>();
         foreach (string mirrorPath in mirrorPaths)
         {
-            bool first = true;
-            foreach (string line in File.ReadLines(mirrorPath, Encoding.UTF8))
+            foreach ((string _, JsonObject? rec) in Jsonl.ReadRecords(mirrorPath, skipFirst: true))
             {
-                if (line.Length == 0) continue;
-                if (first) { first = false; continue; } // header
-                JsonObject? rec;
-                try { rec = JsonNode.Parse(line) as JsonObject; } catch { continue; }
                 if (rec?["uuid"].GetString() is not string uuid)
                     continue;
                 if (!seenRecords.Add(uuid))
@@ -111,7 +102,7 @@ internal static class GetVerb
                     if (b["input"] is not JsonObject input)
                         continue;
                     string name = b["name"].GetString() ?? "?";
-                    matches.Add((uuid, "", "", $"{name} input: {input.ToJsonString(RelaxedJson)}"));
+                    matches.Add((uuid, "", "", $"{name} input: {input.ToJsonString(Json.Compact)}"));
                 }
             }
         }

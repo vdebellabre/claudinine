@@ -31,13 +31,10 @@ internal sealed class HookSuccessStripRule : ICompactionRule
                 continue;
             if (rec.Node["attachment"] is not JsonObject att)
                 continue;
-            if (GetString(att["type"]) != "hook_success")
+            if (att["type"].GetString() != "hook_success")
                 continue;
-            if (GetString(att["hookEvent"]) is "Stop" or "PostToolUse")
+            if (att["hookEvent"].GetString() is "Stop" or "PostToolUse")
                 rec.Removed = true;
         }
     }
-
-    private static string? GetString(JsonNode? n) =>
-        n is JsonValue v && v.TryGetValue<string>(out string? s) ? s : null;
 }

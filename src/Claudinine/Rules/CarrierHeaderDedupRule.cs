@@ -21,7 +21,7 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
 {
     public string Name => "carrier-header-dedup";
 
-    private const string HeaderPrefix = "[claudinine: this turn originally ran ";
+    private const string HeaderPrefix = ChainCollapseRule.CarrierPrefix;
     /// <summary>Present only in the full-instructions header, never in the short one.</summary>
     private const string FullMarker = "\nRETRIEVAL — ";
     private const string FullHeaderEnd = "do not infer it from the preview.]\n\n";
@@ -73,7 +73,7 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
     }
 
     private static string ShortHeader(string callCount, string sid) =>
-        $"[claudinine: this turn originally ran {callCount} separate tool calls. " +
+        HeaderPrefix + $"{callCount} separate tool calls. " +
         $"Full outputs: claudinine get {sid} --ref REF [--grep PATTERN | --info | --full | --media] " +
         "(full retrieval guidance in the first collapsed block of this session; if the file " +
         "discussed still exists on disk, read IT instead). " +

@@ -28,6 +28,14 @@ internal sealed class ChainCollapseRule : ICompactionRule
 {
     public const string RuleName = "chain-collapse";
 
+    /// <summary>
+    /// The literal opening of every carrier this rule emits. Carrier-header dedup
+    /// and anchor-input stubbing recognize carriers ONLY by this exact prefix —
+    /// any header must be built from this constant, never respelled (a wording
+    /// tweak here would silently disable both downstream rules).
+    /// </summary>
+    public const string CarrierPrefix = "[claudinine: this turn originally ran ";
+
     public string Name => RuleName;
 
     /// <summary>Below this many calls the anchor+header overhead isn't worth it.</summary>
@@ -191,7 +199,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 // Media blocks are invisible to text extraction — without this
                 // note a screenshot-only result digests as "(no output)".
                 string media = c.Media.Length > 0 ? $" [+media {c.Media} — --media decodes it to a file]" : "";
-                digest.Append($"[{refId}] {c.Tool}({Truncate(c.Arg, 90)}) -> {RuleHelpers.Utf8Len(c.ResultText)}b :: {Truncate(preview, 300)}{media}\n");
+                digest.Append($"[{refId}] {c.Tool}({RuleHelpers.Truncate(c.Arg, 90)}) -> {RuleHelpers.Utf8Len(c.ResultText)}b :: {RuleHelpers.Truncate(preview, 300)}{media}\n");
                 if (i != anchor.ResultIndex)
                     toRemove.Add(rec);
             }
@@ -215,7 +223,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
     {
         string sid = sessionId ?? "<session-id>";
         return
-            $"[claudinine: this turn originally ran {callCount} separate tool calls. " +
+            CarrierPrefix + $"{callCount} separate tool calls. " +
             "Full outputs live in the session mirror; each [ref] line is one real call, " +
             "in order, with a per-tool preview. Interleaved assistant notes are verbatim.\n\n" +
             "RETRIEVAL — use the targeted form; printing a whole record costs hundreds-to-thousands of tokens:\n" +
@@ -236,6 +244,4 @@ internal sealed class ChainCollapseRule : ICompactionRule
         return blocks.Count > 0 && blocks.All(b =>
             b["type"].GetString() is "text" or "thinking");
     }
-
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
 }

@@ -57,8 +57,7 @@ internal sealed class ImageStripRule : ICompactionRule
                         && t.StartsWith(LegacyStubPrefix, StringComparison.Ordinal):
                         // The original media info is gone from a legacy stub;
                         // "image" is all it ever replaced.
-                        clone ??= (JsonObject)node.DeepClone();
-                        WriteStub((JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(bi)!,
+                        WriteStub(RuleHelpers.CloneBlockAt(ref clone, node, bi),
                             "image", sid, refPrefix);
                         break;
 
@@ -68,8 +67,7 @@ internal sealed class ImageStripRule : ICompactionRule
                             if (inner[ti] is not JsonObject ib
                                 || ib["type"].GetString() != "image")
                                 continue;
-                            clone ??= (JsonObject)node.DeepClone();
-                            var cloneResult = (JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(bi)!;
+                            var cloneResult = RuleHelpers.CloneBlockAt(ref clone, node, bi);
                             var cloneInner = (JsonObject)((JsonArray)cloneResult["content"]!)[ti]!;
                             WriteStub(cloneInner, Describe(ib), sid, refPrefix);
                         }
@@ -85,9 +83,8 @@ internal sealed class ImageStripRule : ICompactionRule
     private static void Stub(ref JsonObject? clone, JsonObject node, int blockIndex,
         JsonObject original, string? sid, string? refPrefix)
     {
-        clone ??= (JsonObject)node.DeepClone();
-        var cloneBlock = (JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(blockIndex)!;
-        WriteStub(cloneBlock, Describe(original), sid, refPrefix);
+        WriteStub(RuleHelpers.CloneBlockAt(ref clone, node, blockIndex),
+            Describe(original), sid, refPrefix);
     }
 
     private static void WriteStub(JsonObject cloneBlock, string label, string? sid, string? refPrefix)

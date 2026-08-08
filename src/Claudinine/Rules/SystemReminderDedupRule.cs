@@ -71,9 +71,7 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
                 if (DedupIn(text, seen) is not string newText)
                     continue;
 
-                clone ??= (JsonObject)node.DeepClone();
-                JsonObject cloneBlock = (JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(blockIndex)!;
-                cloneBlock[isText ? "text" : "content"] = newText;
+                RuleHelpers.CloneBlockAt(ref clone, node, blockIndex)[isText ? "text" : "content"] = newText;
             }
 
             if (clone is not null)

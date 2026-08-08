@@ -69,26 +69,8 @@ internal static class MirrorFile
     /// (cross-context resume) — all of them are returned; a prefix that resolves
     /// to more than one distinct session id matches nothing.
     /// </summary>
-    public static List<string> FindSessionMirrors(string session)
-    {
-        var exact = new List<string>();
-        var byPrefix = new List<string>();
-        foreach (string dir in SearchDirectories())
-        {
-            string candidate = System.IO.Path.Combine(dir, session + ".jsonl");
-            if (File.Exists(candidate))
-                exact.Add(candidate);
-            else
-                byPrefix.AddRange(Directory.EnumerateFiles(dir, session + "*.jsonl"));
-        }
-        if (exact.Count > 0)
-            return exact;
-        int distinct = byPrefix
-            .Select(p => System.IO.Path.GetFileNameWithoutExtension(p))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-        return distinct == 1 ? byPrefix : [];
-    }
+    public static List<string> FindSessionMirrors(string session) =>
+        SessionResolver.ResolveByIdOrUniquePrefix(SearchDirectories(), session);
 
     // ---- skip markers: `restore-compaction-off` freezes a session ----
     //
@@ -111,14 +93,7 @@ internal static class MirrorFile
 
     public static void WriteSkipMarkers(string sessionId, string transcriptPath)
     {
-        var content = new JsonObject
-        {
-            ["claudinine"] = new JsonObject
-            {
-                ["v"] = HeaderVersion,
-                ["skipCompactionOf"] = System.IO.Path.GetFullPath(transcriptPath),
-            },
-        };
+        string content = HeaderLine("skipCompactionOf", System.IO.Path.GetFullPath(transcriptPath));
         var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string mirror in FindSessionMirrors(sessionId))
             dirs.Add(System.IO.Path.GetDirectoryName(mirror)!);
@@ -129,7 +104,7 @@ internal static class MirrorFile
             try
             {
                 File.WriteAllText(System.IO.Path.Combine(dir, sessionId + ".skip"),
-                    content.ToJsonString(Json.Compact) + "\n", new UTF8Encoding(false));
+                    content + "\n", new UTF8Encoding(false));
             }
             catch
             {
@@ -137,6 +112,13 @@ internal static class MirrorFile
             }
         }
     }
+
+    /// <summary>One serialized claudinine bookkeeping line (mirror header, skip marker, fork separator).</summary>
+    private static string HeaderLine(string field, string value) =>
+        new JsonObject
+        {
+            ["claudinine"] = new JsonObject { ["v"] = HeaderVersion, [field] = value },
+        }.ToJsonString(Json.Compact);
 
     public static void RemoveSkipMarkers(string sessionId)
     {
@@ -169,27 +151,16 @@ internal static class MirrorFile
             bool hasHeader = false;
             if (File.Exists(mirrorPath))
             {
-                foreach (string line in File.ReadLines(mirrorPath, Encoding.UTF8))
+                foreach ((string line, JsonObject? node) in Jsonl.ReadRecords(mirrorPath))
                 {
-                    if (line.Length == 0) continue;
                     if (!hasHeader) { hasHeader = true; continue; }
-                    Register(IdentityOf(line), seen, seenCounts);
+                    Register(IdentityOf(line, node), seen, seenCounts);
                 }
             }
 
             var toAppend = new List<string>();
             if (!hasHeader)
-            {
-                var header = new JsonObject
-                {
-                    ["claudinine"] = new JsonObject
-                    {
-                        ["v"] = HeaderVersion,
-                        ["mirrorOf"] = System.IO.Path.GetFullPath(transcript.Path),
-                    },
-                };
-                toAppend.Add(header.ToJsonString(Json.Compact));
-            }
+                toAppend.Add(HeaderLine("mirrorOf", System.IO.Path.GetFullPath(transcript.Path)));
             var transcriptCounts = new Dictionary<string, int>();
             foreach (TranscriptRecord rec in transcript.Records)
             {
@@ -213,12 +184,8 @@ internal static class MirrorFile
             if (toAppend.Count == 0)
                 return true;
 
-            using var stream = new FileStream(mirrorPath, FileMode.Append, FileAccess.Write, FileShare.Read);
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
-            foreach (string line in toAppend)
-                writer.Write(line + "\n");
-            writer.Flush();
-            stream.Flush(flushToDisk: true); // the invariant is only real once it's durable
+            // Durable: the mirror-first invariant is only real once it's on disk.
+            Jsonl.WriteLinesDurably(mirrorPath, FileMode.Append, toAppend);
             return true;
         }
         catch
@@ -252,11 +219,10 @@ internal static class MirrorFile
             bool hasHeader = false;
             if (File.Exists(mirrorPath))
             {
-                foreach (string line in File.ReadLines(mirrorPath, Encoding.UTF8))
+                foreach ((string _, JsonObject? node) in Jsonl.ReadRecords(mirrorPath))
                 {
-                    if (line.Length == 0) continue;
                     if (!hasHeader) { hasHeader = true; continue; }
-                    if (UuidOf(line) is string uuid)
+                    if (node?["uuid"].GetString() is string uuid)
                         seen.Add(uuid);
                 }
             }
@@ -264,40 +230,18 @@ internal static class MirrorFile
             string targetSid = System.IO.Path.GetFileNameWithoutExtension(transcript.Path);
             var toAppend = new List<string>();
             if (!hasHeader)
-            {
-                var header = new JsonObject
-                {
-                    ["claudinine"] = new JsonObject
-                    {
-                        ["v"] = HeaderVersion,
-                        ["mirrorOf"] = System.IO.Path.GetFullPath(transcript.Path),
-                    },
-                };
-                toAppend.Add(header.ToJsonString(Json.Compact));
-            }
+                toAppend.Add(HeaderLine("mirrorOf", System.IO.Path.GetFullPath(transcript.Path)));
             // Merged records land at the mirror's END although they are
             // chronologically the session's OLDEST — this separator is how a
             // restore knows the suffix needs a chain-aware reorder. Mirrors
             // without it are guaranteed to be in original file order, app
             // write quirks included, and must never be reordered.
-            var separator = new JsonObject
-            {
-                ["claudinine"] = new JsonObject
-                {
-                    ["v"] = HeaderVersion,
-                    ["mergedFromFork"] = parentSessionId,
-                },
-            };
-            toAppend.Add(separator.ToJsonString(Json.Compact));
+            toAppend.Add(HeaderLine("mergedFromFork", parentSessionId));
             int preludeLines = toAppend.Count;
             foreach (string source in sources)
             {
-                foreach (string rawLine in File.ReadLines(source, Encoding.UTF8))
+                foreach ((string _, JsonObject? rec) in Jsonl.ReadRecords(source))
                 {
-                    string line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
-                    if (line.Length == 0) continue;
-                    JsonObject? rec;
-                    try { rec = JsonNode.Parse(line) as JsonObject; } catch { continue; }
                     // The uuid requirement also skips the parent mirror's header.
                     if (rec?["uuid"].GetString() is not string uuid)
                         continue;
@@ -311,29 +255,13 @@ internal static class MirrorFile
             if (toAppend.Count == preludeLines)
                 return true; // no new records: already merged on an earlier pass
 
-            using var stream = new FileStream(mirrorPath, FileMode.Append, FileAccess.Write, FileShare.Read);
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
-            foreach (string line in toAppend)
-                writer.Write(line + "\n");
-            writer.Flush();
-            stream.Flush(flushToDisk: true); // refs are only retargeted once this is real
+            // Durable: refs are only retargeted once this is real.
+            Jsonl.WriteLinesDurably(mirrorPath, FileMode.Append, toAppend);
             return true;
         }
         catch
         {
             return false;
-        }
-    }
-
-    private static string? UuidOf(string line)
-    {
-        try
-        {
-            return (JsonNode.Parse(line) as JsonObject)?["uuid"].GetString();
-        }
-        catch
-        {
-            return null;
         }
     }
 
@@ -354,9 +282,9 @@ internal static class MirrorFile
             var uuids = new HashSet<string>();
             foreach (string source in sources)
             {
-                foreach (string line in File.ReadLines(source, Encoding.UTF8))
+                foreach ((string _, JsonObject? node) in Jsonl.ReadRecords(source))
                 {
-                    if (line.Length > 0 && UuidOf(line) is string uuid)
+                    if (node?["uuid"].GetString() is string uuid)
                         uuids.Add(uuid);
                 }
             }
@@ -453,29 +381,29 @@ internal static class MirrorFile
     /// remapped variant is not a new original; re-appending it would pollute the
     /// mirror with a rewritten copy on the pass after a collapse.
     /// </summary>
-    private static string IdentityOf(string line, string? knownUuid = null)
+    /// <param name="disposableObj">The line's parse, owned by this method — it may
+    /// be mutated. NEVER pass a TranscriptRecord.Node here.</param>
+    private static string IdentityOf(string line, JsonObject? disposableObj)
     {
-        JsonObject? obj = null;
-        if (knownUuid is null)
-        {
-            try
-            {
-                obj = JsonNode.Parse(line) as JsonObject;
-            }
-            catch
-            {
-                // fall through to raw hash
-            }
-        }
-        string? uuid = knownUuid ?? obj?["uuid"].GetString();
-        if (uuid is not null)
+        if (disposableObj?["uuid"].GetString() is string uuid)
             return "u:" + uuid;
-        if (obj?["leafUuid"] is not null)
+        if (disposableObj?["leafUuid"] is not null)
         {
-            obj.Remove("leafUuid");
-            return "h:" + Convert.ToHexString(
-                SHA256.HashData(Encoding.UTF8.GetBytes(obj.ToJsonString(Json.Compact))));
+            disposableObj.Remove("leafUuid");
+            return "h:" + Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(disposableObj.ToJsonString(Json.Compact))));
         }
         return "h:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(line)));
+    }
+
+    /// <summary>Identity when the record's uuid is already known (transcript records).</summary>
+    private static string IdentityOf(string line, string? knownUuid)
+    {
+        if (knownUuid is not null)
+            return "u:" + knownUuid;
+        JsonObject? obj = null;
+        try { obj = JsonNode.Parse(line) as JsonObject; }
+        catch { /* fall through to raw hash */ }
+        return IdentityOf(line, obj);
     }
 }

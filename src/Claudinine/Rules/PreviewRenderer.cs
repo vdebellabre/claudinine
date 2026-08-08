@@ -49,8 +49,6 @@ internal static partial class PreviewRenderer
     /// </summary>
     public static string RenderPreview(string tool, string arg, string text, bool isError = false)
     {
-        text ??= "";
-        arg ??= "";
         string prefix = isError ? "[ERROR] " : "";
 
         // Claude Code overflowed this result to a sidecar file and kept only a

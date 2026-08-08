@@ -22,9 +22,8 @@ internal static class Compactor
         TranscriptFile? transcript = TranscriptFile.TryLoad(transcriptPath);
         if (transcript is null)
             return;
-        MirrorFile.TryAppendMissing(transcript);
-        if (Environment.GetEnvironmentVariable("CLAUDININE_DEBUG") is not null)
-            Console.Error.WriteLine("[claudinine debug] compaction skipped (skip marker present); mirror updated");
+        bool mirrored = MirrorFile.TryAppendMissing(transcript);
+        Dbg.Log($"compaction skipped (skip marker present); mirrorOk={mirrored}");
     }
 
     public static void Run(string transcriptPath)
@@ -44,19 +43,18 @@ internal static class Compactor
             {
                 rule.Apply(transcript);
             }
-            catch when (Environment.GetEnvironmentVariable("CLAUDININE_DEBUG") is null)
+            catch when (!Dbg.Enabled)
             {
                 return; // a misbehaving rule poisons the pass, not the file
             }
         }
 
         bool ok = transcript.TryRewrite();
-        if (Environment.GetEnvironmentVariable("CLAUDININE_DEBUG") is not null)
+        if (Dbg.Enabled)
         {
             int replaced = transcript.Records.Count(r => r.Replacement is not null);
             int removed = transcript.Records.Count(r => r.Removed);
-            Console.Error.WriteLine(
-                $"[claudinine debug] replaced={replaced} removed={removed} rewriteOk={ok}");
+            Dbg.Log($"replaced={replaced} removed={removed} rewriteOk={ok}");
         }
     }
 }

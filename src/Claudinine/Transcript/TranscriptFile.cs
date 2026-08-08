@@ -63,7 +63,6 @@ internal sealed class TranscriptFile
     /// untouched and reports false. Removals rechain surviving children's
     /// parentUuid — and any leafUuid resume anchors — to the nearest surviving
     /// ancestor (dangling leafUuid was a shipped cozempic-POC bug).
-    /// Temp file deliberately does not end in .jsonl (session discovery scans *.jsonl).
     /// </summary>
     public bool TryRewrite()
     {
@@ -194,25 +193,13 @@ internal sealed class TranscriptFile
         if (!tailRewritten && lines[count - 1] != Records[^1].RawLine)
             return Refuse("tail-bytes");
 
-        string temp = Path + ".claudinine-tmp";
         try
         {
-            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
-            using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
-            {
-                writer.Write(rewritten);
-                writer.Flush();
-                // Durable before the swap: a rename can survive a power cut that the
-                // data didn't, leaving a truncated transcript — same reasoning as the
-                // mirror append's flushToDisk.
-                stream.Flush(flushToDisk: true);
-            }
-            File.Move(temp, Path, overwrite: true);
+            Jsonl.ReplaceAtomically(Path, rewritten);
             return true;
         }
         catch
         {
-            try { File.Delete(temp); } catch { }
             return false;
         }
     }
@@ -220,8 +207,7 @@ internal sealed class TranscriptFile
     /// <summary>Fail-closed exit, naming the refused check when CLAUDININE_DEBUG is set.</summary>
     private static bool Refuse(string reason)
     {
-        if (Environment.GetEnvironmentVariable("CLAUDININE_DEBUG") is not null)
-            Console.Error.WriteLine($"[claudinine debug] rewrite refused: {reason}");
+        Dbg.Log($"rewrite refused: {reason}");
         return false;
     }
 }

@@ -51,20 +51,14 @@ internal sealed class MegaBlockTrimRule : ICompactionRule
                 if (field is null)
                     continue;
                 string text = b[field]!.GetValue<string>();
-                int bytes = RuleHelpers.Utf8Len(text);
-                if (bytes <= MaxBlockBytes)
+                if (RuleHelpers.Utf8Len(text) <= MaxBlockBytes)
                     continue;
-                // Fixpoint guard: never re-trim our own output (see ToolResultAgeRule).
-                if (text.Contains("trimmed by claudinine]", StringComparison.Ordinal))
+                // Fixpoint guard: never re-trim our own output (see TrimSentinel).
+                if (text.Contains(RuleHelpers.TrimSentinel, StringComparison.Ordinal))
                     continue;
 
-                int half = Math.Min(MaxBlockBytes / 2 - 100, text.Length / 2);
-                string trimmed = text[..half]
-                    + $"\n\n... [{bytes - MaxBlockBytes} bytes trimmed by claudinine] ...\n\n"
-                    + text[^half..];
-
-                clone ??= (JsonObject)node.DeepClone();
-                ((JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(bi)!)[field] = trimmed;
+                RuleHelpers.CloneBlockAt(ref clone, node, bi)[field] =
+                    RuleHelpers.HeadTailTrimBytes(text, MaxBlockBytes);
             }
 
             if (clone is not null)

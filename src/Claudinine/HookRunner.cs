@@ -32,18 +32,16 @@ internal static class HookRunner
             // crashes and missed ends — they pay at the next load.
             switch (input.HookEventName)
             {
-                case "UserPromptSubmit":
-                case "SessionEnd":
-                case "PreCompact":
+                case "UserPromptSubmit" or "SessionEnd" or "PreCompact" or "SessionStart":
                     if (skipped) Compactor.MirrorOnly(input.TranscriptPath);
                     else Compactor.Run(input.TranscriptPath);
-                    break;
-
-                case "SessionStart":
-                    if (skipped) Compactor.MirrorOnly(input.TranscriptPath);
-                    else Compactor.Run(input.TranscriptPath);
-                    MirrorFile.CollectGarbage();
-                    SessionDirGc.Run(input.TranscriptPath, input.SessionId);
+                    if (input.HookEventName == "SessionStart")
+                    {
+                        // Housekeeping rides the once-per-session event, off the
+                        // per-prompt critical path.
+                        MirrorFile.CollectGarbage();
+                        SessionDirGc.Run(input.TranscriptPath, input.SessionId);
+                    }
                     break;
             }
 

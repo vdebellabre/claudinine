@@ -88,17 +88,13 @@ internal static class RestoreVerb
             return 1;
         }
 
-        string temp = transcriptPath + ".claudinine-tmp";
         try
         {
-            File.WriteAllText(temp,
-                string.Concat(restored.Select(l => l.Raw + "\n")),
-                new UTF8Encoding(false));
-            File.Move(temp, transcriptPath, overwrite: true);
+            Jsonl.ReplaceAtomically(transcriptPath,
+                string.Concat(restored.Select(l => l.Raw + "\n")));
         }
         catch (Exception e)
         {
-            try { File.Delete(temp); } catch { }
             Console.Error.WriteLine($"restore failed writing the transcript: {e.Message}");
             return 1;
         }
@@ -145,15 +141,9 @@ internal static class RestoreVerb
         bool forkMerged = false;
         foreach (string mirror in mirrors)
         {
-            bool first = true;
             var fileCounts = new Dictionary<string, int>();
-            foreach (string rawLine in File.ReadLines(mirror, Encoding.UTF8))
+            foreach ((string line, JsonObject? rec) in Jsonl.ReadRecords(mirror, skipFirst: true))
             {
-                string line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
-                if (line.Length == 0) continue;
-                if (first) { first = false; continue; } // header
-                JsonObject? rec;
-                try { rec = JsonNode.Parse(line) as JsonObject; } catch { continue; }
                 if (rec?["claudinine"]?["mergedFromFork"] is not null)
                 {
                     forkMerged = true;
