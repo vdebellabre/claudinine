@@ -76,8 +76,8 @@ public sealed class ForkHealTests : IDisposable
 
         // The fork's mirror holds everything the parent mirror held — including
         // the interior records chain-collapse removed, which exist NOWHERE else.
-        var parentUuids = MirrorUuids(MirrorFile.PathFor(parentPath));
-        var forkUuids = MirrorUuids(MirrorFile.PathFor(forkPath));
+        var parentUuids = MirrorUuids(MirrorLocator.PathFor(parentPath));
+        var forkUuids = MirrorUuids(MirrorLocator.PathFor(forkPath));
         Assert.True(parentUuids.IsSubsetOf(forkUuids));
         var transcriptUuids = File.ReadAllLines(forkPath)
             .Select(l => ((JsonObject)JsonNode.Parse(l)!)["uuid"]?.GetValue<string>())
@@ -85,7 +85,7 @@ public sealed class ForkHealTests : IDisposable
         Assert.Contains(parentUuids, u => !transcriptUuids.Contains(u));
 
         // Merged records read as the fork's own history.
-        foreach (string line in File.ReadAllLines(MirrorFile.PathFor(forkPath)).Skip(1))
+        foreach (string line in File.ReadAllLines(MirrorLocator.PathFor(forkPath)).Skip(1))
         {
             var node = (JsonObject)JsonNode.Parse(line)!;
             if (node["sessionId"] is not null)
@@ -94,14 +94,14 @@ public sealed class ForkHealTests : IDisposable
 
         // Parent transcript and mirror untouched.
         Assert.Contains("claudinine get test-session", File.ReadAllText(parentPath));
-        Assert.True(File.Exists(MirrorFile.PathFor(parentPath)));
+        Assert.True(File.Exists(MirrorLocator.PathFor(parentPath)));
     }
 
     [Fact]
     public void MissingParentMirrorLeavesDigestsUntouched()
     {
         string forkPath = BuildForkedSession(out string parentPath);
-        File.Delete(MirrorFile.PathFor(parentPath));
+        File.Delete(MirrorLocator.PathFor(parentPath));
 
         Compactor.Run(forkPath);
 
@@ -117,12 +117,12 @@ public sealed class ForkHealTests : IDisposable
         string forkPath = BuildForkedSession(out _);
         Compactor.Run(forkPath);
         string afterFirst = File.ReadAllText(forkPath);
-        string mirrorAfterFirst = File.ReadAllText(MirrorFile.PathFor(forkPath));
+        string mirrorAfterFirst = File.ReadAllText(MirrorLocator.PathFor(forkPath));
 
         Compactor.Run(forkPath);
 
         Assert.Equal(afterFirst, File.ReadAllText(forkPath));
-        Assert.Equal(mirrorAfterFirst, File.ReadAllText(MirrorFile.PathFor(forkPath)));
+        Assert.Equal(mirrorAfterFirst, File.ReadAllText(MirrorLocator.PathFor(forkPath)));
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public sealed class ForkHealTests : IDisposable
         Assert.All(transcript.Records, r => Assert.Null(r.Replacement));
         Assert.True(transcript.TryRewrite());
         Assert.Contains("11111111-0000-0000-0000-000000000001",
-            MirrorUuids(MirrorFile.PathFor(path)));
+            MirrorUuids(MirrorLocator.PathFor(path)));
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public sealed class ForkHealTests : IDisposable
         Compactor.Run(path);
 
         Assert.Contains("claudinine get test-session", File.ReadAllText(path));
-        var forkUuids = MirrorUuids(MirrorFile.PathFor(path));
+        var forkUuids = MirrorUuids(MirrorLocator.PathFor(path));
         Assert.DoesNotContain("11111111-0000-0000-0000-000000000001", forkUuids);
     }
 
@@ -240,7 +240,7 @@ public sealed class ForkHealTests : IDisposable
 
     private void WriteMirror(string sessionId, params (string Uuid, string Content)[] records)
     {
-        string dir = MirrorFile.MirrorsDirectory();
+        string dir = MirrorLocator.MirrorsDirectory();
         Directory.CreateDirectory(dir);
         var lines = new List<string>
         {

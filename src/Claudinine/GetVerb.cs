@@ -53,10 +53,10 @@ internal static class GetVerb
             return 1;
         }
 
-        List<string> mirrorPaths = MirrorFile.FindSessionMirrors(session);
+        List<string> mirrorPaths = MirrorLocator.FindSessionMirrors(session);
         if (mirrorPaths.Count == 0)
         {
-            IReadOnlyList<string> searched = MirrorFile.SearchDirectories();
+            IReadOnlyList<string> searched = MirrorLocator.SearchDirectories();
             Console.Error.WriteLine(
                 $"no mirror found for session '{session}' (searched: " +
                 (searched.Count == 0 ? "no mirror directory exists" : string.Join("; ", searched)) + ")");

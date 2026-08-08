@@ -34,10 +34,10 @@ internal static class RestoreVerb
             return 1;
         }
 
-        List<string> mirrors = MirrorFile.FindSessionMirrors(args[0]);
+        List<string> mirrors = MirrorLocator.FindSessionMirrors(args[0]);
         if (mirrors.Count == 0)
         {
-            IReadOnlyList<string> searched = MirrorFile.SearchDirectories();
+            IReadOnlyList<string> searched = MirrorLocator.SearchDirectories();
             Console.Error.WriteLine(
                 $"no mirror found for session '{args[0]}' (searched: " +
                 (searched.Count == 0 ? "no mirror directory exists" : string.Join("; ", searched)) + ")");
@@ -63,7 +63,7 @@ internal static class RestoreVerb
         // The re-enable half of `-on` comes first: even if the restore below
         // fails, compaction being back on is what the user asked for.
         if (compactionOn)
-            MirrorFile.RemoveSkipMarkers(sid);
+            SkipMarkers.Remove(sid);
 
         // A crashed or frozen session may hold records the mirror has not seen
         // yet (its final turn, or turns written while compaction was off).
@@ -100,7 +100,7 @@ internal static class RestoreVerb
         }
 
         if (!compactionOn)
-            MirrorFile.WriteSkipMarkers(sid, transcriptPath);
+            SkipMarkers.Write(sid, transcriptPath);
 
         Console.WriteLine($"restored {restored.Count} records to {transcriptPath}");
         Console.WriteLine(compactionOn

@@ -10,124 +10,11 @@ namespace Claudinine.Mirror;
 /// compacted. Append-only, idempotent by uuid — its tail IS the progress marker,
 /// so steady-state appends, crash recovery and SessionEnd all share one algorithm.
 /// Serves restore, retrieval (stubs carry origUuid) and savings measurement.
+/// Path resolution lives in <see cref="MirrorLocator"/>; the freeze-marker
+/// lifecycle in <see cref="SkipMarkers"/>.
 /// </summary>
 internal static class MirrorFile
 {
-    private const string HeaderVersion = "1";
-
-    public static string MirrorsDirectory()
-    {
-        string root = Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA")
-            ?? System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claudinine");
-        return System.IO.Path.Combine(root, "mirrors");
-    }
-
-    public static string PathFor(string transcriptPath) =>
-        System.IO.Path.Combine(
-            MirrorsDirectory(),
-            System.IO.Path.GetFileNameWithoutExtension(transcriptPath) + ".jsonl");
-
-    /// <summary>
-    /// Directories to probe when resolving a mirror for READING. Writes always use
-    /// MirrorsDirectory() — hooks have CLAUDE_PLUGIN_DATA set. But `get` typically
-    /// runs from the session's Bash tool, which does NOT inherit that variable
-    /// (verified live 2026-08-08), and the app hands a different data dir to each
-    /// install context (claudinine-inline for desktop, claudinine-&lt;marketplace&gt;
-    /// for CLI), so a read must look everywhere mirrors are known to land.
-    /// </summary>
-    public static IReadOnlyList<string> SearchDirectories() =>
-        SearchDirectories(
-            Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"),
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
-
-    internal static IReadOnlyList<string> SearchDirectories(string? pluginData, string home)
-    {
-        var dirs = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        void Add(string dir)
-        {
-            if (Directory.Exists(dir) && seen.Add(System.IO.Path.GetFullPath(dir)))
-                dirs.Add(dir);
-        }
-
-        if (!string.IsNullOrEmpty(pluginData))
-            Add(System.IO.Path.Combine(pluginData, "mirrors"));
-        string dataRoot = System.IO.Path.Combine(home, ".claude", "plugins", "data");
-        if (Directory.Exists(dataRoot))
-        {
-            foreach (string plugin in Directory.EnumerateDirectories(dataRoot, "claudinine-*"))
-                Add(System.IO.Path.Combine(plugin, "mirrors"));
-        }
-        Add(System.IO.Path.Combine(home, ".claudinine", "mirrors"));
-        return dirs;
-    }
-
-    /// <summary>
-    /// Match a session's mirror files by id prefix across every known mirror
-    /// directory. The same session may have a mirror in several dirs
-    /// (cross-context resume) — all of them are returned; a prefix that resolves
-    /// to more than one distinct session id matches nothing.
-    /// </summary>
-    public static List<string> FindSessionMirrors(string session) =>
-        SessionResolver.ResolveByIdOrUniquePrefix(SearchDirectories(), session);
-
-    // ---- skip markers: `restore-compaction-off` freezes a session ----
-    //
-    // Marker = `<sid>.skip` next to the session's mirror(s). File presence is the
-    // whole state: hooks that see it keep mirroring but never compact, so an
-    // explicit restore is never silently undone. Written next to every mirror the
-    // session has (plus the write dir) because the verb typically runs from a
-    // shell WITHOUT CLAUDE_PLUGIN_DATA while hooks probe all known dirs anyway.
-
-    /// <summary>True when any known mirror dir holds a skip marker for this session.</summary>
-    public static bool IsCompactionSkipped(string sessionId)
-    {
-        foreach (string dir in SearchDirectories())
-        {
-            if (File.Exists(System.IO.Path.Combine(dir, sessionId + ".skip")))
-                return true;
-        }
-        return false;
-    }
-
-    public static void WriteSkipMarkers(string sessionId, string transcriptPath)
-    {
-        string content = HeaderLine("skipCompactionOf", System.IO.Path.GetFullPath(transcriptPath));
-        var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string mirror in FindSessionMirrors(sessionId))
-            dirs.Add(System.IO.Path.GetDirectoryName(mirror)!);
-        Directory.CreateDirectory(MirrorsDirectory());
-        dirs.Add(MirrorsDirectory());
-        foreach (string dir in dirs)
-        {
-            try
-            {
-                File.WriteAllText(System.IO.Path.Combine(dir, sessionId + ".skip"),
-                    content + "\n", new UTF8Encoding(false));
-            }
-            catch
-            {
-                // one unwritable dir must not block the others
-            }
-        }
-    }
-
-    /// <summary>One serialized claudinine bookkeeping line (mirror header, skip marker, fork separator).</summary>
-    private static string HeaderLine(string field, string value) =>
-        new JsonObject
-        {
-            ["claudinine"] = new JsonObject { ["v"] = HeaderVersion, [field] = value },
-        }.ToJsonString(Json.Compact);
-
-    public static void RemoveSkipMarkers(string sessionId)
-    {
-        foreach (string dir in SearchDirectories())
-        {
-            try { File.Delete(System.IO.Path.Combine(dir, sessionId + ".skip")); } catch { }
-        }
-    }
-
     /// <summary>
     /// Append every transcript record not yet mirrored. Must succeed BEFORE any
     /// compaction (mirror-first invariant): nothing is ever stubbed that is not
@@ -140,7 +27,7 @@ internal static class MirrorFile
     {
         try
         {
-            mirrorPath ??= PathFor(transcript.Path);
+            mirrorPath ??= MirrorLocator.PathFor(transcript.Path);
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(mirrorPath)!);
 
             // Identity: uuid when present; identical uuid-less lines (repeated
@@ -160,7 +47,7 @@ internal static class MirrorFile
 
             var toAppend = new List<string>();
             if (!hasHeader)
-                toAppend.Add(HeaderLine("mirrorOf", System.IO.Path.GetFullPath(transcript.Path)));
+                toAppend.Add(MirrorFormat.Line("mirrorOf", System.IO.Path.GetFullPath(transcript.Path)));
             var transcriptCounts = new Dictionary<string, int>();
             foreach (TranscriptRecord rec in transcript.Records)
             {
@@ -209,12 +96,12 @@ internal static class MirrorFile
     {
         try
         {
-            string mirrorPath = PathFor(transcript.Path);
-            List<string> sources = ParentMirrorFiles(parentSessionId, mirrorPath);
+            string mirrorPath = MirrorLocator.PathFor(transcript.Path);
+            List<string> sources = MirrorLocator.ParentMirrorFiles(parentSessionId, mirrorPath);
             if (sources.Count == 0)
                 return false;
 
-            Directory.CreateDirectory(MirrorsDirectory());
+            Directory.CreateDirectory(MirrorLocator.MirrorsDirectory());
             var seen = new HashSet<string>();
             bool hasHeader = false;
             if (File.Exists(mirrorPath))
@@ -230,13 +117,13 @@ internal static class MirrorFile
             string targetSid = System.IO.Path.GetFileNameWithoutExtension(transcript.Path);
             var toAppend = new List<string>();
             if (!hasHeader)
-                toAppend.Add(HeaderLine("mirrorOf", System.IO.Path.GetFullPath(transcript.Path)));
+                toAppend.Add(MirrorFormat.Line("mirrorOf", System.IO.Path.GetFullPath(transcript.Path)));
             // Merged records land at the mirror's END although they are
             // chronologically the session's OLDEST — this separator is how a
             // restore knows the suffix needs a chain-aware reorder. Mirrors
             // without it are guaranteed to be in original file order, app
             // write quirks included, and must never be reordered.
-            toAppend.Add(HeaderLine("mergedFromFork", parentSessionId));
+            toAppend.Add(MirrorFormat.Line("mergedFromFork", parentSessionId));
             int preludeLines = toAppend.Count;
             foreach (string source in sources)
             {
@@ -276,7 +163,8 @@ internal static class MirrorFile
     {
         try
         {
-            List<string> sources = ParentMirrorFiles(sessionId, PathFor(transcript.Path));
+            List<string> sources = MirrorLocator.ParentMirrorFiles(
+                sessionId, MirrorLocator.PathFor(transcript.Path));
             if (sources.Count == 0)
                 return null;
             var uuids = new HashSet<string>();
@@ -296,38 +184,25 @@ internal static class MirrorFile
         }
     }
 
-    /// <summary>A session's mirror files across all known dirs, never our own.</summary>
-    private static List<string> ParentMirrorFiles(string sessionId, string ownMirrorPath)
-    {
-        var sources = new List<string>();
-        foreach (string dir in SearchDirectories())
-        {
-            string candidate = System.IO.Path.Combine(dir, sessionId + ".jsonl");
-            if (File.Exists(candidate)
-                && !string.Equals(System.IO.Path.GetFullPath(candidate),
-                    System.IO.Path.GetFullPath(ownMirrorPath), StringComparison.OrdinalIgnoreCase))
-            {
-                sources.Add(candidate);
-            }
-        }
-        return sources;
-    }
-
     /// <summary>
-    /// Delete mirrors whose transcript no longer exists (the app ages transcripts
-    /// out itself). Run at SessionStart; failures are ignored record by record.
-    /// Sweeps every known mirror dir, not just this context's write dir — skip
-    /// markers fan out to all of them, and an uninstalled context's hooks never
-    /// run again to clean up their own.
+    /// Delete mirrors (and skip markers, via <see cref="SkipMarkers.CollectGarbage"/>)
+    /// whose transcript no longer exists — the app ages transcripts out itself.
+    /// Run at SessionStart; failures are ignored file by file. Sweeps every known
+    /// mirror dir, not just this context's write dir: skip markers fan out to all
+    /// of them, and an uninstalled context's hooks never run again to clean up
+    /// their own.
     /// </summary>
-    public static void CollectGarbage() => CollectGarbage(SearchDirectories());
+    public static void CollectGarbage() => CollectGarbage(MirrorLocator.SearchDirectories());
 
     /// <summary>Explicit-dirs seam, same reason as SearchDirectories: tests must
     /// never sweep (and delete from) the developer's real mirror dirs.</summary>
     internal static void CollectGarbage(IReadOnlyList<string> dirs)
     {
         foreach (string dir in dirs)
+        {
             CollectGarbage(dir);
+            SkipMarkers.CollectGarbage(dir);
+        }
     }
 
     private static void CollectGarbage(string dir)
@@ -346,22 +221,6 @@ internal static class MirrorFile
             catch
             {
                 // Unreadable mirror: leave it for a human.
-            }
-        }
-        foreach (string marker in Directory.EnumerateFiles(dir, "*.skip"))
-        {
-            try
-            {
-                string? line = File.ReadLines(marker, Encoding.UTF8).FirstOrDefault();
-                if (line is null) continue;
-                if (JsonNode.Parse(line) is not JsonObject header) continue;
-                string? target = header["claudinine"]?["skipCompactionOf"].GetString();
-                if (target is not null && !File.Exists(target))
-                    File.Delete(marker);
-            }
-            catch
-            {
-                // Unreadable marker: leave it for a human.
             }
         }
     }

@@ -196,7 +196,7 @@ public sealed class GetVerbTests : IDisposable
         WriteMirror(Session, (Uuid1, "one"));
         WriteMirror(sibling, (Uuid2, "two"));
 
-        Assert.Empty(MirrorFile.FindSessionMirrors("77777777-aaaa"));
+        Assert.Empty(MirrorLocator.FindSessionMirrors("77777777-aaaa"));
 
         (int exit, _, string err) = Run("77777777-aaaa");
         Assert.Equal(1, exit);

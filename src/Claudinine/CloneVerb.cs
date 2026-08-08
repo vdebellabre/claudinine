@@ -33,7 +33,7 @@ internal static class CloneVerb
     /// Home is a parameter so tests can point the whole operation at a temp profile:
     /// SpecialFolder.UserProfile reads the registry on Windows and ignores the
     /// USERPROFILE variable, so an env override cannot redirect it. Same reason
-    /// MirrorFile.SearchDirectories takes its home explicitly.
+    /// MirrorLocator.SearchDirectories takes its home explicitly.
     /// </summary>
     internal static int Run(string[] args, string home)
     {
@@ -242,7 +242,7 @@ internal static class CloneVerb
     /// <summary>The source session's mirror, from the first search dir that has one.</summary>
     private static string? FindSourceMirror(string sourceId, string home)
     {
-        foreach (string dir in MirrorFile.SearchDirectories(
+        foreach (string dir in MirrorLocator.SearchDirectories(
             Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"), home))
         {
             string candidate = Path.Combine(dir, sourceId + ".jsonl");

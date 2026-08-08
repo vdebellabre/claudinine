@@ -150,7 +150,7 @@ public sealed class ChainCollapseTests : IDisposable
         Compactor.Run(path);
 
         // Every removed output is in the mirror, addressable by the digest's refs.
-        string mirror = File.ReadAllText(Claudinine.Mirror.MirrorFile.PathFor(path));
+        string mirror = File.ReadAllText(Claudinine.Mirror.MirrorLocator.PathFor(path));
         for (int i = 0; i < 5; i++)
             Assert.Contains(Output + i, mirror);
 

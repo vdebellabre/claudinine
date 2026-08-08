@@ -101,7 +101,7 @@ public sealed class CompactorTests : IDisposable
 
         Compactor.Run(path);
 
-        string mirrorPath = MirrorFile.PathFor(path);
+        string mirrorPath = MirrorLocator.PathFor(path);
         Assert.True(File.Exists(mirrorPath));
         string[] mirrorLines = File.ReadAllLines(mirrorPath);
 
@@ -116,9 +116,9 @@ public sealed class CompactorTests : IDisposable
     {
         string path = EightIdenticalReads(out _).WriteTo(_dir);
         Compactor.Run(path);
-        string mirrorAfterFirst = File.ReadAllText(MirrorFile.PathFor(path));
+        string mirrorAfterFirst = File.ReadAllText(MirrorLocator.PathFor(path));
         Compactor.Run(path); // stubs now in transcript; marker records must be skipped
-        Assert.Equal(mirrorAfterFirst, File.ReadAllText(MirrorFile.PathFor(path)));
+        Assert.Equal(mirrorAfterFirst, File.ReadAllText(MirrorLocator.PathFor(path)));
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public sealed class CompactorTests : IDisposable
         string before = File.ReadAllText(path);
         Compactor.Run(path);
         Assert.Equal(before, File.ReadAllText(path));
-        Assert.False(File.Exists(MirrorFile.PathFor(path))); // mirror untouched too
+        Assert.False(File.Exists(MirrorLocator.PathFor(path))); // mirror untouched too
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public sealed class CompactorTests : IDisposable
 
         Compactor.Run(path);
 
-        string[] mirror = File.ReadAllLines(MirrorFile.PathFor(path));
+        string[] mirror = File.ReadAllLines(MirrorLocator.PathFor(path));
         Assert.Equal(File.ReadAllLines(path).Length, mirror.Length - 1); // header + all records
         Assert.Equal(2, mirror.Count(l => l == queueOp));
     }
@@ -250,7 +250,7 @@ public sealed class CompactorTests : IDisposable
         Compactor.Run(path); // collapse + leaf remap
         Compactor.Run(path); // second pass sees the remapped variant
 
-        string[] mirror = File.ReadAllLines(MirrorFile.PathFor(path));
+        string[] mirror = File.ReadAllLines(MirrorLocator.PathFor(path));
         Assert.Equal(originalCount, mirror.Length - 1); // header + originals, nothing more
     }
 
@@ -259,7 +259,7 @@ public sealed class CompactorTests : IDisposable
     {
         string path = EightIdenticalReads(out _).WriteTo(_dir);
         Compactor.Run(path);
-        string mirrorPath = MirrorFile.PathFor(path);
+        string mirrorPath = MirrorLocator.PathFor(path);
         Assert.True(File.Exists(mirrorPath));
 
         File.Delete(path);
@@ -300,7 +300,7 @@ public sealed class CompactorTests : IDisposable
         Assert.Equal("", lines[^1]); // trailing newline preserved
         for (int i = 0; i < lines.Length - 1; i++)
             Assert.EndsWith("\r", lines[i]); // replaced AND untouched records stay CRLF
-        Assert.DoesNotContain('\r', File.ReadAllText(MirrorFile.PathFor(path)));
+        Assert.DoesNotContain('\r', File.ReadAllText(MirrorLocator.PathFor(path)));
 
         Compactor.Run(path); // idempotent on its own CRLF output
         Assert.Equal(text, File.ReadAllText(path));

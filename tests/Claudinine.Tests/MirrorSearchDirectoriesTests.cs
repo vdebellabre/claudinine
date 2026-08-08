@@ -33,7 +33,7 @@ public sealed class MirrorSearchDirectoriesTests : IDisposable
         string cli = CreateMirrorsDir(".claude", "plugins", "data", "claudinine-claudinine");
         string fallback = CreateMirrorsDir(".claudinine");
 
-        var dirs = MirrorFile.SearchDirectories(Path.Combine(_home, "env-data"), _home);
+        var dirs = MirrorLocator.SearchDirectories(Path.Combine(_home, "env-data"), _home);
 
         Assert.Equal(envDir, dirs[0]);
         Assert.Equal(fallback, dirs[^1]);
@@ -49,7 +49,7 @@ public sealed class MirrorSearchDirectoriesTests : IDisposable
         CreateMirrorsDir(".claude", "plugins", "data", "playwright-inline");
         string ours = CreateMirrorsDir(".claude", "plugins", "data", "claudinine-inline");
 
-        var dirs = MirrorFile.SearchDirectories(null, _home);
+        var dirs = MirrorLocator.SearchDirectories(null, _home);
 
         Assert.Equal([ours], dirs);
     }
@@ -59,7 +59,7 @@ public sealed class MirrorSearchDirectoriesTests : IDisposable
     {
         string inline_ = CreateMirrorsDir(".claude", "plugins", "data", "claudinine-inline");
 
-        var dirs = MirrorFile.SearchDirectories(
+        var dirs = MirrorLocator.SearchDirectories(
             Path.Combine(_home, ".claude", "plugins", "data", "claudinine-inline"), _home);
 
         Assert.Equal([inline_], dirs);
@@ -68,7 +68,7 @@ public sealed class MirrorSearchDirectoriesTests : IDisposable
     [Fact]
     public void SkipsMissingDirectories()
     {
-        var dirs = MirrorFile.SearchDirectories(Path.Combine(_home, "nope"), _home);
+        var dirs = MirrorLocator.SearchDirectories(Path.Combine(_home, "nope"), _home);
 
         Assert.Empty(dirs);
     }

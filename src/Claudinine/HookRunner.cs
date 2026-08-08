@@ -22,7 +22,7 @@ internal static class HookRunner
             // fresh but is never compacted — an explicit restore must not be
             // silently undone. Global housekeeping (GC) still runs.
             string sid = Path.GetFileNameWithoutExtension(input.TranscriptPath);
-            bool skipped = MirrorFile.IsCompactionSkipped(sid);
+            bool skipped = SkipMarkers.IsCompactionSkipped(sid);
 
             // Every event runs the same idempotent pass; they differ only in
             // which part of the file still has work in it. UserPromptSubmit is
