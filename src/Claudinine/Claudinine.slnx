@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="../../tests/Claudinine.Tests/Claudinine.Tests.csproj" />
+  <Project Path="Claudinine.csproj" />
+</Solution>
