@@ -17,9 +17,16 @@ $sdk = Get-ChildItem $sdkRoot | Sort-Object Name -Descending | Select-Object -Fi
 $env:LIB = "$($vc.FullName)\lib\onecore\x64;$($sdk.FullName)\um\x64;$($sdk.FullName)\ucrt\x64"
 $env:PATH = "$($vc.FullName)\bin\Hostx64\x64;$env:PATH"
 
-# Target the csproj, not the directory: the directory resolves to
-# Claudinine.slnx, which also carries the (exe-type) test project — NETSDK1151.
-dotnet publish "$repo/src/Claudinine/Claudinine.csproj" -c Release -r win-x64 -o "$repo/publish/win-x64" --nologo -p:IlcUseEnvironmentalTools=true
+# Run from src/: global.json lives there and is found by walking up from the
+# working directory. Target the csproj, not the directory — the directory
+# resolves to Claudinine.slnx, which also carries the (exe-type) test project,
+# and a non-self-contained exe cannot reference this self-contained one
+# (NETSDK1151). -o stays absolute, so the binaries land at the repo root.
+Push-Location "$repo/src"
+try {
+    dotnet publish Claudinine/Claudinine.csproj -c Release -r win-x64 -o "$repo/publish/win-x64" --nologo -p:IlcUseEnvironmentalTools=true
+}
+finally { Pop-Location }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & "$repo/publish/win-x64/claudinine.exe" version

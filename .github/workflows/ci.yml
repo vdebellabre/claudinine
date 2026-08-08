@@ -28,8 +28,12 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # Every dotnet command runs from src/: global.json lives there (SDK + the
+      # Microsoft.Testing.Platform runner opt-in) and is discovered by walking up
+      # from the working directory, not from the project file.
       - name: Test
-        run: dotnet test src/Claudinine.Tests/Claudinine.Tests.csproj
+        working-directory: src
+        run: dotnet test Claudinine.Tests/Claudinine.Tests.csproj
 
       # Native AOT cannot cross-compile across OSes: this matrix IS the
       # release build. Publishing on every push is the early warning for
@@ -38,8 +42,11 @@ jobs:
       # Claudinine.slnx, which also carries the test project. That project is an
       # exe (Microsoft.Testing.Platform) and a non-self-contained exe cannot
       # reference this self-contained one — NETSDK1151.
+      # -o is relative to working-directory, so ../ keeps the binaries at the repo
+      # root where the smoke tests and upload-artifact below expect them.
       - name: Publish (Native AOT)
-        run: dotnet publish src/Claudinine/Claudinine.csproj -c Release -r ${{ matrix.rid }} -o publish/${{ matrix.rid }}
+        working-directory: src
+        run: dotnet publish Claudinine/Claudinine.csproj -c Release -r ${{ matrix.rid }} -o ../publish/${{ matrix.rid }}
 
       - name: Smoke test
         if: ${{ !startsWith(matrix.rid, 'win-') }}
