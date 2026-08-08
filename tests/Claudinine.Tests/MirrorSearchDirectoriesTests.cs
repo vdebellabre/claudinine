@@ -1,5 +1,7 @@
 using Claudinine.Mirror;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -25,8 +27,8 @@ public sealed class MirrorSearchDirectoriesTests : IDisposable
         return dir;
     }
 
-    [Fact]
-    public void EnvVarDirComesFirstThenDataDirsThenFallback()
+    [Test]
+    public async Task EnvVarDirComesFirstThenDataDirsThenFallback()
     {
         string envDir = CreateMirrorsDir("env-data");
         string inline_ = CreateMirrorsDir(".claude", "plugins", "data", "claudinine-inline");
@@ -35,15 +37,15 @@ public sealed class MirrorSearchDirectoriesTests : IDisposable
 
         var dirs = MirrorLocator.SearchDirectories(Path.Combine(_home, "env-data"), _home);
 
-        Assert.Equal(envDir, dirs[0]);
-        Assert.Equal(fallback, dirs[^1]);
-        Assert.Equal(4, dirs.Count);
-        Assert.Contains(inline_, dirs);
-        Assert.Contains(cli, dirs);
+        await Assert.That(dirs[0]).IsEqualTo(envDir);
+        await Assert.That(dirs[^1]).IsEqualTo(fallback);
+        await Assert.That(dirs.Count).IsEqualTo(4);
+        await Assert.That(dirs).Contains(inline_);
+        await Assert.That(dirs).Contains(cli);
     }
 
-    [Fact]
-    public void SkipsOtherPluginsDataDirs()
+    [Test]
+    public async Task SkipsOtherPluginsDataDirs()
     {
         CreateMirrorsDir(".claude", "plugins", "data", "cozempic-inline");
         CreateMirrorsDir(".claude", "plugins", "data", "playwright-inline");
@@ -51,25 +53,25 @@ public sealed class MirrorSearchDirectoriesTests : IDisposable
 
         var dirs = MirrorLocator.SearchDirectories(null, _home);
 
-        Assert.Equal([ours], dirs);
+        await Assert.That(dirs).IsEquivalentTo([ours]);
     }
 
-    [Fact]
-    public void DeduplicatesEnvVarPointingIntoDataRoot()
+    [Test]
+    public async Task DeduplicatesEnvVarPointingIntoDataRoot()
     {
         string inline_ = CreateMirrorsDir(".claude", "plugins", "data", "claudinine-inline");
 
         var dirs = MirrorLocator.SearchDirectories(
             Path.Combine(_home, ".claude", "plugins", "data", "claudinine-inline"), _home);
 
-        Assert.Equal([inline_], dirs);
+        await Assert.That(dirs).IsEquivalentTo([inline_]);
     }
 
-    [Fact]
-    public void SkipsMissingDirectories()
+    [Test]
+    public async Task SkipsMissingDirectories()
     {
         var dirs = MirrorLocator.SearchDirectories(Path.Combine(_home, "nope"), _home);
 
-        Assert.Empty(dirs);
+        await Assert.That(dirs).IsEmpty();
     }
 }

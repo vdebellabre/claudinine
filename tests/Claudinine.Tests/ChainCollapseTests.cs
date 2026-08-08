@@ -1,7 +1,9 @@
 using System.Text.Json.Nodes;
 using Claudinine.Rules;
 using Claudinine.Transcript;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -44,8 +46,8 @@ public sealed class ChainCollapseTests : IDisposable
         return b.WriteTo(_dir);
     }
 
-    [Fact]
-    public void AgedMultiCallTurnCollapsesToAnchorPair()
+    [Test]
+    public async Task AgedMultiCallTurnCollapsesToAnchorPair()
     {
         string path = BuildCollapsibleSession(out var ids);
         int linesBefore = File.ReadAllLines(path).Length;
@@ -53,33 +55,33 @@ public sealed class ChainCollapseTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.True(records.Length < linesBefore); // records were actually removed
+        await Assert.That(records.Length < linesBefore).IsTrue(); // records were actually removed
 
         // Anchor pair survives with real ids; calls 1..4 are gone as records.
         var remainingUses = records.SelectMany(r =>
             (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>()
                 .Where(x => x["type"]?.GetValue<string>() == "tool_use")
                 .Select(x => x["id"]!.GetValue<string>()) ?? []).ToList();
-        Assert.Contains(ids[0], remainingUses);
+        await Assert.That(remainingUses).Contains(ids[0]);
         foreach (string id in ids[1..])
-            Assert.DoesNotContain(id, remainingUses);
+            await Assert.That(remainingUses).DoesNotContain(id);
 
         // The carrier holds the digest: header, one [ref] line per call, notes verbatim.
         string carrier = records.SelectMany(r =>
             (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
             .Single(x => x["tool_use_id"]?.GetValue<string>() == ids[0])["content"]!
             .GetValue<string>();
-        Assert.StartsWith("[claudinine: this turn originally ran 5 separate tool calls", carrier);
-        Assert.Contains("claudinine get test-session --ref", carrier);
-        Assert.Contains("REPORT of past actions", carrier);
-        Assert.Equal(5, carrier.Split("] Bash(").Length - 1); // one preview line per call
-        Assert.Contains("(note) note after call 2", carrier);
-        Assert.Contains("final answer: it was DNS",
-            string.Join("\n", records.Select(r => r.ToJsonString()))); // trailing prose kept as record
+        await Assert.That(carrier).StartsWith("[claudinine: this turn originally ran 5 separate tool calls");
+        await Assert.That(carrier).Contains("claudinine get test-session --ref");
+        await Assert.That(carrier).Contains("REPORT of past actions");
+        await Assert.That(carrier.Split("] Bash(").Length - 1).IsEqualTo(5); // one preview line per call
+        await Assert.That(carrier).Contains("(note) note after call 2");
+        await Assert.That(string.Join("\n", records.Select(r => r.ToJsonString())))
+            .Contains("final answer: it was DNS"); // trailing prose kept as record
     }
 
-    [Fact]
-    public void ParentChainIsRebuiltOverSurvivors()
+    [Test]
+    public async Task ParentChainIsRebuiltOverSurvivors()
     {
         string path = BuildCollapsibleSession(out _);
         Compactor.Run(path);
@@ -93,25 +95,25 @@ public sealed class ChainCollapseTests : IDisposable
         {
             string? parent = r["parentUuid"]?.GetValue<string>();
             if (parent is not null)
-                Assert.Contains(parent, seen); // every parent exists EARLIER in the file
+                await Assert.That(seen).Contains(parent); // every parent exists EARLIER in the file
             if (r["uuid"]?.GetValue<string>() is string u)
                 seen.Add(u);
             pos++;
         }
     }
 
-    [Fact]
-    public void CollapseIsIdempotent()
+    [Test]
+    public async Task CollapseIsIdempotent()
     {
         string path = BuildCollapsibleSession(out _);
         Compactor.Run(path);
         string afterFirst = File.ReadAllText(path);
         Compactor.Run(path);
-        Assert.Equal(afterFirst, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(afterFirst);
     }
 
-    [Fact]
-    public void FreshSettledTurnCollapsesToo()
+    [Test]
+    public async Task FreshSettledTurnCollapsesToo()
     {
         // No age gate by design: the app never re-reads the file mid-session, so
         // even the newest settled turn is fair game — the payout is at next load.
@@ -124,12 +126,12 @@ public sealed class ChainCollapseTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.True(File.ReadAllLines(path).Length < linesBefore);
-        Assert.Contains("this turn originally ran 5 separate tool calls", File.ReadAllText(path));
+        await Assert.That(File.ReadAllLines(path).Length < linesBefore).IsTrue();
+        await Assert.That(File.ReadAllText(path)).Contains("this turn originally ran 5 separate tool calls");
     }
 
-    [Fact]
-    public void SingleCallTurnBelowThresholdIsLeftAlone()
+    [Test]
+    public async Task SingleCallTurnBelowThresholdIsLeftAlone()
     {
         var b = new TranscriptBuilder().UserPrompt("small turn");
         b.BashRead("sed -n '1,5p' a.txt", out _, "short a");
@@ -140,11 +142,11 @@ public sealed class ChainCollapseTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(linesBefore, File.ReadAllLines(path).Length); // nothing removed
+        await Assert.That(File.ReadAllLines(path).Length).IsEqualTo(linesBefore); // nothing removed
     }
 
-    [Fact]
-    public void FullOutputsAreRetrievableFromMirrorAfterCollapse()
+    [Test]
+    public async Task FullOutputsAreRetrievableFromMirrorAfterCollapse()
     {
         string path = BuildCollapsibleSession(out var ids);
         Compactor.Run(path);
@@ -152,7 +154,7 @@ public sealed class ChainCollapseTests : IDisposable
         // Every removed output is in the mirror, addressable by the digest's refs.
         string mirror = File.ReadAllText(Claudinine.Mirror.MirrorLocator.PathFor(path));
         for (int i = 0; i < 5; i++)
-            Assert.Contains(Output + i, mirror);
+            await Assert.That(mirror).Contains(Output + i);
 
         JsonObject[] records = Load(path);
         string carrier = records.SelectMany(r =>
@@ -163,13 +165,13 @@ public sealed class ChainCollapseTests : IDisposable
         var refs = System.Text.RegularExpressions.Regex.Matches(carrier, @"^\[([0-9a-f-]{8})\] ",
             System.Text.RegularExpressions.RegexOptions.Multiline)
             .Select(m => m.Groups[1].Value).ToList();
-        Assert.Equal(5, refs.Count);
+        await Assert.That(refs.Count).IsEqualTo(5);
         foreach (string r in refs)
-            Assert.Contains($"\"uuid\":\"{r}", mirror.Replace("\"uuid\": \"", "\"uuid\":\""));
+            await Assert.That(mirror.Replace("\"uuid\": \"", "\"uuid\":\"")).Contains($"\"uuid\":\"{r}");
     }
 
-    [Fact]
-    public void LeafUuidAnchorsAreRemappedNotLeftDangling()
+    [Test]
+    public async Task LeafUuidAnchorsAreRemappedNotLeftDangling()
     {
         // A last-prompt-style record whose leafUuid points INTO the collapsed span.
         var b = new TranscriptBuilder().UserPrompt("investigate");
@@ -190,18 +192,18 @@ public sealed class ChainCollapseTests : IDisposable
         var uuids = records.Select(r => r["uuid"]?.GetValue<string>()).Where(u => u is not null).ToHashSet();
         JsonObject lastPrompt = records.Single(r => r["type"]?.GetValue<string>() == "last-prompt");
         string? leaf = lastPrompt["leafUuid"]?.GetValue<string>();
-        Assert.NotEqual(removedUuid, leaf);      // remapped away from the removed record
-        Assert.True(leaf is null || uuids.Contains(leaf)); // and points at a survivor
+        await Assert.That(leaf).IsNotEqualTo(removedUuid);      // remapped away from the removed record
+        await Assert.That(leaf is null || uuids.Contains(leaf)).IsTrue(); // and points at a survivor
     }
 
     /// <summary>Every surviving parentUuid must resolve to a record EARLIER in the file.</summary>
-    private static void AssertParentsResolveEarlier(JsonObject[] records)
+    private static async Task AssertParentsResolveEarlier(JsonObject[] records)
     {
         var seen = new HashSet<string>();
         foreach (JsonObject r in records)
         {
             if (r["parentUuid"]?.GetValue<string>() is string parent)
-                Assert.Contains(parent, seen);
+                await Assert.That(seen).Contains(parent);
             if (r["uuid"]?.GetValue<string>() is string u)
                 seen.Add(u);
         }
@@ -219,8 +221,8 @@ public sealed class ChainCollapseTests : IDisposable
             .Single(x => x["tool_use_id"]?.GetValue<string>() == toolUseId)["content"]!
             .GetValue<string>();
 
-    [Fact]
-    public void ParallelBatchCollapsesWithInOrderResults()
+    [Test]
+    public async Task ParallelBatchCollapsesWithInOrderResults()
     {
         // Modern batch: consecutive single-use assistant records, then the results.
         var b = new TranscriptBuilder().UserPrompt("run these in parallel");
@@ -236,24 +238,24 @@ public sealed class ChainCollapseTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.True(records.Length < linesBefore);
+        await Assert.That(records.Length < linesBefore).IsTrue();
 
         // Anchor = the batch's FIRST use; batch sibling and the sequential call collapse.
         var remainingUses = RemainingUseIds(records);
-        Assert.Contains(idA, remainingUses);
-        Assert.DoesNotContain(idB, remainingUses);
-        Assert.DoesNotContain(idC, remainingUses);
+        await Assert.That(remainingUses).Contains(idA);
+        await Assert.That(remainingUses).DoesNotContain(idB);
+        await Assert.That(remainingUses).DoesNotContain(idC);
 
         string carrier = CarrierContent(records, idA);
-        Assert.StartsWith("[claudinine: this turn originally ran 3 separate tool calls", carrier);
-        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(carrier,
-            @"^\[[0-9a-f-]{8}\] ", System.Text.RegularExpressions.RegexOptions.Multiline).Count);
+        await Assert.That(carrier).StartsWith("[claudinine: this turn originally ran 3 separate tool calls");
+        await Assert.That(System.Text.RegularExpressions.Regex.Matches(carrier,
+            @"^\[[0-9a-f-]{8}\] ", System.Text.RegularExpressions.RegexOptions.Multiline).Count).IsEqualTo(3);
 
-        AssertParentsResolveEarlier(records);
+        await AssertParentsResolveEarlier(records);
     }
 
-    [Fact]
-    public void ParallelBatchCollapsesWithOutOfOrderResults()
+    [Test]
+    public async Task ParallelBatchCollapsesWithOutOfOrderResults()
     {
         // Results arrive in COMPLETION order, not call order (real specimen: USE:Bash,
         // USE:Glob, RES:Glob, RES:Bash). The anchor must still be the FIRST use's
@@ -270,20 +272,20 @@ public sealed class ChainCollapseTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.True(records.Length < linesBefore);
+        await Assert.That(records.Length < linesBefore).IsTrue();
 
         var remainingUses = RemainingUseIds(records);
-        Assert.Contains(idA, remainingUses);
-        Assert.DoesNotContain(idB, remainingUses);
+        await Assert.That(remainingUses).Contains(idA);
+        await Assert.That(remainingUses).DoesNotContain(idB);
 
         string carrier = CarrierContent(records, idA);
-        Assert.StartsWith("[claudinine: this turn originally ran 2 separate tool calls", carrier);
+        await Assert.That(carrier).StartsWith("[claudinine: this turn originally ran 2 separate tool calls");
 
-        AssertParentsResolveEarlier(records);
+        await AssertParentsResolveEarlier(records);
     }
 
-    [Fact]
-    public void UuidlessRecordsInsideBatchSpanSurviveWithLeafRemapped()
+    [Test]
+    public async Task UuidlessRecordsInsideBatchSpanSurviveWithLeafRemapped()
     {
         // Real specimen: last-prompt/custom-title records interleave INSIDE a batch,
         // between the uses and their results, and last-prompt's leafUuid can point
@@ -301,18 +303,18 @@ public sealed class ChainCollapseTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.DoesNotContain(idB, RemainingUseIds(records)); // collapse did happen
+        await Assert.That(RemainingUseIds(records)).DoesNotContain(idB); // collapse did happen
 
-        Assert.Single(records, r => r["type"]?.GetValue<string>() == "custom-title");
+        await Assert.That(records).HasSingleItem(r => r["type"]?.GetValue<string>() == "custom-title");
         JsonObject lastPrompt = records.Single(r => r["type"]?.GetValue<string>() == "last-prompt");
         string? leaf = lastPrompt["leafUuid"]?.GetValue<string>();
         var uuids = records.Select(r => r["uuid"]?.GetValue<string>()).Where(u => u is not null).ToHashSet();
-        Assert.NotEqual(uuidB, leaf);
-        Assert.True(leaf is null || uuids.Contains(leaf));
+        await Assert.That(leaf).IsNotEqualTo(uuidB);
+        await Assert.That(leaf is null || uuids.Contains(leaf)).IsTrue();
     }
 
-    [Fact]
-    public void InterruptedTurnEndingAtResultIsSkippedButEarlierTurnsStillCollapse()
+    [Test]
+    public async Task InterruptedTurnEndingAtResultIsSkippedButEarlierTurnsStillCollapse()
     {
         // The file's final record must never be removed: TryRewrite would abort the
         // WHOLE rewrite, silently discarding every other rule's work. The rule must
@@ -331,17 +333,17 @@ public sealed class ChainCollapseTests : IDisposable
 
         JsonObject[] records = Load(path);
         // Turn 1 collapsed — the rewrite as a whole landed…
-        Assert.Contains("this turn originally ran 3 separate tool calls",
-            string.Join("\n", records.Select(r => r.ToJsonString())));
+        await Assert.That(string.Join("\n", records.Select(r => r.ToJsonString())))
+            .Contains("this turn originally ran 3 separate tool calls");
         // …while the interrupted turn is intact, tail byte-identical.
         var remainingUses = RemainingUseIds(records);
-        Assert.Contains(keptA, remainingUses);
-        Assert.Contains(keptB, remainingUses);
-        Assert.Equal(lastLineBefore, File.ReadAllLines(path)[^1]);
+        await Assert.That(remainingUses).Contains(keptA);
+        await Assert.That(remainingUses).Contains(keptB);
+        await Assert.That(File.ReadAllLines(path)[^1]).IsEqualTo(lastLineBefore);
     }
 
-    [Fact]
-    public void NewUseWhileBatchPartiallyAnsweredAbortsTurn()
+    [Test]
+    public async Task NewUseWhileBatchPartiallyAnsweredAbortsTurn()
     {
         // USE a, USE b, RES a, USE c, RES b, RES c is a shape we don't understand:
         // fail-closed, whole turn untouched.
@@ -358,11 +360,11 @@ public sealed class ChainCollapseTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(before, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
     }
 
-    [Fact]
-    public void SourceToolAssistantUuidNeverDanglesAfterCollapse()
+    [Test]
+    public async Task SourceToolAssistantUuidNeverDanglesAfterCollapse()
     {
         var b = new TranscriptBuilder().UserPrompt("batch");
         b.ToolUse("cmd-a", out string idA, out string uuidA);
@@ -375,17 +377,17 @@ public sealed class ChainCollapseTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.DoesNotContain(idB, RemainingUseIds(records)); // collapse did happen
+        await Assert.That(RemainingUseIds(records)).DoesNotContain(idB); // collapse did happen
         var uuids = records.Select(r => r["uuid"]?.GetValue<string>()).Where(u => u is not null).ToHashSet();
         foreach (JsonObject r in records)
         {
             if (r["sourceToolAssistantUUID"]?.GetValue<string>() is string src)
-                Assert.Contains(src, uuids);
+                await Assert.That(uuids).Contains(src);
         }
     }
 
-    [Fact]
-    public void TurnWithLegacyMultiUseRecordIsSkippedWhole()
+    [Test]
+    public async Task TurnWithLegacyMultiUseRecordIsSkippedWhole()
     {
         // Hand-build an assistant record with TWO tool_use blocks: fail-closed.
         var b = new TranscriptBuilder().UserPrompt("parallel");
@@ -400,6 +402,6 @@ public sealed class ChainCollapseTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(linesBefore, File.ReadAllLines(path).Length); // no removals anywhere in that turn
+        await Assert.That(File.ReadAllLines(path).Length).IsEqualTo(linesBefore); // no removals anywhere in that turn
     }
 }

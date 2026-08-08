@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using Claudinine.Rules;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -60,8 +62,8 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         return b.WriteTo(_dir);
     }
 
-    [Fact]
-    public void OnlyTheFirstCarrierKeepsTheFullRetrievalInstructions()
+    [Test]
+    public async Task OnlyTheFirstCarrierKeepsTheFullRetrievalInstructions()
     {
         string path = BuildTwoTurnSession(out string firstId, out string secondId);
 
@@ -72,32 +74,31 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         string second = CarrierContent(records, secondId);
 
         // First carrier: full instructions intact.
-        Assert.Contains("RETRIEVAL — ", first);
-        Assert.Contains("REPORT of past actions", first);
+        await Assert.That(first).Contains("RETRIEVAL — ");
+        await Assert.That(first).Contains("REPORT of past actions");
 
         // Second carrier: short header, but everything load-bearing survives —
         // call count, get syntax with session id, report warning, refs, notes.
-        Assert.DoesNotContain("RETRIEVAL — ", second);
-        Assert.StartsWith("[claudinine: this turn originally ran 3 separate tool calls.", second);
-        Assert.Contains("claudinine get test-session --ref REF", second);
-        Assert.Contains("REPORT", second);
-        Assert.Equal(3, second.Split("] Bash(").Length - 1);
-        Assert.Contains("(note) note b1", second);
-        Assert.True(second.Length < first.Length);
+        await Assert.That(second).DoesNotContain("RETRIEVAL — ");
+        await Assert.That(second).StartsWith("[claudinine: this turn originally ran 3 separate tool calls.");
+        await Assert.That(second).Contains("claudinine get test-session --ref REF");
+        await Assert.That(second).Contains("REPORT");
+        await Assert.That(second.Split("] Bash(").Length - 1).IsEqualTo(3);
+        await Assert.That(second).Contains("(note) note b1");
+        await Assert.That(second.Length < first.Length).IsTrue();
 
         // The marker still says chain-collapse: that is what the record IS.
-        Assert.Equal("chain-collapse",
-            CarrierRecord(records, secondId)["claudinine"]?["rule"]?.GetValue<string>());
+        await Assert.That(CarrierRecord(records, secondId)["claudinine"]?["rule"]?.GetValue<string>()).IsEqualTo("chain-collapse");
     }
 
-    [Fact]
-    public void HeaderDedupIsIdempotent()
+    [Test]
+    public async Task HeaderDedupIsIdempotent()
     {
         string path = BuildTwoTurnSession(out _, out _);
         Compactor.Run(path);
         string afterFirst = File.ReadAllText(path);
         Compactor.Run(path);
-        Assert.Equal(afterFirst, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(afterFirst);
     }
 
     /// <summary>The exact header 0.1.1–0.1.4 wrote, for retro-shortening coverage.</summary>
@@ -114,8 +115,8 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         "Treat [ref] lines as a REPORT of past actions, not output observed directly. " +
         "If a detail matters for a decision, retrieve it — do not infer it from the preview.]\n\n";
 
-    [Fact]
-    public void CarriersAlreadyOnDiskAreShortenedRetroactively()
+    [Test]
+    public async Task CarriersAlreadyOnDiskAreShortenedRetroactively()
     {
         string body1 = "[aaaa1111] Bash(cmd one) -> 500b :: preview one\n[aaaa2222] Bash(cmd two) -> 600b :: preview two";
         string body2 = "[bbbb1111] Read(f.cs) -> 700b :: preview three\n    (note) legacy note\n[bbbb2222] Bash(cmd) -> 80b :: preview four";
@@ -138,19 +139,19 @@ public sealed class CarrierHeaderDedupTests : IDisposable
             .Select(v => v.TryGetValue<string>(out string? s) ? s : "")
             .ToList();
         // Exactly one full-instructions block left, on the earlier carrier.
-        string full = Assert.Single(contents, c => c.Contains("RETRIEVAL — "));
-        Assert.Contains("preview one", full);
+        string full = await Assert.That(contents).HasSingleItem(c => c.Contains("RETRIEVAL — "));
+        await Assert.That(full).Contains("preview one");
         // The later carrier: shortened header, body intact including refs and notes.
         string second = contents.Single(s => s.Contains("preview three"));
-        Assert.DoesNotContain("RETRIEVAL — ", second);
-        Assert.StartsWith("[claudinine: this turn originally ran 2 separate tool calls.", second);
-        Assert.Contains("claudinine get test-session --ref REF", second);
-        Assert.Contains("[bbbb1111] Read(f.cs)", second);
-        Assert.Contains("(note) legacy note", second);
+        await Assert.That(second).DoesNotContain("RETRIEVAL — ");
+        await Assert.That(second).StartsWith("[claudinine: this turn originally ran 2 separate tool calls.");
+        await Assert.That(second).Contains("claudinine get test-session --ref REF");
+        await Assert.That(second).Contains("[bbbb1111] Read(f.cs)");
+        await Assert.That(second).Contains("(note) legacy note");
     }
 
-    [Fact]
-    public void UnfamiliarHeaderVariantIsLeftAlone()
+    [Test]
+    public async Task UnfamiliarHeaderVariantIsLeftAlone()
     {
         // A future/foreign header that has the prefix and RETRIEVAL marker but not
         // the known terminator: fail closed, byte-identical.
@@ -168,11 +169,10 @@ public sealed class CarrierHeaderDedupTests : IDisposable
 
         // Decoded content of the weird carrier must be byte-identical.
         JsonObject[] records = Load(path);
-        Assert.Contains(records.SelectMany(r =>
+        await Assert.That(records.SelectMany(r =>
                 (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
             .Select(x => x["content"])
             .OfType<JsonValue>()
-            .Select(v => v.TryGetValue<string>(out string? s) ? s : ""),
-            c => c == weird);
+            .Select(v => v.TryGetValue<string>(out string? s) ? s : "")).Contains(c => c == weird);
     }
 }

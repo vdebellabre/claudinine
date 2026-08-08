@@ -1,4 +1,6 @@
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -51,29 +53,29 @@ public sealed class SessionDirGcTests : IDisposable
         Directory.SetLastWriteTimeUtc(dir, old);
     }
 
-    [Fact]
-    public void DeletesOldOrphanSessionDir()
+    [Test]
+    public async Task DeletesOldOrphanSessionDir()
     {
         string orphan = CreateSessionDir("11111111-2222-3333-4444-555555555555");
 
         SessionDirGc.Run(_transcriptPath, CurrentSessionId);
 
-        Assert.False(Directory.Exists(orphan));
+        await Assert.That(Directory.Exists(orphan)).IsFalse();
     }
 
-    [Fact]
-    public void KeepsSessionDirWhoseTranscriptExists()
+    [Test]
+    public async Task KeepsSessionDirWhoseTranscriptExists()
     {
         string alive = CreateSessionDir("11111111-2222-3333-4444-555555555555");
         File.WriteAllText(Path.Combine(_dir, "11111111-2222-3333-4444-555555555555.jsonl"), "{}\n");
 
         SessionDirGc.Run(_transcriptPath, CurrentSessionId);
 
-        Assert.True(Directory.Exists(alive));
+        await Assert.That(Directory.Exists(alive)).IsTrue();
     }
 
-    [Fact]
-    public void KeepsNonUuidDirectories()
+    [Test]
+    public async Task KeepsNonUuidDirectories()
     {
         // The project dir also holds user data — memory/ and its backups must
         // never match, no matter how old or transcript-less.
@@ -87,13 +89,13 @@ public sealed class SessionDirGcTests : IDisposable
 
         SessionDirGc.Run(_transcriptPath, CurrentSessionId);
 
-        Assert.True(Directory.Exists(memory));
-        Assert.True(File.Exists(Path.Combine(memory, "MEMORY.md")));
-        Assert.True(Directory.Exists(backup));
+        await Assert.That(Directory.Exists(memory)).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(memory, "MEMORY.md"))).IsTrue();
+        await Assert.That(Directory.Exists(backup)).IsTrue();
     }
 
-    [Fact]
-    public void KeepsNearUuidNames()
+    [Test]
+    public async Task KeepsNearUuidNames()
     {
         // Uppercase hex, wrong length, wrong dash positions: all non-matches.
         foreach (string name in new[]
@@ -112,11 +114,11 @@ public sealed class SessionDirGcTests : IDisposable
 
         SessionDirGc.Run(_transcriptPath, CurrentSessionId);
 
-        Assert.Equal(5, Directory.EnumerateDirectories(_dir).Count());
+        await Assert.That(Directory.EnumerateDirectories(_dir).Count()).IsEqualTo(5);
     }
 
-    [Fact]
-    public void KeepsFreshOrphanDir()
+    [Test]
+    public async Task KeepsFreshOrphanDir()
     {
         // Grace window: a dir touched recently may belong to a session still
         // materializing on disk.
@@ -124,11 +126,11 @@ public sealed class SessionDirGcTests : IDisposable
 
         SessionDirGc.Run(_transcriptPath, CurrentSessionId);
 
-        Assert.True(Directory.Exists(fresh));
+        await Assert.That(Directory.Exists(fresh)).IsTrue();
     }
 
-    [Fact]
-    public void GraceConsidersNestedFiles()
+    [Test]
+    public async Task GraceConsidersNestedFiles()
     {
         // The session dir's own mtime does not change when files land deep in
         // subagents/ — a recent nested file must still hold the whole dir.
@@ -142,11 +144,11 @@ public sealed class SessionDirGcTests : IDisposable
 
         SessionDirGc.Run(_transcriptPath, CurrentSessionId);
 
-        Assert.True(Directory.Exists(orphan));
+        await Assert.That(Directory.Exists(orphan)).IsTrue();
     }
 
-    [Fact]
-    public void NeverDeletesCurrentSessionDir()
+    [Test]
+    public async Task NeverDeletesCurrentSessionDir()
     {
         // Belt and braces: even orphan-shaped, old, and transcript-less, the
         // running session's own dir is out of bounds.
@@ -155,11 +157,11 @@ public sealed class SessionDirGcTests : IDisposable
 
         SessionDirGc.Run(_transcriptPath, CurrentSessionId);
 
-        Assert.True(Directory.Exists(own));
+        await Assert.That(Directory.Exists(own)).IsTrue();
     }
 
-    [Fact]
-    public void SurvivesMissingProjectDir()
+    [Test]
+    public async Task SurvivesMissingProjectDir()
     {
         SessionDirGc.Run(Path.Combine(_dir, "nope", "missing.jsonl"), CurrentSessionId);
     }

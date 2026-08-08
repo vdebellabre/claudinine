@@ -1,5 +1,7 @@
 using System.Text;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -29,39 +31,39 @@ public sealed class HookRunnerTests : IDisposable
     private static int Run(string stdin) =>
         HookRunner.Run(new MemoryStream(Encoding.UTF8.GetBytes(stdin)));
 
-    [Fact]
-    public void GarbageStdinExitsZero() =>
-        Assert.Equal(0, Run("this is not json at all {"));
+    [Test]
+    public async Task GarbageStdinExitsZero() =>
+        await Assert.That(Run("this is not json at all {")).IsEqualTo(0);
 
-    [Fact]
-    public void EmptyStdinExitsZero() =>
-        Assert.Equal(0, Run(""));
+    [Test]
+    public async Task EmptyStdinExitsZero() =>
+        await Assert.That(Run("")).IsEqualTo(0);
 
-    [Fact]
-    public void MissingTranscriptPathExitsZero() =>
-        Assert.Equal(0, Run("""{"hook_event_name":"UserPromptSubmit"}"""));
+    [Test]
+    public async Task MissingTranscriptPathExitsZero() =>
+        await Assert.That(Run("""{"hook_event_name":"UserPromptSubmit"}""")).IsEqualTo(0);
 
-    [Fact]
-    public void NonexistentTranscriptExitsZero() =>
-        Assert.Equal(0, Run($$"""
+    [Test]
+    public async Task NonexistentTranscriptExitsZero() =>
+        await Assert.That(Run($$"""
             {"hook_event_name":"UserPromptSubmit","transcript_path":"{{Path.Combine(_dir, "gone.jsonl").Replace("\\", "\\\\")}}"}
-            """));
+            """)).IsEqualTo(0);
 
-    [Fact]
-    public void UnknownEventLeavesTranscriptUntouched()
+    [Test]
+    public async Task UnknownEventLeavesTranscriptUntouched()
     {
         string path = new TranscriptBuilder().UserPrompt("hello").AssistantText("hi").WriteTo(_dir);
         byte[] before = File.ReadAllBytes(path);
 
-        Assert.Equal(0, Run($$"""
+        await Assert.That(Run($$"""
             {"hook_event_name":"SomeFutureEvent","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
-            """));
+            """)).IsEqualTo(0);
 
-        Assert.Equal(before, File.ReadAllBytes(path));
+        await Assert.That(File.ReadAllBytes(path)).IsEquivalentTo(before);
     }
 
-    [Fact]
-    public void UserPromptSubmitCompactsAndExitsZero()
+    [Test]
+    public async Task UserPromptSubmitCompactsAndExitsZero()
     {
         var b = new TranscriptBuilder();
         for (int i = 0; i < 8; i++)
@@ -72,10 +74,10 @@ public sealed class HookRunnerTests : IDisposable
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
 
-        Assert.Equal(0, Run($$"""
+        await Assert.That(Run($$"""
             {"hook_event_name":"UserPromptSubmit","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
-            """));
+            """)).IsEqualTo(0);
 
-        Assert.Contains("[claudinine", File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
     }
 }

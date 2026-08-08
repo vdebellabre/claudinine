@@ -2,7 +2,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Claudinine.Mirror;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -85,8 +87,8 @@ public sealed class RestoreVerbTests : IDisposable
     private const string QueueOp =
         """{"type":"queue-operation","operation":"enqueue","content":"x","sessionId":"s"}""";
 
-    [Fact]
-    public void UuidlessLinesMergeByMaxMultiplicityAcrossMirrors()
+    [Test]
+    public async Task UuidlessLinesMergeByMaxMultiplicityAcrossMirrors()
     {
         // Cross-context copies of the SAME session can hold the same uuid-less
         // line a different number of times; the restore must reproduce the
@@ -96,12 +98,12 @@ public sealed class RestoreVerbTests : IDisposable
 
         (List<RestoreVerb.Line> lines, bool forkMerged) = RestoreVerb.ReadMirrors([a, b]);
 
-        Assert.False(forkMerged);
-        Assert.Equal(3, lines.Count(l => l.Raw == QueueOp));
+        await Assert.That(forkMerged).IsFalse();
+        await Assert.That(lines.Count(l => l.Raw == QueueOp)).IsEqualTo(3);
     }
 
-    [Fact]
-    public void MultiplicityMergeIsOrderIndependent()
+    [Test]
+    public async Task MultiplicityMergeIsOrderIndependent()
     {
         string a = WriteRawMirror("a.jsonl", QueueOp, QueueOp);
         string b = WriteRawMirror("b.jsonl", QueueOp, QueueOp, QueueOp);
@@ -109,11 +111,11 @@ public sealed class RestoreVerbTests : IDisposable
         // Larger file first: the smaller one must contribute nothing new.
         (List<RestoreVerb.Line> lines, _) = RestoreVerb.ReadMirrors([b, a]);
 
-        Assert.Equal(3, lines.Count(l => l.Raw == QueueOp));
+        await Assert.That(lines.Count(l => l.Raw == QueueOp)).IsEqualTo(3);
     }
 
-    [Fact]
-    public void UuidRecordsDedupAcrossMirrorsFirstFileWins()
+    [Test]
+    public async Task UuidRecordsDedupAcrossMirrorsFirstFileWins()
     {
         string a = WriteRawMirror("a.jsonl",
             """{"type":"user","uuid":"u1","note":"from-a"}""");
@@ -123,13 +125,13 @@ public sealed class RestoreVerbTests : IDisposable
 
         (List<RestoreVerb.Line> lines, _) = RestoreVerb.ReadMirrors([a, b]);
 
-        RestoreVerb.Line u1 = Assert.Single(lines, l => l.Uuid == "u1");
-        Assert.Contains("from-a", u1.Raw);
-        Assert.Single(lines, l => l.Uuid == "u2");
+        RestoreVerb.Line u1 = await Assert.That(lines).HasSingleItem(l => l.Uuid == "u1");
+        await Assert.That(u1.Raw).Contains("from-a");
+        await Assert.That(lines).HasSingleItem(l => l.Uuid == "u2");
     }
 
-    [Fact]
-    public void ForkSeparatorSetsFlagButIsNotARecord()
+    [Test]
+    public async Task ForkSeparatorSetsFlagButIsNotARecord()
     {
         string a = WriteRawMirror("a.jsonl",
             """{"type":"user","uuid":"u1"}""",
@@ -138,48 +140,48 @@ public sealed class RestoreVerbTests : IDisposable
 
         (List<RestoreVerb.Line> lines, bool forkMerged) = RestoreVerb.ReadMirrors([a]);
 
-        Assert.True(forkMerged);
-        Assert.Equal(2, lines.Count);
-        Assert.DoesNotContain(lines, l => l.Raw.Contains("mergedFromFork"));
+        await Assert.That(forkMerged).IsTrue();
+        await Assert.That(lines.Count).IsEqualTo(2);
+        await Assert.That(lines).DoesNotContain(l => l.Raw.Contains("mergedFromFork"));
     }
 
-    [Fact]
-    public void RestoreRoundTripsToTheExactOriginal()
+    [Test]
+    public async Task RestoreRoundTripsToTheExactOriginal()
     {
         string path = BuildCompactableSession();
         string original = File.ReadAllText(path);
 
         Compactor.Run(path);
-        Assert.NotEqual(original, File.ReadAllText(path)); // compaction did something
+        await Assert.That(File.ReadAllText(path)).IsNotEqualTo(original); // compaction did something
 
         int rc = RunRestore(["test-session"], compactionOn: true);
-        Assert.Equal(0, rc);
-        Assert.Equal(original, File.ReadAllText(path)); // byte-identical restore
+        await Assert.That(rc).IsEqualTo(0);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(original); // byte-identical restore
     }
 
-    [Fact]
-    public void RestoreOffFreezesTheSession()
+    [Test]
+    public async Task RestoreOffFreezesTheSession()
     {
         string path = BuildCompactableSession();
         Compactor.Run(path);
 
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: false));
-        Assert.True(File.Exists(Path.Combine(MirrorsDir, "test-session.skip")));
+        await Assert.That(RunRestore(["test-session"], compactionOn: false)).IsEqualTo(0);
+        await Assert.That(File.Exists(Path.Combine(MirrorsDir, "test-session.skip"))).IsTrue();
         string restored = File.ReadAllText(path);
 
         // Hooks now mirror but never compact: the restored file survives a pass.
         RunHook(path);
-        Assert.Equal(restored, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(restored);
         RunHook(path, "SessionEnd");
-        Assert.Equal(restored, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(restored);
     }
 
-    [Fact]
-    public void FrozenSessionStillGetsMirrored()
+    [Test]
+    public async Task FrozenSessionStillGetsMirrored()
     {
         string path = BuildCompactableSession();
         Compactor.Run(path);
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: false));
+        await Assert.That(RunRestore(["test-session"], compactionOn: false)).IsEqualTo(0);
 
         // New turns land while frozen…
         var extra = new TranscriptBuilder().UserPrompt("post-freeze work");
@@ -192,27 +194,27 @@ public sealed class RestoreVerbTests : IDisposable
 
         // …and are mirrored despite compaction being off.
         string mirror = File.ReadAllText(Path.Combine(MirrorsDir, "test-session.jsonl"));
-        Assert.Contains("99999999-0000-0000-0000-000000000001", mirror);
-        Assert.Contains("post-freeze work", File.ReadAllText(path)); // transcript untouched
+        await Assert.That(mirror).Contains("99999999-0000-0000-0000-000000000001");
+        await Assert.That(File.ReadAllText(path)).Contains("post-freeze work"); // transcript untouched
     }
 
-    [Fact]
-    public void RestoreOnUnfreezesAndCompactionResumes()
+    [Test]
+    public async Task RestoreOnUnfreezesAndCompactionResumes()
     {
         string path = BuildCompactableSession();
         Compactor.Run(path);
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: false));
+        await Assert.That(RunRestore(["test-session"], compactionOn: false)).IsEqualTo(0);
 
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: true));
-        Assert.False(File.Exists(Path.Combine(MirrorsDir, "test-session.skip")));
+        await Assert.That(RunRestore(["test-session"], compactionOn: true)).IsEqualTo(0);
+        await Assert.That(File.Exists(Path.Combine(MirrorsDir, "test-session.skip"))).IsFalse();
 
         string restored = File.ReadAllText(path);
         RunHook(path);
-        Assert.NotEqual(restored, File.ReadAllText(path)); // compaction is back
+        await Assert.That(File.ReadAllText(path)).IsNotEqualTo(restored); // compaction is back
     }
 
-    [Fact]
-    public void UnmirroredTailIsCapturedBeforeRestoring()
+    [Test]
+    public async Task UnmirroredTailIsCapturedBeforeRestoring()
     {
         string path = BuildCompactableSession();
         Compactor.Run(path);
@@ -230,15 +232,14 @@ public sealed class RestoreVerbTests : IDisposable
         };
         File.AppendAllText(path, crashRec.ToJsonString() + "\n");
 
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: true));
+        await Assert.That(RunRestore(["test-session"], compactionOn: true)).IsEqualTo(0);
         string restored = File.ReadAllText(path);
-        Assert.Contains("crash-tail prompt", restored);
-        Assert.EndsWith("cccccccc-0000-0000-0000-000000000001",
-            ((JsonObject)JsonNode.Parse(File.ReadAllLines(path)[^1])!)["uuid"]!.GetValue<string>());
+        await Assert.That(restored).Contains("crash-tail prompt");
+        await Assert.That(((JsonObject)JsonNode.Parse(File.ReadAllLines(path)[^1])!)["uuid"]!.GetValue<string>()).EndsWith("cccccccc-0000-0000-0000-000000000001");
     }
 
-    [Fact]
-    public void RestoreRefusedWhenMirrorMissesALiveRecord()
+    [Test]
+    public async Task RestoreRefusedWhenMirrorMissesALiveRecord()
     {
         string path = BuildCompactableSession();
         Compactor.Run(path);
@@ -256,12 +257,12 @@ public sealed class RestoreVerbTests : IDisposable
         File.WriteAllText(mirrorPath, string.Join("\n",
             mirrorLines.Where(l => !l.Contains(victimUuid))) + "\n");
 
-        Assert.Equal(1, RunRestore(["test-session"], compactionOn: true));
-        Assert.Equal(compacted, File.ReadAllText(path)); // fail-closed: untouched
+        await Assert.That(RunRestore(["test-session"], compactionOn: true)).IsEqualTo(1);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(compacted); // fail-closed: untouched
     }
 
-    [Fact]
-    public void ForkHealedMirrorIsReorderedParentFirst()
+    [Test]
+    public async Task ForkHealedMirrorIsReorderedParentFirst()
     {
         // A healed fork's mirror holds the fork's own records first and the
         // parent's pre-fork originals appended at the END; the restore must put
@@ -298,17 +299,17 @@ public sealed class RestoreVerbTests : IDisposable
                 "aaaaaaaa-0000-0000-0000-000000000001", "pre-fork 2").ToJsonString(),
         ]) + "\n");
 
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: true));
+        await Assert.That(RunRestore(["test-session"], compactionOn: true)).IsEqualTo(0);
 
         string[] restored = File.ReadAllLines(path);
-        Assert.Equal(3, restored.Length);
-        Assert.Contains("pre-fork 1", restored[0]);
-        Assert.Contains("pre-fork 2", restored[1]);
-        Assert.Contains("fork continues", restored[2]); // live tail preserved as tail
+        await Assert.That(restored.Length).IsEqualTo(3);
+        await Assert.That(restored[0]).Contains("pre-fork 1");
+        await Assert.That(restored[1]).Contains("pre-fork 2");
+        await Assert.That(restored[2]).Contains("fork continues"); // live tail preserved as tail
     }
 
-    [Fact]
-    public void AppWriteQuirkOrderIsPreservedVerbatim()
+    [Test]
+    public async Task AppWriteQuirkOrderIsPreservedVerbatim()
     {
         // Real app files can hold a tool_result a couple of lines BEFORE its
         // parent use record (batch write race, observed on the 2026-08 corpus).
@@ -334,43 +335,43 @@ public sealed class RestoreVerbTests : IDisposable
         string original = File.ReadAllText(path);
 
         Compactor.Run(path);
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: true));
-        Assert.Equal(original, File.ReadAllText(path));
+        await Assert.That(RunRestore(["test-session"], compactionOn: true)).IsEqualTo(0);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(original);
     }
 
-    [Fact]
-    public void OrphanSkipMarkersAreCollected()
+    [Test]
+    public async Task OrphanSkipMarkersAreCollected()
     {
         string path = BuildCompactableSession();
         Compactor.Run(path);
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: false));
+        await Assert.That(RunRestore(["test-session"], compactionOn: false)).IsEqualTo(0);
         string marker = Path.Combine(MirrorsDir, "test-session.skip");
-        Assert.True(File.Exists(marker));
+        await Assert.That(File.Exists(marker)).IsTrue();
 
         // Explicit dirs: the env-driven overload also sweeps the real home dirs.
         MirrorFile.CollectGarbage([MirrorsDir]);
-        Assert.True(File.Exists(marker)); // transcript alive: marker stays
+        await Assert.That(File.Exists(marker)).IsTrue(); // transcript alive: marker stays
 
         File.Delete(path);
         MirrorFile.CollectGarbage([MirrorsDir]);
-        Assert.False(File.Exists(marker)); // transcript gone: marker reaped
+        await Assert.That(File.Exists(marker)).IsFalse(); // transcript gone: marker reaped
     }
 
-    [Fact]
-    public void RestoreIsIdempotent()
+    [Test]
+    public async Task RestoreIsIdempotent()
     {
         string path = BuildCompactableSession();
         Compactor.Run(path);
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: true));
+        await Assert.That(RunRestore(["test-session"], compactionOn: true)).IsEqualTo(0);
         string afterFirst = File.ReadAllText(path);
-        Assert.Equal(0, RunRestore(["test-session"], compactionOn: true));
-        Assert.Equal(afterFirst, File.ReadAllText(path));
+        await Assert.That(RunRestore(["test-session"], compactionOn: true)).IsEqualTo(0);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(afterFirst);
     }
 
-    [Fact]
-    public void UnknownSessionFailsWithSearchedDirs()
+    [Test]
+    public async Task UnknownSessionFailsWithSearchedDirs()
     {
-        Assert.Equal(1, RunRestore(["deadbeef"], compactionOn: false));
-        Assert.Equal(1, RunRestore([], compactionOn: false));
+        await Assert.That(RunRestore(["deadbeef"], compactionOn: false)).IsEqualTo(1);
+        await Assert.That(RunRestore([], compactionOn: false)).IsEqualTo(1);
     }
 }

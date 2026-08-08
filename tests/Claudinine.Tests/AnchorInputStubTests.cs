@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using Claudinine.Rules;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -44,8 +46,8 @@ public sealed class AnchorInputStubTests : IDisposable
         return b.WriteTo(_dir);
     }
 
-    [Fact]
-    public void LargeAnchorInputIsStubbedWithPointerAndPreview()
+    [Test]
+    public async Task LargeAnchorInputIsStubbedWithPointerAndPreview()
     {
         string path = BuildSession();
 
@@ -54,21 +56,21 @@ public sealed class AnchorInputStubTests : IDisposable
         JsonObject[] records = Load(path);
         JsonObject input = (JsonObject)UseBlock(records)["input"]!;
         string pointer = input["claudinine"]!.GetValue<string>();
-        Assert.Contains("claudinine get test-session --ref ", pointer);
-        Assert.Contains(" --full", pointer);
-        Assert.StartsWith("python - <<'EOF' x", input["preview"]!.GetValue<string>());
-        Assert.True(input["preview"]!.GetValue<string>().Length <= 90);
-        Assert.Null(input["command"]); // original payload gone
+        await Assert.That(pointer).Contains("claudinine get test-session --ref ");
+        await Assert.That(pointer).Contains(" --full");
+        await Assert.That(input["preview"]!.GetValue<string>()).StartsWith("python - <<'EOF' x");
+        await Assert.That(input["preview"]!.GetValue<string>().Length <= 90).IsTrue();
+        await Assert.That(input["command"]).IsNull(); // original payload gone
 
         // The ref in the pointer is the use record's own uuid prefix.
         JsonObject useRec = records.Single(r =>
             (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>()
                 .Any(x => x["type"]?.GetValue<string>() == "tool_use") == true);
-        Assert.Contains("--ref " + useRec["uuid"]!.GetValue<string>()[..8], pointer);
+        await Assert.That(pointer).Contains("--ref " + useRec["uuid"]!.GetValue<string>()[..8]);
     }
 
-    [Fact]
-    public void OriginalInputIsRetrievableFromMirrorViaGetVerb()
+    [Test]
+    public async Task OriginalInputIsRetrievableFromMirrorViaGetVerb()
     {
         string path = BuildSession();
         Compactor.Run(path);
@@ -83,30 +85,30 @@ public sealed class AnchorInputStubTests : IDisposable
         try
         {
             int rc = GetVerb.Run(["test-session", "--ref", refArg, "--full"]);
-            Assert.Equal(0, rc);
+            await Assert.That(rc).IsEqualTo(0);
         }
         finally
         {
             Console.SetOut(orig);
         }
         // The mirror still has the pristine use record: full original command.
-        Assert.Contains(new string('x', 600), sw.ToString());
+        await Assert.That(sw.ToString()).Contains(new string('x', 600));
     }
 
-    [Fact]
-    public void SmallAnchorInputIsLeftAlone()
+    [Test]
+    public async Task SmallAnchorInputIsLeftAlone()
     {
         string path = BuildSession(anchorCommand: "echo tiny");
 
         Compactor.Run(path);
 
         JsonObject input = (JsonObject)UseBlock(Load(path))["input"]!;
-        Assert.Equal("echo tiny", input["command"]?.GetValue<string>());
-        Assert.Null(input["claudinine"]);
+        await Assert.That(input["command"]?.GetValue<string>()).IsEqualTo("echo tiny");
+        await Assert.That(input["claudinine"]).IsNull();
     }
 
-    [Fact]
-    public void NonAnchorInputsAreNeverTouched()
+    [Test]
+    public async Task NonAnchorInputsAreNeverTouched()
     {
         // A single-call turn does not collapse: its use keeps the full input even
         // though it is large.
@@ -118,21 +120,21 @@ public sealed class AnchorInputStubTests : IDisposable
         Compactor.Run(path);
 
         JsonObject input = (JsonObject)UseBlock(Load(path))["input"]!;
-        Assert.Equal(BigCommand, input["command"]?.GetValue<string>());
+        await Assert.That(input["command"]?.GetValue<string>()).IsEqualTo(BigCommand);
     }
 
-    [Fact]
-    public void StubbingIsIdempotent()
+    [Test]
+    public async Task StubbingIsIdempotent()
     {
         string path = BuildSession();
         Compactor.Run(path);
         string afterFirst = File.ReadAllText(path);
         Compactor.Run(path);
-        Assert.Equal(afterFirst, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(afterFirst);
     }
 
-    [Fact]
-    public void CarriersAlreadyOnDiskGetTheirAnchorStubbedRetroactively()
+    [Test]
+    public async Task CarriersAlreadyOnDiskGetTheirAnchorStubbedRetroactively()
     {
         // Simulates a file collapsed by an earlier version: the carrier content is
         // already a digest, the anchor use still has its full input on disk.
@@ -145,7 +147,7 @@ public sealed class AnchorInputStubTests : IDisposable
         Compactor.Run(path);
 
         JsonObject input = (JsonObject)UseBlock(Load(path))["input"]!;
-        Assert.NotNull(input["claudinine"]);
-        Assert.Null(input["command"]);
+        await Assert.That(input["claudinine"]).IsNotNull();
+        await Assert.That(input["command"]).IsNull();
     }
 }

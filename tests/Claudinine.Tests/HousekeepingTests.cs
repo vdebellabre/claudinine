@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -32,8 +34,8 @@ public sealed class HousekeepingTests : IDisposable
     private static int CountType(JsonObject[] records, string type) =>
         records.Count(r => r["type"]?.GetValue<string>() == type);
 
-    [Fact]
-    public void MetadataKeepLast_KeepsOnlyLastOfEachType()
+    [Test]
+    public async Task MetadataKeepLast_KeepsOnlyLastOfEachType()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -51,17 +53,17 @@ public sealed class HousekeepingTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.Equal(1, CountType(records, "last-prompt"));
-        Assert.Equal(1, CountType(records, "custom-title"));
-        Assert.Equal(1, CountType(records, "mode"));
+        await Assert.That(CountType(records, "last-prompt")).IsEqualTo(1);
+        await Assert.That(CountType(records, "custom-title")).IsEqualTo(1);
+        await Assert.That(CountType(records, "mode")).IsEqualTo(1);
         // The survivor is the LAST occurrence of each.
-        Assert.Equal("third", records.Single(r => r["type"]?.GetValue<string>() == "last-prompt")["lastPrompt"]!.GetValue<string>());
-        Assert.Equal("new title", records.Single(r => r["type"]?.GetValue<string>() == "custom-title")["customTitle"]!.GetValue<string>());
-        Assert.Equal("normal", records.Single(r => r["type"]?.GetValue<string>() == "mode")["mode"]!.GetValue<string>());
+        await Assert.That(records.Single(r => r["type"]?.GetValue<string>() == "last-prompt")["lastPrompt"]!.GetValue<string>()).IsEqualTo("third");
+        await Assert.That(records.Single(r => r["type"]?.GetValue<string>() == "custom-title")["customTitle"]!.GetValue<string>()).IsEqualTo("new title");
+        await Assert.That(records.Single(r => r["type"]?.GetValue<string>() == "mode")["mode"]!.GetValue<string>()).IsEqualTo("normal");
     }
 
-    [Fact]
-    public void MetadataKeepLast_SingleOccurrenceAndTailUntouched()
+    [Test]
+    public async Task MetadataKeepLast_SingleOccurrenceAndTailUntouched()
     {
         // The sole last-prompt is also the file's final record: must survive.
         string path = new TranscriptBuilder()
@@ -73,12 +75,12 @@ public sealed class HousekeepingTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.Equal(1, CountType(records, "last-prompt"));
-        Assert.Equal("last-prompt", records[^1]["type"]!.GetValue<string>());
+        await Assert.That(CountType(records, "last-prompt")).IsEqualTo(1);
+        await Assert.That(records[^1]["type"]!.GetValue<string>()).IsEqualTo("last-prompt");
     }
 
-    [Fact]
-    public void QueueHistory_NetEmptyRemovesAllOps()
+    [Test]
+    public async Task QueueHistory_NetEmptyRemovesAllOps()
     {
         string path = new TranscriptBuilder()
             .QueueOp("enqueue", "queued question A")
@@ -92,12 +94,12 @@ public sealed class HousekeepingTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.Equal(0, CountType(records, "queue-operation"));
-        Assert.Equal(2, records.Length); // user + assistant untouched
+        await Assert.That(CountType(records, "queue-operation")).IsEqualTo(0);
+        await Assert.That(records.Length).IsEqualTo(2); // user + assistant untouched
     }
 
-    [Fact]
-    public void QueueHistory_PendingEnqueueKeepsEverything()
+    [Test]
+    public async Task QueueHistory_PendingEnqueueKeepsEverything()
     {
         string path = new TranscriptBuilder()
             .QueueOp("enqueue", "delivered")
@@ -109,11 +111,11 @@ public sealed class HousekeepingTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(3, CountType(Load(path), "queue-operation"));
+        await Assert.That(CountType(Load(path), "queue-operation")).IsEqualTo(3);
     }
 
-    [Fact]
-    public void QueueHistory_DequeueOnEmptyFailsClosed()
+    [Test]
+    public async Task QueueHistory_DequeueOnEmptyFailsClosed()
     {
         // Ops from a session whose enqueue predates this file: not net-provable.
         string path = new TranscriptBuilder()
@@ -124,11 +126,11 @@ public sealed class HousekeepingTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(1, CountType(Load(path), "queue-operation"));
+        await Assert.That(CountType(Load(path), "queue-operation")).IsEqualTo(1);
     }
 
-    [Fact]
-    public void QueueHistory_QueuesTrackedPerSession()
+    [Test]
+    public async Task QueueHistory_QueuesTrackedPerSession()
     {
         // Balanced per session id even though a global FIFO replay would misalign.
         string path = new TranscriptBuilder()
@@ -142,11 +144,11 @@ public sealed class HousekeepingTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(0, CountType(Load(path), "queue-operation"));
+        await Assert.That(CountType(Load(path), "queue-operation")).IsEqualTo(0);
     }
 
-    [Fact]
-    public void QueueHistory_TrailingQueueOpSkipsWholeFile()
+    [Test]
+    public async Task QueueHistory_TrailingQueueOpSkipsWholeFile()
     {
         string path = new TranscriptBuilder()
             .QueueOp("enqueue", "msg")
@@ -157,11 +159,11 @@ public sealed class HousekeepingTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(2, CountType(Load(path), "queue-operation"));
+        await Assert.That(CountType(Load(path), "queue-operation")).IsEqualTo(2);
     }
 
-    [Fact]
-    public void StopHookSummary_BareSummaryRemovedAndChildRechained()
+    [Test]
+    public async Task StopHookSummary_BareSummaryRemovedAndChildRechained()
     {
         var b = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -175,16 +177,16 @@ public sealed class HousekeepingTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.Equal(0, CountType(records, "system"));
+        await Assert.That(CountType(records, "system")).IsEqualTo(0);
         // The second user prompt re-parents to the surviving assistant record.
         JsonObject secondPrompt = records.Single(r =>
             r["message"]?["content"] is JsonValue v
             && v.TryGetValue<string>(out string? s) && s == "second prompt");
-        Assert.Equal(assistantUuid, secondPrompt["parentUuid"]!.GetValue<string>());
+        await Assert.That(secondPrompt["parentUuid"]!.GetValue<string>()).IsEqualTo(assistantUuid);
     }
 
-    [Fact]
-    public void StopHookSummary_AnySignalKeepsRecord()
+    [Test]
+    public async Task StopHookSummary_AnySignalKeepsRecord()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -199,11 +201,11 @@ public sealed class HousekeepingTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(5, CountType(Load(path), "system"));
+        await Assert.That(CountType(Load(path), "system")).IsEqualTo(5);
     }
 
-    [Fact]
-    public void StopHookSummary_AtTailKept()
+    [Test]
+    public async Task StopHookSummary_AtTailKept()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -213,11 +215,11 @@ public sealed class HousekeepingTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(1, CountType(Load(path), "system"));
+        await Assert.That(CountType(Load(path), "system")).IsEqualTo(1);
     }
 
-    [Fact]
-    public void HousekeepingFamily_IdempotentSecondPass()
+    [Test]
+    public async Task HousekeepingFamily_IdempotentSecondPass()
     {
         string path = new TranscriptBuilder()
             .QueueOp("enqueue", "q")
@@ -237,6 +239,6 @@ public sealed class HousekeepingTests : IDisposable
         Compactor.Run(path);
         byte[] afterSecond = File.ReadAllBytes(path);
 
-        Assert.Equal(afterFirst, afterSecond);
+        await Assert.That(afterSecond).IsEquivalentTo(afterFirst);
     }
 }

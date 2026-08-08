@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using Claudinine.Rules;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -37,8 +39,8 @@ public sealed class NoiseRulesTests : IDisposable
 
     // ---- system-reminder-dedup ----
 
-    [Fact]
-    public void DuplicateSystemRemindersRemovedFirstKept()
+    [Test]
+    public async Task DuplicateSystemRemindersRemovedFirstKept()
     {
         string reminder = "<system-reminder>always use tabs " + new string('r', 300) + "</system-reminder>";
         var b = new TranscriptBuilder()
@@ -54,11 +56,11 @@ public sealed class NoiseRulesTests : IDisposable
 
         string text = AllText(path);
         int occurrences = text.Split("always use tabs").Length - 1;
-        Assert.Equal(1, occurrences); // only the first copy survives
+        await Assert.That(occurrences).IsEqualTo(1); // only the first copy survives
     }
 
-    [Fact]
-    public void DuplicateReminderWithinOneMessageKeepsFirst()
+    [Test]
+    public async Task DuplicateReminderWithinOneMessageKeepsFirst()
     {
         // Regression: removal by value (Replace) also erased the first copy when
         // the same reminder repeated inside a single text — it then survived
@@ -74,13 +76,13 @@ public sealed class NoiseRulesTests : IDisposable
         Compactor.Run(path);
 
         string text = AllText(path);
-        Assert.Equal(1, text.Split("always use tabs").Length - 1);
+        await Assert.That(text.Split("always use tabs").Length - 1).IsEqualTo(1);
     }
 
     // ---- document-dedup ----
 
-    [Fact]
-    public void LargeDuplicateBlocksStubbedAfterFirst()
+    [Test]
+    public async Task LargeDuplicateBlocksStubbedAfterFirst()
     {
         string doc = "PROJECT RULES\n" + new string('d', 1500);
         var b = new TranscriptBuilder()
@@ -95,15 +97,15 @@ public sealed class NoiseRulesTests : IDisposable
         Compactor.Run(path);
 
         string text = AllText(path);
-        Assert.Equal(1, text.Split(new string('d', 1500)).Length - 1);
-        Assert.Contains("duplicate content removed", text);
-        Assert.Contains("first seen earlier: PROJECT RULES", text);
+        await Assert.That(text.Split(new string('d', 1500)).Length - 1).IsEqualTo(1);
+        await Assert.That(text).Contains("duplicate content removed");
+        await Assert.That(text).Contains("first seen earlier: PROJECT RULES");
     }
 
     // ---- tool-result-age ----
 
-    [Fact]
-    public void OldToolResultsBecomeStubsMidAgeGetTrimmed()
+    [Test]
+    public async Task OldToolResultsBecomeStubsMidAgeGetTrimmed()
     {
         // Distinct outputs per read — identical ones would (correctly) be caught
         // by document-dedup before the age rule ever sees them.
@@ -126,18 +128,18 @@ public sealed class NoiseRulesTests : IDisposable
             .FirstOrDefault(x => x is not null)?["content"]?.GetValue<string>();
 
         string oldContent = ContentOf(oldId)!;
-        Assert.StartsWith("[claudinine", oldContent);       // old tier: stub with tool info
-        Assert.Contains("Bash", oldContent);
-        Assert.Contains("lines,", oldContent);
+        await Assert.That(oldContent).StartsWith("[claudinine");       // old tier: stub with tool info
+        await Assert.That(oldContent).Contains("Bash");
+        await Assert.That(oldContent).Contains("lines,");
 
         string midContent = ContentOf(midId)!;
-        Assert.Contains("lines trimmed by claudinine", midContent); // mid tier: head/tail trim
-        Assert.StartsWith("mid line 1 ", midContent);
-        Assert.EndsWith(new string('x', 40), midContent);
+        await Assert.That(midContent).Contains("lines trimmed by claudinine"); // mid tier: head/tail trim
+        await Assert.That(midContent).StartsWith("mid line 1 ");
+        await Assert.That(midContent).EndsWith(new string('x', 40));
     }
 
-    [Fact]
-    public void OldTierStubNamesToolAcrossLargeParallelBatch()
+    [Test]
+    public async Task OldTierStubNamesToolAcrossLargeParallelBatch()
     {
         // Batch format: each use is its OWN record and results arrive in
         // completion order — answer the FIRST use LAST, so its use sits ~23
@@ -168,12 +170,12 @@ public sealed class NoiseRulesTests : IDisposable
             .SelectMany(r => RuleHelpers.ContentBlocks(r.Replacement!).OfType<JsonObject>())
             .Single(x => x["tool_use_id"]?.GetValue<string>() == uses[0].Id)
             ["content"]!.GetValue<string>();
-        Assert.StartsWith("[claudinine: Bash", stub); // named, not anonymous
-        Assert.Contains("batch0.txt", stub);
+        await Assert.That(stub).StartsWith("[claudinine: Bash"); // named, not anonymous
+        await Assert.That(stub).Contains("batch0.txt");
     }
 
-    [Fact]
-    public void RecentToolResultsUntouched()
+    [Test]
+    public async Task RecentToolResultsUntouched()
     {
         string bigOutput = string.Join("\n", Enumerable.Range(1, 300).Select(i => $"line {i}"));
         var b = new TranscriptBuilder().UserPrompt("start");
@@ -184,7 +186,7 @@ public sealed class NoiseRulesTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(before, AllText(path));
+        await Assert.That(AllText(path)).IsEqualTo(before);
     }
 
     // Real shape from the corpus: Claude Code overflows large tool output to a
@@ -203,8 +205,8 @@ public sealed class NoiseRulesTests : IDisposable
             .FirstOrDefault(x => x["tool_use_id"]?.GetValue<string>() == toolUseId))
         .FirstOrDefault(x => x is not null)?["content"]?.GetValue<string>() ?? "";
 
-    [Fact]
-    public void OldPersistedOutputStubKeepsSidecarPath()
+    [Test]
+    public async Task OldPersistedOutputStubKeepsSidecarPath()
     {
         const string sidecar = @"C:\Users\u\.claude\projects\proj\sess\tool-results\byqro8ep6.txt";
         var b = new TranscriptBuilder().UserPrompt("start");
@@ -216,13 +218,13 @@ public sealed class NoiseRulesTests : IDisposable
         Compactor.Run(path);
 
         string content = ResultContent(path, id);
-        Assert.StartsWith("[claudinine", content);
-        Assert.Contains(sidecar, content);                  // pointer survives stubbing
-        Assert.DoesNotContain("preview line 42", content);  // preview itself still dropped
+        await Assert.That(content).StartsWith("[claudinine");
+        await Assert.That(content).Contains(sidecar);                  // pointer survives stubbing
+        await Assert.That(content).DoesNotContain("preview line 42");  // preview itself still dropped
     }
 
-    [Fact]
-    public void MidAgePersistedOutputLeftIntact()
+    [Test]
+    public async Task MidAgePersistedOutputLeftIntact()
     {
         // Trim keeps head/tail halves; a large enough preview could push the path
         // line out of both, so the mid tier must skip persisted-output blocks.
@@ -238,45 +240,44 @@ public sealed class NoiseRulesTests : IDisposable
         Compactor.Run(path);
 
         string content = ResultContent(path, id);
-        Assert.Contains(sidecar, content);
-        Assert.DoesNotContain("trimmed by claudinine", content);
+        await Assert.That(content).Contains(sidecar);
+        await Assert.That(content).DoesNotContain("trimmed by claudinine");
     }
 
-    [Fact]
-    public void CollapsedDigestPreviewKeepsSidecarPath()
+    [Test]
+    public async Task CollapsedDigestPreviewKeepsSidecarPath()
     {
         // Sidecar refs live in multi-tool turns, so chain-collapse — not the age
         // rule — is what usually rewrites them. Its preview must carry the path.
         const string sidecar = @"C:\Users\u\.claude\projects\proj\sess\tool-results\bj0jrua4n.txt";
         string preview = PreviewRenderer.RenderPreview("Bash", "git diff", PersistedOutput(sidecar));
-        Assert.Contains(sidecar, preview);
+        await Assert.That(preview).Contains(sidecar);
         // A diff body full of "error:" must not outrank the path.
         string withError = PersistedOutput(sidecar) + "\nerror: something failed\n";
-        Assert.Contains(sidecar, PreviewRenderer.RenderPreview("Bash", "git diff", withError));
+        await Assert.That(PreviewRenderer.RenderPreview("Bash", "git diff", withError)).Contains(sidecar);
     }
 
-    [Fact]
-    public void PersistedOutputPathParsing()
+    [Test]
+    public async Task PersistedOutputPathParsing()
     {
-        Assert.Equal(@"C:\a b\c.txt",
-            RuleHelpers.PersistedOutputPath(PersistedOutput(@"C:\a b\c.txt")));
-        Assert.Null(RuleHelpers.PersistedOutputPath("ordinary tool output"));
+        await Assert.That(RuleHelpers.PersistedOutputPath(PersistedOutput(@"C:\a b\c.txt"))).IsEqualTo(@"C:\a b\c.txt");
+        await Assert.That(RuleHelpers.PersistedOutputPath("ordinary tool output")).IsNull();
         // Guard against a malformed stub yielding an empty path.
-        Assert.Null(RuleHelpers.PersistedOutputPath("<persisted-output>\nno marker here"));
+        await Assert.That(RuleHelpers.PersistedOutputPath("<persisted-output>\nno marker here")).IsNull();
     }
 
-    [Fact]
-    public void MidAgeJsonGetsMinified()
+    [Test]
+    public async Task MidAgeJsonGetsMinified()
     {
         string prettyJson = "{\n" + string.Join(",\n", Enumerable.Range(1, 50)
             .Select(i => $"    \"key_{i}\"    :    \"value {i}\"")) + "\n}";
-        Assert.True(ToolResultAgeRule.Minify(prettyJson).Length < prettyJson.Length * 0.85);
+        await Assert.That(ToolResultAgeRule.Minify(prettyJson).Length < prettyJson.Length * 0.85).IsTrue();
     }
 
     // ---- mega-block-trim ----
 
-    [Fact]
-    public void OldMegaTextBlockTrimmedRecentOneKept()
+    [Test]
+    public async Task OldMegaTextBlockTrimmedRecentOneKept()
     {
         string mega = new string('m', MegaBlockTrimRule.MaxBlockBytes + 5000);
         var b = new TranscriptBuilder().UserPrompt("start").AssistantText(mega);
@@ -288,13 +289,13 @@ public sealed class NoiseRulesTests : IDisposable
         Compactor.Run(path);
 
         string text = AllText(path);
-        Assert.Contains("bytes trimmed by claudinine", text);
+        await Assert.That(text).Contains("bytes trimmed by claudinine");
     }
 
     // ---- image-strip ----
 
-    [Fact]
-    public void OldImagesStubbedRecentImagesKept()
+    [Test]
+    public async Task OldImagesStubbedRecentImagesKept()
     {
         var b = new TranscriptBuilder().UserPrompt("here is a screenshot");
         b.RawImageMessage("img-old");
@@ -310,12 +311,12 @@ public sealed class NoiseRulesTests : IDisposable
             .SelectMany(r => (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
             .Where(x => x["type"]?.GetValue<string>() == "image")
             .ToList();
-        Assert.Single(imageBlocks); // the recent one
-        Assert.Contains("--media", AllText(path)); // the old one, stubbed with its retrieval pointer
+        await Assert.That(imageBlocks).HasSingleItem(); // the recent one
+        await Assert.That(AllText(path)).Contains("--media"); // the old one, stubbed with its retrieval pointer
     }
 
-    [Fact]
-    public void AgenticSessionAgesByObservationCountNotTurns()
+    [Test]
+    public async Task AgenticSessionAgesByObservationCountNotTurns()
     {
         // One user prompt, a marathon of tool calls: the turn clock never moves,
         // but results older than the observation window must still be stubbed.
@@ -334,13 +335,13 @@ public sealed class NoiseRulesTests : IDisposable
             .Select(r => (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>()
                 .FirstOrDefault(x => x["tool_use_id"]?.GetValue<string>() == firstId))
             .First(x => x is not null)!["content"]!.GetValue<string>();
-        Assert.StartsWith("[claudinine", content);
+        await Assert.That(content).StartsWith("[claudinine");
     }
 
     // ---- cross-rule sanity ----
 
-    [Fact]
-    public void FullCatalogPassIsIdempotent()
+    [Test]
+    public async Task FullCatalogPassIsIdempotent()
     {
         // Exercises EVERY tier: reminder dedup, doc dedup, image strip, old-tier
         // stubs, mid-tier trims (line path AND multibyte byte path), mega trim —
@@ -364,10 +365,10 @@ public sealed class NoiseRulesTests : IDisposable
 
         Compactor.Run(path);
         string afterFirst = AllText(path);
-        Assert.Contains("trimmed by claudinine", afterFirst); // trims actually happened
+        await Assert.That(afterFirst).Contains("trimmed by claudinine"); // trims actually happened
         Compactor.Run(path);
-        Assert.Equal(afterFirst, AllText(path));
+        await Assert.That(AllText(path)).IsEqualTo(afterFirst);
         Compactor.Run(path); // and stays fixed
-        Assert.Equal(afterFirst, AllText(path));
+        await Assert.That(AllText(path)).IsEqualTo(afterFirst);
     }
 }

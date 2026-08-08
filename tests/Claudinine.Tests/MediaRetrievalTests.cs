@@ -1,7 +1,9 @@
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Claudinine.Rules;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -59,8 +61,8 @@ public sealed class MediaRetrievalTests : IDisposable
             .Select(b => b["text"]?.GetValue<string>())
             .Where(t => t is not null)!;
 
-    [Fact]
-    public void OldPastedImageStubPointsAtMediaRetrieval()
+    [Test]
+    public async Task OldPastedImageStubPointsAtMediaRetrieval()
     {
         var b = new TranscriptBuilder().UserPrompt("look at this");
         b.RawImageMessage("m1", Payload);
@@ -72,17 +74,15 @@ public sealed class MediaRetrievalTests : IDisposable
 
         JsonObject[] records = Load(path);
         string stub = BlockTexts(records).Single(t => t!.Contains("--media"))!;
-        Assert.Contains("image/png, 2KB", stub);
+        await Assert.That(stub).Contains("image/png, 2KB");
         // The pointer addresses the stubbed record's own uuid.
         JsonObject stubbed = records.Single(r =>
             (r["claudinine"] as JsonObject)?["rule"]?.GetValue<string>() == "image-strip");
-        Assert.Contains(
-            $"claudinine get test-session --ref {stubbed["uuid"]!.GetValue<string>()[..8]} --media",
-            stub);
+        await Assert.That(stub).Contains($"claudinine get test-session --ref {stubbed["uuid"]!.GetValue<string>()[..8]} --media");
     }
 
-    [Fact]
-    public void Base64DocumentBlockIsStubbed()
+    [Test]
+    public async Task Base64DocumentBlockIsStubbed()
     {
         var b = new TranscriptBuilder().UserPrompt("here is the spec");
         b.RawDocumentMessage("d1", Payload);
@@ -93,15 +93,14 @@ public sealed class MediaRetrievalTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.DoesNotContain(records.SelectMany(r =>
-            (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? []),
-            x => x["type"]?.GetValue<string>() == "document");
+        await Assert.That(records.SelectMany(r =>
+            (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? [])).DoesNotContain(x => x["type"]?.GetValue<string>() == "document");
         string stub = BlockTexts(records).Single(t => t!.Contains("--media"))!;
-        Assert.Contains("application/pdf", stub);
+        await Assert.That(stub).Contains("application/pdf");
     }
 
-    [Fact]
-    public void SingleCallScreenshotResultImageIsStubbedTextKept()
+    [Test]
+    public async Task SingleCallScreenshotResultImageIsStubbedTextKept()
     {
         // One call: chain-collapse (MinCalls=2) never sees it, so the nested
         // descent in image-strip is the only thing standing between this
@@ -115,13 +114,13 @@ public sealed class MediaRetrievalTests : IDisposable
         Compactor.Run(path);
 
         string text = File.ReadAllText(path);
-        Assert.DoesNotContain("\"image\"", text);
-        Assert.Contains("screenshot taken", text); // sibling text block untouched
-        Assert.Contains("--media", text);
+        await Assert.That(text).DoesNotContain("\"image\"");
+        await Assert.That(text).Contains("screenshot taken"); // sibling text block untouched
+        await Assert.That(text).Contains("--media");
     }
 
-    [Fact]
-    public void PastedImageRoundTripsThroughGetMedia()
+    [Test]
+    public async Task PastedImageRoundTripsThroughGetMedia()
     {
         var b = new TranscriptBuilder().UserPrompt("look");
         b.RawImageMessage("m1", Payload);
@@ -135,14 +134,14 @@ public sealed class MediaRetrievalTests : IDisposable
         string refArg = stubbed["uuid"]!.GetValue<string>()[..8];
 
         string output = RunGet(["test-session", "--ref", refArg, "--media"], out int rc);
-        Assert.Equal(0, rc);
+        await Assert.That(rc).IsEqualTo(0);
         string decodedPath = Regex.Match(output, @"wrote (.+?) \(image/png").Groups[1].Value;
-        Assert.Equal(Payload, File.ReadAllBytes(decodedPath));
-        Assert.Contains("Read", output); // tells the model how to view it
+        await Assert.That(File.ReadAllBytes(decodedPath)).IsEquivalentTo(Payload);
+        await Assert.That(output).Contains("Read"); // tells the model how to view it
     }
 
-    [Fact]
-    public void CollapsedScreenshotTurnRefLineNotesMediaAndRoundTrips()
+    [Test]
+    public async Task CollapsedScreenshotTurnRefLineNotesMediaAndRoundTrips()
     {
         // Two calls: the turn collapses, the screenshot result record becomes the
         // digest carrier and its nested image survives only in the mirror.
@@ -155,25 +154,26 @@ public sealed class MediaRetrievalTests : IDisposable
         Compactor.Run(path);
 
         string text = File.ReadAllText(path);
-        Assert.Contains("[+media image/png", text);
+        await Assert.That(text).Contains("[+media image/png");
         Match refMatch = Regex.Match(text, @"\[([0-9a-f-]{8})\] computer\(");
-        Assert.True(refMatch.Success, "digest should carry a ref line for the screenshot call");
+        await Assert.That(refMatch.Success).IsTrue()
+            .Because("digest should carry a ref line for the screenshot call");
 
         string output = RunGet(["test-session", "--ref", refMatch.Groups[1].Value, "--media"], out int rc);
-        Assert.Equal(0, rc);
+        await Assert.That(rc).IsEqualTo(0);
         string decodedPath = Regex.Match(output, @"wrote (.+?) \(image/png").Groups[1].Value;
-        Assert.Equal(Payload, File.ReadAllBytes(decodedPath));
+        await Assert.That(File.ReadAllBytes(decodedPath)).IsEquivalentTo(Payload);
     }
 
-    [Fact]
-    public void MediaRequiresRef()
+    [Test]
+    public async Task MediaRequiresRef()
     {
         _ = RunGet(["test-session", "--media"], out int rc);
-        Assert.Equal(1, rc);
+        await Assert.That(rc).IsEqualTo(1);
     }
 
-    [Fact]
-    public void MediaOnTextOnlyRecordFails()
+    [Test]
+    public async Task MediaOnTextOnlyRecordFails()
     {
         var b = new TranscriptBuilder().UserPrompt("plain work");
         b.ToolCall("Bash", new JsonObject { ["command"] = "echo hi" }, "hi there output");
@@ -187,11 +187,11 @@ public sealed class MediaRetrievalTests : IDisposable
             ["uuid"]!.GetValue<string>();
 
         _ = RunGet(["test-session", "--ref", resultUuid[..8], "--media"], out int rc);
-        Assert.Equal(1, rc);
+        await Assert.That(rc).IsEqualTo(1);
     }
 
-    [Fact]
-    public void LegacyDeadEndStubIsUpgradedToRetrievalForm()
+    [Test]
+    public async Task LegacyDeadEndStubIsUpgradedToRetrievalForm()
     {
         const string legacy = "[claudinine: old screenshot removed — re-request if needed]";
         var b = new TranscriptBuilder().UserPrompt("look");
@@ -218,12 +218,12 @@ public sealed class MediaRetrievalTests : IDisposable
         Compactor.Run(path);
 
         string text = File.ReadAllText(path);
-        Assert.DoesNotContain("re-request if needed", text);
-        Assert.Contains("--media", text);
+        await Assert.That(text).DoesNotContain("re-request if needed");
+        await Assert.That(text).Contains("--media");
     }
 
-    [Fact]
-    public void MediaStubbingIsIdempotent()
+    [Test]
+    public async Task MediaStubbingIsIdempotent()
     {
         var b = new TranscriptBuilder().UserPrompt("everything at once");
         b.RawImageMessage("m1", Payload);
@@ -237,6 +237,6 @@ public sealed class MediaRetrievalTests : IDisposable
         Compactor.Run(path);
         string afterFirst = File.ReadAllText(path);
         Compactor.Run(path);
-        Assert.Equal(afterFirst, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(afterFirst);
     }
 }

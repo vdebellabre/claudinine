@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -65,8 +67,8 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
 
     // ---- keep-last (supersession by a later notice) ----
 
-    [Fact]
-    public void MultiFileInterleaving_KeepsExactlyTheLastPerFile()
+    [Test]
+    public async Task MultiFileInterleaving_KeepsExactlyTheLastPerFile()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -83,12 +85,14 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
 
         JsonObject[] records = Load(path);
         // Keep-last invariant: the survivor is the LAST snippet, never an earlier one.
-        Assert.Equal("a v3", Assert.Single(EditedTextFiles(records, @"C:\proj\a.cs"))["attachment"]!["snippet"]!.GetValue<string>());
-        Assert.Equal("b v2", Assert.Single(EditedTextFiles(records, @"C:\proj\b.cs"))["attachment"]!["snippet"]!.GetValue<string>());
+        JsonObject a = await Assert.That(EditedTextFiles(records, @"C:\proj\a.cs")).HasSingleItem();
+        JsonObject b = await Assert.That(EditedTextFiles(records, @"C:\proj\b.cs")).HasSingleItem();
+        await Assert.That(a["attachment"]!["snippet"]!.GetValue<string>()).IsEqualTo("a v3");
+        await Assert.That(b["attachment"]!["snippet"]!.GetValue<string>()).IsEqualTo("b v2");
     }
 
-    [Fact]
-    public void RemovedAttachment_ChildRechainedToSurvivingAncestor()
+    [Test]
+    public async Task RemovedAttachment_ChildRechainedToSurvivingAncestor()
     {
         var b = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -108,11 +112,11 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
         JsonObject secondPrompt = records.Single(r =>
             r["message"]?["content"] is JsonValue v
             && v.TryGetValue<string>(out string? s) && s == "second prompt");
-        Assert.Equal(assistantUuid, secondPrompt["parentUuid"]!.GetValue<string>());
+        await Assert.That(secondPrompt["parentUuid"]!.GetValue<string>()).IsEqualTo(assistantUuid);
     }
 
-    [Fact]
-    public void LastOccurrenceAtTail_EarlierRemovedTailIntact()
+    [Test]
+    public async Task LastOccurrenceAtTail_EarlierRemovedTailIntact()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -124,13 +128,13 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        JsonObject survivor = Assert.Single(EditedTextFiles(records, @"C:\proj\a.cs"));
-        Assert.Equal("a v2", survivor["attachment"]!["snippet"]!.GetValue<string>());
-        Assert.Same(records[^1], survivor);
+        JsonObject survivor = await Assert.That(EditedTextFiles(records, @"C:\proj\a.cs")).HasSingleItem();
+        await Assert.That(survivor["attachment"]!["snippet"]!.GetValue<string>()).IsEqualTo("a v2");
+        await Assert.That(survivor).IsSameReferenceAs(records[^1]);
     }
 
-    [Fact]
-    public void SingleOccurrenceUntouched()
+    [Test]
+    public async Task SingleOccurrenceUntouched()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -140,11 +144,11 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Single(EditedTextFiles(Load(path), @"C:\proj\a.cs"));
+        await Assert.That(EditedTextFiles(Load(path), @"C:\proj\a.cs")).HasSingleItem();
     }
 
-    [Fact]
-    public void OtherAttachmentTypesUntouched()
+    [Test]
+    public async Task OtherAttachmentTypesUntouched()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -156,13 +160,13 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(3, Load(path).Count(r => r["type"]?.GetValue<string>() == "attachment"));
+        await Assert.That(Load(path).Count(r => r["type"]?.GetValue<string>() == "attachment")).IsEqualTo(3);
     }
 
     // ---- supersession by a later full Read ----
 
-    [Fact]
-    public void FullReadAfterNotice_RemovesEvenTheLastNotice()
+    [Test]
+    public async Task FullReadAfterNotice_RemovesEvenTheLastNotice()
     {
         string file = @"C:\proj\a.cs";
         string path = new TranscriptBuilder()
@@ -178,11 +182,11 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
         Compactor.Run(path);
 
         // The whole run for that file goes: the read IS the fresher full view.
-        Assert.Empty(EditedTextFiles(Load(path), file));
+        await Assert.That(EditedTextFiles(Load(path), file)).IsEmpty();
     }
 
-    [Fact]
-    public void PartialRead_DoesNotSupersede()
+    [Test]
+    public async Task PartialRead_DoesNotSupersede()
     {
         string file = @"C:\proj\a.cs";
         string path = new TranscriptBuilder()
@@ -198,11 +202,11 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
         Compactor.Run(path);
 
         // Neither slice proves a full view; the notice stays the latest one.
-        Assert.Single(EditedTextFiles(Load(path), file));
+        await Assert.That(EditedTextFiles(Load(path), file)).HasSingleItem();
     }
 
-    [Fact]
-    public void FailedRead_DoesNotSupersede()
+    [Test]
+    public async Task FailedRead_DoesNotSupersede()
     {
         string file = @"C:\proj\a.cs";
         string path = new TranscriptBuilder()
@@ -215,11 +219,11 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Single(EditedTextFiles(Load(path), file));
+        await Assert.That(EditedTextFiles(Load(path), file)).HasSingleItem();
     }
 
-    [Fact]
-    public void ReadBeforeNotice_DoesNotSupersede()
+    [Test]
+    public async Task ReadBeforeNotice_DoesNotSupersede()
     {
         string file = @"C:\proj\a.cs";
         string path = new TranscriptBuilder()
@@ -233,11 +237,11 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
         Compactor.Run(path);
 
         // File order is time order: the notice is fresher than the read.
-        Assert.Single(EditedTextFiles(Load(path), file));
+        await Assert.That(EditedTextFiles(Load(path), file)).HasSingleItem();
     }
 
-    [Fact]
-    public void FullReadOfDifferentFile_DoesNotSupersede()
+    [Test]
+    public async Task FullReadOfDifferentFile_DoesNotSupersede()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -249,13 +253,13 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Single(EditedTextFiles(Load(path), @"C:\proj\a.cs"));
+        await Assert.That(EditedTextFiles(Load(path), @"C:\proj\a.cs")).HasSingleItem();
     }
 
     // ---- supersession by a later Write; Edit never supersedes ----
 
-    [Fact]
-    public void WriteAfterNotice_Supersedes()
+    [Test]
+    public async Task WriteAfterNotice_Supersedes()
     {
         string file = @"C:\proj\a.cs";
         string path = new TranscriptBuilder()
@@ -268,11 +272,11 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Empty(EditedTextFiles(Load(path), file));
+        await Assert.That(EditedTextFiles(Load(path), file)).IsEmpty();
     }
 
-    [Fact]
-    public void EditAfterNotice_DoesNotSupersede()
+    [Test]
+    public async Task EditAfterNotice_DoesNotSupersede()
     {
         string file = @"C:\proj\a.cs";
         // Edit's toolUseResult has no "type" field: a patch builds ON the
@@ -297,11 +301,11 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Single(EditedTextFiles(Load(path), file));
+        await Assert.That(EditedTextFiles(Load(path), file)).HasSingleItem();
     }
 
-    [Fact]
-    public void WriteShapedResultFromUnknownTool_DoesNotSupersede()
+    [Test]
+    public async Task WriteShapedResultFromUnknownTool_DoesNotSupersede()
     {
         string file = @"C:\proj\a.cs";
         // The result shape alone is not enough: the tool name must match too
@@ -316,13 +320,13 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Single(EditedTextFiles(Load(path), file));
+        await Assert.That(EditedTextFiles(Load(path), file)).HasSingleItem();
     }
 
     // ---- pass discipline ----
 
-    [Fact]
-    public void IdempotentSecondPass()
+    [Test]
+    public async Task IdempotentSecondPass()
     {
         string file = @"C:\proj\a.cs";
         string path = new TranscriptBuilder()
@@ -340,6 +344,6 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
         Compactor.Run(path);
         byte[] afterSecond = File.ReadAllBytes(path);
 
-        Assert.Equal(afterFirst, afterSecond);
+        await Assert.That(afterSecond).IsEquivalentTo(afterFirst);
     }
 }

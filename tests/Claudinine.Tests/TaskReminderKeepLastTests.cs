@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -39,8 +41,8 @@ public sealed class TaskReminderKeepLastTests : IDisposable
             ? items[0]?["subject"]?.GetValue<string>()
             : null;
 
-    [Fact]
-    public void KeepsExactlyTheLast_EmptyNudgesAndSnapshotsAlike()
+    [Test]
+    public async Task KeepsExactlyTheLast_EmptyNudgesAndSnapshotsAlike()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -54,12 +56,12 @@ public sealed class TaskReminderKeepLastTests : IDisposable
 
         Compactor.Run(path);
 
-        JsonObject survivor = Assert.Single(Reminders(Load(path)));
-        Assert.Equal("plan v2", FirstSubject(survivor));
+        JsonObject survivor = await Assert.That(Reminders(Load(path))).HasSingleItem();
+        await Assert.That(FirstSubject(survivor)).IsEqualTo("plan v2");
     }
 
-    [Fact]
-    public void RemovedReminder_ChildRechainedToSurvivingAncestor()
+    [Test]
+    public async Task RemovedReminder_ChildRechainedToSurvivingAncestor()
     {
         var b = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -79,11 +81,11 @@ public sealed class TaskReminderKeepLastTests : IDisposable
         JsonObject secondPrompt = records.Single(r =>
             r["message"]?["content"] is JsonValue v
             && v.TryGetValue<string>(out string? s) && s == "second prompt");
-        Assert.Equal(assistantUuid, secondPrompt["parentUuid"]!.GetValue<string>());
+        await Assert.That(secondPrompt["parentUuid"]!.GetValue<string>()).IsEqualTo(assistantUuid);
     }
 
-    [Fact]
-    public void SingleReminderUntouched()
+    [Test]
+    public async Task SingleReminderUntouched()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -93,11 +95,11 @@ public sealed class TaskReminderKeepLastTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Single(Reminders(Load(path)));
+        await Assert.That(Reminders(Load(path))).HasSingleItem();
     }
 
-    [Fact]
-    public void LastReminderAtTail_EarlierRemovedTailIntact()
+    [Test]
+    public async Task LastReminderAtTail_EarlierRemovedTailIntact()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -109,13 +111,13 @@ public sealed class TaskReminderKeepLastTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        JsonObject survivor = Assert.Single(Reminders(records));
-        Assert.Equal("plan v2", FirstSubject(survivor));
-        Assert.Same(records[^1], survivor);
+        JsonObject survivor = await Assert.That(Reminders(records)).HasSingleItem();
+        await Assert.That(FirstSubject(survivor)).IsEqualTo("plan v2");
+        await Assert.That(survivor).IsSameReferenceAs(records[^1]);
     }
 
-    [Fact]
-    public void SidechainReminders_NeitherRemovedNorSuperseding()
+    [Test]
+    public async Task SidechainReminders_NeitherRemovedNorSuperseding()
     {
         // A subagent's reminder is a separate conversation: it must not be
         // removed by a later main-chain reminder, and it must not supersede an
@@ -134,11 +136,11 @@ public sealed class TaskReminderKeepLastTests : IDisposable
 
         JsonObject[] reminders = Reminders(Load(path));
         string[] subjects = [.. reminders.Select(r => FirstSubject(r) ?? "(empty)")];
-        Assert.Equal(["side v1", "main v2", "side v2"], subjects);
+        await Assert.That(subjects).IsEquivalentTo(["side v1", "main v2", "side v2"]);
     }
 
-    [Fact]
-    public void IdempotentSecondPass()
+    [Test]
+    public async Task IdempotentSecondPass()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -153,6 +155,6 @@ public sealed class TaskReminderKeepLastTests : IDisposable
         Compactor.Run(path);
         byte[] afterSecond = File.ReadAllBytes(path);
 
-        Assert.Equal(afterFirst, afterSecond);
+        await Assert.That(afterSecond).IsEquivalentTo(afterFirst);
     }
 }

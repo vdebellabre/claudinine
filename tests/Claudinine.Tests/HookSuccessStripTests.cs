@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -36,8 +38,8 @@ public sealed class HookSuccessStripTests : IDisposable
                 && r["attachment"]?["type"]?.GetValue<string>() == "hook_success")
             .Select(r => r["attachment"]!["hookEvent"]!.GetValue<string>())];
 
-    [Fact]
-    public void InertEventsRemoved_ProvenAndUnprovenKept()
+    [Test]
+    public async Task InertEventsRemoved_ProvenAndUnprovenKept()
     {
         string path = new TranscriptBuilder()
             .HookSuccess("SessionStart")
@@ -54,11 +56,11 @@ public sealed class HookSuccessStripTests : IDisposable
         Compactor.Run(path);
 
         // Allowlist removal: only the two canary-proven-inert events go.
-        Assert.Equal(["SessionStart", "PreToolUse", "SomeFutureEvent"], HookEvents(Load(path)));
+        await Assert.That(HookEvents(Load(path))).IsEquivalentTo(["SessionStart", "PreToolUse", "SomeFutureEvent"]);
     }
 
-    [Fact]
-    public void RemovedRecord_ChildRechainedToSurvivingAncestor()
+    [Test]
+    public async Task RemovedRecord_ChildRechainedToSurvivingAncestor()
     {
         var b = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -74,11 +76,11 @@ public sealed class HookSuccessStripTests : IDisposable
         JsonObject secondPrompt = Load(path).Single(r =>
             r["message"]?["content"] is JsonValue v
             && v.TryGetValue<string>(out string? s) && s == "second prompt");
-        Assert.Equal(assistantUuid, secondPrompt["parentUuid"]!.GetValue<string>());
+        await Assert.That(secondPrompt["parentUuid"]!.GetValue<string>()).IsEqualTo(assistantUuid);
     }
 
-    [Fact]
-    public void TailRecordNeverRemoved()
+    [Test]
+    public async Task TailRecordNeverRemoved()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -88,11 +90,11 @@ public sealed class HookSuccessStripTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(["Stop"], HookEvents(Load(path)));
+        await Assert.That(HookEvents(Load(path))).IsEquivalentTo(["Stop"]);
     }
 
-    [Fact]
-    public void SidechainRecordsUntouched()
+    [Test]
+    public async Task SidechainRecordsUntouched()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -102,11 +104,11 @@ public sealed class HookSuccessStripTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(["Stop"], HookEvents(Load(path)));
+        await Assert.That(HookEvents(Load(path))).IsEquivalentTo(["Stop"]);
     }
 
-    [Fact]
-    public void TailLeafUuidRemapDoesNotAbortThePass()
+    [Test]
+    public async Task TailLeafUuidRemapDoesNotAbortThePass()
     {
         // Regression (found 2026-08-07 on the hook_success corpus): files often
         // end in a uuid-less last-prompt record whose leafUuid anchors the final
@@ -125,14 +127,14 @@ public sealed class HookSuccessStripTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.Empty(HookEvents(records));
+        await Assert.That(HookEvents(records)).IsEmpty();
         JsonObject tail = records[^1];
-        Assert.Equal("last-prompt", tail["type"]!.GetValue<string>());
-        Assert.Equal(assistantUuid, tail["leafUuid"]!.GetValue<string>());
+        await Assert.That(tail["type"]!.GetValue<string>()).IsEqualTo("last-prompt");
+        await Assert.That(tail["leafUuid"]!.GetValue<string>()).IsEqualTo(assistantUuid);
     }
 
-    [Fact]
-    public void IdempotentSecondPass()
+    [Test]
+    public async Task IdempotentSecondPass()
     {
         string path = new TranscriptBuilder()
             .UserPrompt("hello")
@@ -146,6 +148,6 @@ public sealed class HookSuccessStripTests : IDisposable
         Compactor.Run(path);
         byte[] afterSecond = File.ReadAllBytes(path);
 
-        Assert.Equal(afterFirst, afterSecond);
+        await Assert.That(afterSecond).IsEquivalentTo(afterFirst);
     }
 }

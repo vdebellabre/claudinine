@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Claudinine.Mirror;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -78,48 +80,48 @@ public sealed class GetVerbTests : IDisposable
         finally { Console.SetOut(origOut); Console.SetError(origErr); }
     }
 
-    [Fact]
-    public void BareInvocationDefaultsToInfoListing()
+    [Test]
+    public async Task BareInvocationDefaultsToInfoListing()
     {
         // Previously printed nothing and exited 0 — useless and misleading.
         WriteMirror(Session, (Uuid1, "alpha output\nbeta line"), (Uuid2, "gamma"));
 
         (int exit, string output, _) = Run(Session);
 
-        Assert.Equal(0, exit);
-        Assert.Contains($"[{Uuid1[..8]}]", output);
-        Assert.Contains($"[{Uuid2[..8]}]", output);
-        Assert.Contains("bytes", output);
-        Assert.DoesNotContain("alpha output", output); // listing, not content dump
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output).Contains($"[{Uuid1[..8]}]");
+        await Assert.That(output).Contains($"[{Uuid2[..8]}]");
+        await Assert.That(output).Contains("bytes");
+        await Assert.That(output).DoesNotContain("alpha output"); // listing, not content dump
     }
 
-    [Fact]
-    public void GrepPrintsMatchingLinesOnly()
+    [Test]
+    public async Task GrepPrintsMatchingLinesOnly()
     {
         WriteMirror(Session, (Uuid1, "alpha output\nbeta line"), (Uuid2, "gamma"));
 
         (int exit, string output, _) = Run(Session, "--grep", "alpha");
 
-        Assert.Equal(0, exit);
-        Assert.Contains("alpha output", output);
-        Assert.DoesNotContain("beta line", output);
-        Assert.DoesNotContain("gamma", output);
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output).Contains("alpha output");
+        await Assert.That(output).DoesNotContain("beta line");
+        await Assert.That(output).DoesNotContain("gamma");
     }
 
-    [Fact]
-    public void GrepWithNoHitExitsOneWithHint()
+    [Test]
+    public async Task GrepWithNoHitExitsOneWithHint()
     {
         WriteMirror(Session, (Uuid1, "alpha output"));
 
         (int exit, string output, string err) = Run(Session, "--grep", "zzz-nowhere");
 
-        Assert.Equal(1, exit);
-        Assert.Equal("", output);
-        Assert.Contains("no archived output matches", err);
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(output).IsEqualTo("");
+        await Assert.That(err).Contains("no archived output matches");
     }
 
-    [Fact]
-    public void RefGrepWithNoMatchingLineExitsOneWithHint()
+    [Test]
+    public async Task RefGrepWithNoMatchingLineExitsOneWithHint()
     {
         // Regression: the record exists so the empty-match check passed, the
         // per-line grep printed nothing, and the exit code was 0 — while the
@@ -128,89 +130,89 @@ public sealed class GetVerbTests : IDisposable
 
         (int exit, string output, string err) = Run(Session, "--ref", Uuid1[..8], "--grep", "zzz-nowhere");
 
-        Assert.Equal(1, exit);
-        Assert.Equal("", output);
-        Assert.Contains(Uuid1[..8], err);
-        Assert.Contains("zzz-nowhere", err);
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(output).IsEqualTo("");
+        await Assert.That(err).Contains(Uuid1[..8]);
+        await Assert.That(err).Contains("zzz-nowhere");
     }
 
-    [Fact]
-    public void RefGrepPrintsMatchingLinesOfThatRecordOnly()
+    [Test]
+    public async Task RefGrepPrintsMatchingLinesOfThatRecordOnly()
     {
         WriteMirror(Session, (Uuid1, "needle here\nother"), (Uuid2, "needle elsewhere"));
 
         (int exit, string output, _) = Run(Session, "--ref", Uuid1[..8], "--grep", "needle");
 
-        Assert.Equal(0, exit);
-        Assert.Contains("needle here", output);
-        Assert.DoesNotContain("needle elsewhere", output);
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output).Contains("needle here");
+        await Assert.That(output).DoesNotContain("needle elsewhere");
     }
 
-    [Fact]
-    public void RefPrintsFullRecord()
+    [Test]
+    public async Task RefPrintsFullRecord()
     {
         WriteMirror(Session, (Uuid1, "full record body"));
 
         (int exit, string output, _) = Run(Session, "--ref", Uuid1[..8]);
 
-        Assert.Equal(0, exit);
-        Assert.Contains($"=== [{Uuid1[..8]}] ===", output);
-        Assert.Contains("full record body", output);
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output).Contains($"=== [{Uuid1[..8]}] ===");
+        await Assert.That(output).Contains("full record body");
     }
 
-    [Fact]
-    public void UnknownRefExitsOneWithHint()
+    [Test]
+    public async Task UnknownRefExitsOneWithHint()
     {
         WriteMirror(Session, (Uuid1, "content"));
 
         (int exit, _, string err) = Run(Session, "--ref", "ffffffff");
 
-        Assert.Equal(1, exit);
-        Assert.Contains("no archived output for ref", err);
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(err).Contains("no archived output for ref");
     }
 
-    [Fact]
-    public void UnknownSessionExitsOneWithSearchedDirs()
+    [Test]
+    public async Task UnknownSessionExitsOneWithSearchedDirs()
     {
         (int exit, _, string err) = Run("00000000-dead-beef-0000-000000000000");
 
-        Assert.Equal(1, exit);
-        Assert.Contains("no mirror found", err);
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(err).Contains("no mirror found");
     }
 
-    [Fact]
-    public void UnknownArgumentExitsOne()
+    [Test]
+    public async Task UnknownArgumentExitsOne()
     {
         (int exit, _, string err) = Run(Session, "--bogus");
 
-        Assert.Equal(1, exit);
-        Assert.Contains("unknown argument", err);
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(err).Contains("unknown argument");
     }
 
     // ---- ambiguous-prefix resolution: the safety rule had zero assertions ----
 
-    [Fact]
-    public void PrefixMatchingTwoSessionsMatchesNothing()
+    [Test]
+    public async Task PrefixMatchingTwoSessionsMatchesNothing()
     {
         const string sibling = "77777777-aaaa-bbbb-cccc-000000000002"; // same prefix as Session
         WriteMirror(Session, (Uuid1, "one"));
         WriteMirror(sibling, (Uuid2, "two"));
 
-        Assert.Empty(MirrorLocator.FindSessionMirrors("77777777-aaaa"));
+        await Assert.That(MirrorLocator.FindSessionMirrors("77777777-aaaa")).IsEmpty();
 
         (int exit, _, string err) = Run("77777777-aaaa");
-        Assert.Equal(1, exit);
-        Assert.Contains("no mirror found", err);
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(err).Contains("no mirror found");
     }
 
-    [Fact]
-    public void UniquePrefixResolves()
+    [Test]
+    public async Task UniquePrefixResolves()
     {
         WriteMirror(Session, (Uuid1, "unique content"));
 
         (int exit, string output, _) = Run(Session[..13], "--grep", "unique");
 
-        Assert.Equal(0, exit);
-        Assert.Contains("unique content", output);
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output).Contains("unique content");
     }
 }

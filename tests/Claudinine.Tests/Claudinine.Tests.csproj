@@ -5,12 +5,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- TUnit runs on Microsoft.Testing.Platform: the test project is its own
+         runner executable, not a VSTest-hosted library. -->
+    <OutputType>Exe</OutputType>
+    <!-- TUnit0055 flags Console.SetOut. The verb tests capture stdout to assert on
+         what `claudinine get`/`restore` print, and every capture restores the
+         original writer in a finally. Runs are serialized ([assembly: NotInParallel]),
+         so no other test can observe the swap. -->
+    <NoWarn>$(NoWarn);TUnit0055</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
-    <PackageReference Include="xunit" Version="2.9.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2" />
+    <PackageReference Include="TUnit" Version="1.63.25" />
   </ItemGroup>
 
   <ItemGroup>

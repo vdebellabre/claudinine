@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -64,14 +66,14 @@ public sealed class CloneVerbTests : IDisposable
     }
 
     /// <summary>The clone's id: the one new transcript that is not the source.</summary>
-    private string CloneId()
+    private async Task<string> CloneId()
     {
         string[] found = Directory.EnumerateFiles(_projectDir, "*.jsonl")
             .Select(Path.GetFileNameWithoutExtension)
             .Where(n => n is not null && n != SourceId)
             .Select(n => n!)
             .ToArray();
-        Assert.Single(found);
+        await Assert.That(found).HasSingleItem();
         return found[0];
     }
 
@@ -81,38 +83,38 @@ public sealed class CloneVerbTests : IDisposable
             .Select(l => (JsonNode.Parse(l) as JsonObject)!)
             .ToList();
 
-    [Fact]
-    public void RebindsSessionIdOnEveryRecord()
+    [Test]
+    public async Task RebindsSessionIdOnEveryRecord()
     {
         WriteTranscript(
             $"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}",
             $"{{\"type\":\"assistant\",\"uuid\":\"u2\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        string cloneId = CloneId();
+        string cloneId = await CloneId();
         foreach (JsonObject rec in ReadRecords(TranscriptPath(cloneId)))
-            Assert.Equal(cloneId, rec["sessionId"]!.GetValue<string>());
+            await Assert.That(rec["sessionId"]!.GetValue<string>()).IsEqualTo(cloneId);
     }
 
-    [Fact]
-    public void PreservesUuidChainTopology()
+    [Test]
+    public async Task PreservesUuidChainTopology()
     {
         // Mirror refs are addressed by uuid — rewriting them would orphan retrieval.
         WriteTranscript(
             $"{{\"type\":\"user\",\"uuid\":\"u1\",\"parentUuid\":null,\"sessionId\":\"{SourceId}\"}}",
             $"{{\"type\":\"assistant\",\"uuid\":\"u2\",\"parentUuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        List<JsonObject> recs = ReadRecords(TranscriptPath(CloneId()));
-        Assert.Equal("u1", recs[0]["uuid"]!.GetValue<string>());
-        Assert.Equal("u2", recs[1]["uuid"]!.GetValue<string>());
-        Assert.Equal("u1", recs[1]["parentUuid"]!.GetValue<string>());
+        List<JsonObject> recs = ReadRecords(TranscriptPath((await CloneId())));
+        await Assert.That(recs[0]["uuid"]!.GetValue<string>()).IsEqualTo("u1");
+        await Assert.That(recs[1]["uuid"]!.GetValue<string>()).IsEqualTo("u2");
+        await Assert.That(recs[1]["parentUuid"]!.GetValue<string>()).IsEqualTo("u1");
     }
 
-    [Fact]
-    public void RewritesEmbeddedRetrievalCommands()
+    [Test]
+    public async Task RewritesEmbeddedRetrievalCommands()
     {
         // A chain-collapse digest spells the session id literally in its get commands.
         string digest = $"[claudinine: ...\\n  claudinine get {SourceId} --ref REF --full\\n]";
@@ -120,16 +122,16 @@ public sealed class CloneVerbTests : IDisposable
             $"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"," +
             $"\"message\":{{\"content\":[{{\"type\":\"tool_result\",\"content\":\"{digest}\"}}]}}}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        string cloneId = CloneId();
+        string cloneId = await CloneId();
         string text = File.ReadAllText(TranscriptPath(cloneId));
-        Assert.Contains($"claudinine get {cloneId}", text);
-        Assert.DoesNotContain(SourceId, text);
+        await Assert.That(text).Contains($"claudinine get {cloneId}");
+        await Assert.That(text).DoesNotContain(SourceId);
     }
 
-    [Fact]
-    public void PersistedOutputSidecarPathSurvivesClone()
+    [Test]
+    public async Task PersistedOutputSidecarPathSurvivesClone()
     {
         // The app's <persisted-output> stubs embed an absolute sidecar path under
         // the SOURCE session's directory. The clone never copies that directory and
@@ -155,18 +157,18 @@ public sealed class CloneVerbTests : IDisposable
         };
         WriteTranscript(rec.ToJsonString());
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        string cloneId = CloneId();
+        string cloneId = await CloneId();
         string cloned = ReadRecords(TranscriptPath(cloneId))[0]["message"]!["content"]![0]!["content"]!
             .GetValue<string>();
-        Assert.Contains(sidecar, cloned);                        // pointer intact
-        Assert.Contains($"claudinine get {cloneId}", cloned);    // retrieval retargeted
-        Assert.DoesNotContain($"claudinine get {SourceId}", cloned);
+        await Assert.That(cloned).Contains(sidecar);                        // pointer intact
+        await Assert.That(cloned).Contains($"claudinine get {cloneId}");    // retrieval retargeted
+        await Assert.That(cloned).DoesNotContain($"claudinine get {SourceId}");
     }
 
-    [Fact]
-    public void RepointsMirrorHeaderAtCloneTranscript()
+    [Test]
+    public async Task RepointsMirrorHeaderAtCloneTranscript()
     {
         // Load-bearing: CollectGarbage deletes mirrors whose mirrorOf target is gone,
         // so a verbatim header would have the clone's mirror collected when the source
@@ -174,80 +176,77 @@ public sealed class CloneVerbTests : IDisposable
         WriteTranscript($"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}");
         WriteMirror($"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        string cloneId = CloneId();
+        string cloneId = await CloneId();
         string mirrorPath = Path.Combine(_mirrorDir, cloneId + ".jsonl");
-        Assert.True(File.Exists(mirrorPath));
+        await Assert.That(File.Exists(mirrorPath)).IsTrue();
         JsonObject header = ReadRecords(mirrorPath)[0];
-        Assert.Equal(
-            Path.GetFullPath(TranscriptPath(cloneId)),
-            header["claudinine"]!["mirrorOf"]!.GetValue<string>());
+        await Assert.That(header["claudinine"]!["mirrorOf"]!.GetValue<string>()).IsEqualTo(Path.GetFullPath(TranscriptPath(cloneId)));
     }
 
-    [Fact]
-    public void MirrorBodyKeepsUuidsSoRetrievalStillResolves()
+    [Test]
+    public async Task MirrorBodyKeepsUuidsSoRetrievalStillResolves()
     {
         WriteTranscript($"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}");
         WriteMirror(
             $"{{\"type\":\"user\",\"uuid\":\"abc12345\",\"sessionId\":\"{SourceId}\"," +
             "\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"original output\"}]}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        string cloneId = CloneId();
+        string cloneId = await CloneId();
         List<JsonObject> recs = ReadRecords(Path.Combine(_mirrorDir, cloneId + ".jsonl"));
-        Assert.Equal("abc12345", recs[1]["uuid"]!.GetValue<string>());
-        Assert.Equal(cloneId, recs[1]["sessionId"]!.GetValue<string>());
-        Assert.Contains("original output", recs[1].ToJsonString());
+        await Assert.That(recs[1]["uuid"]!.GetValue<string>()).IsEqualTo("abc12345");
+        await Assert.That(recs[1]["sessionId"]!.GetValue<string>()).IsEqualTo(cloneId);
+        await Assert.That(recs[1].ToJsonString()).Contains("original output");
     }
 
-    [Fact]
-    public void SuffixesExistingTitle()
+    [Test]
+    public async Task SuffixesExistingTitle()
     {
         WriteTranscript(
             $"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}",
             $"{{\"type\":\"custom-title\",\"customTitle\":\"My work\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        string text = File.ReadAllText(TranscriptPath(CloneId()));
-        Assert.Contains("My work (compacted)", text);
+        string text = File.ReadAllText(TranscriptPath((await CloneId())));
+        await Assert.That(text).Contains("My work (compacted)");
     }
 
-    [Fact]
-    public void AddsTitleWhenSourceHasNone()
+    [Test]
+    public async Task AddsTitleWhenSourceHasNone()
     {
         // Without a title the app derives one from the first prompt, so both sessions
         // would read alike in the resume picker.
         WriteTranscript($"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        string cloneId = CloneId();
+        string cloneId = await CloneId();
         List<JsonObject> recs = ReadRecords(TranscriptPath(cloneId));
-        JsonObject title = Assert.Single(
-            recs, r => r["type"]?.GetValue<string>() == "custom-title");
-        Assert.Contains("(compacted)", title["customTitle"]!.GetValue<string>());
-        Assert.Equal(cloneId, title["sessionId"]!.GetValue<string>());
+        JsonObject title = await Assert.That(recs).HasSingleItem(r => r["type"]?.GetValue<string>() == "custom-title");
+        await Assert.That(title["customTitle"]!.GetValue<string>()).Contains("(compacted)");
+        await Assert.That(title["sessionId"]!.GetValue<string>()).IsEqualTo(cloneId);
     }
 
-    [Fact]
-    public void DoesNotDoubleSuffixOnRecursiveClone()
+    [Test]
+    public async Task DoesNotDoubleSuffixOnRecursiveClone()
     {
         WriteTranscript(
             $"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}",
             $"{{\"type\":\"custom-title\",\"customTitle\":\"My work (compacted)\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        string text = File.ReadAllText(TranscriptPath(CloneId()));
-        Assert.Contains("My work (compacted)", text);
-        Assert.DoesNotContain("(compacted) (compacted)", text);
+        string text = File.ReadAllText(TranscriptPath((await CloneId())));
+        await Assert.That(text).Contains("My work (compacted)");
+        await Assert.That(text).DoesNotContain("(compacted) (compacted)");
     }
 
-    [Fact]
-    public void LeavesSourceUntouched()
+    [Test]
+    public async Task LeavesSourceUntouched()
     {
         string[] lines =
         [
@@ -259,56 +258,56 @@ public sealed class CloneVerbTests : IDisposable
         string before = File.ReadAllText(TranscriptPath(SourceId));
         string mirrorBefore = File.ReadAllText(Path.Combine(_mirrorDir, SourceId + ".jsonl"));
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        Assert.Equal(before, File.ReadAllText(TranscriptPath(SourceId)));
-        Assert.Equal(mirrorBefore, File.ReadAllText(Path.Combine(_mirrorDir, SourceId + ".jsonl")));
+        await Assert.That(File.ReadAllText(TranscriptPath(SourceId))).IsEqualTo(before);
+        await Assert.That(File.ReadAllText(Path.Combine(_mirrorDir, SourceId + ".jsonl"))).IsEqualTo(mirrorBefore);
     }
 
-    [Fact]
-    public void ResolvesSessionByPrefix()
+    [Test]
+    public async Task ResolvesSessionByPrefix()
     {
         WriteTranscript($"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId[..8]], _root));
+        await Assert.That(CloneVerb.Run([SourceId[..8]], _root)).IsEqualTo(0);
 
-        Assert.True(File.Exists(TranscriptPath(CloneId())));
+        await Assert.That(File.Exists(TranscriptPath((await CloneId())))).IsTrue();
     }
 
-    [Fact]
-    public void SucceedsWithoutMirror()
+    [Test]
+    public async Task SucceedsWithoutMirror()
     {
         // A session compacted before the mirror existed, or one whose mirror aged out:
         // the clone is still worth making, just without retrieval.
         WriteTranscript($"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        Assert.True(File.Exists(TranscriptPath(CloneId())));
+        await Assert.That(File.Exists(TranscriptPath((await CloneId())))).IsTrue();
     }
 
-    [Fact]
-    public void PreservesUnparseableLines()
+    [Test]
+    public async Task PreservesUnparseableLines()
     {
         WriteTranscript(
             $"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}",
             "{not json at all",
             $"{{\"type\":\"assistant\",\"uuid\":\"u2\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
-        string text = File.ReadAllText(TranscriptPath(CloneId()));
-        Assert.Contains("{not json at all", text);
+        string text = File.ReadAllText(TranscriptPath((await CloneId())));
+        await Assert.That(text).Contains("{not json at all");
     }
 
-    [Fact]
-    public void FailsOnUnknownSession()
+    [Test]
+    public async Task FailsOnUnknownSession()
     {
-        Assert.Equal(1, CloneVerb.Run(["11111111-2222-3333-4444-555555555555"], _root));
+        await Assert.That(CloneVerb.Run(["11111111-2222-3333-4444-555555555555"], _root)).IsEqualTo(1);
     }
 
-    [Fact]
-    public void FailsOnAmbiguousPrefix()
+    [Test]
+    public async Task FailsOnAmbiguousPrefix()
     {
         // The safety rule: a prefix matching two distinct sessions matches nothing —
         // cloning a guessed session would silently target the wrong history.
@@ -318,20 +317,20 @@ public sealed class CloneVerbTests : IDisposable
             $"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{sibling}\"}}\n",
             new UTF8Encoding(false));
 
-        Assert.Equal(1, CloneVerb.Run([SourceId[..8]], _root));
+        await Assert.That(CloneVerb.Run([SourceId[..8]], _root)).IsEqualTo(1);
     }
 
-    [Fact]
-    public void FailsWithoutArguments()
+    [Test]
+    public async Task FailsWithoutArguments()
     {
-        Assert.Equal(1, CloneVerb.Run([], _root));
+        await Assert.That(CloneVerb.Run([], _root)).IsEqualTo(1);
     }
 
-    [Fact]
-    public void FailsOnUnknownArgument()
+    [Test]
+    public async Task FailsOnUnknownArgument()
     {
         WriteTranscript($"{{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"{SourceId}\"}}");
 
-        Assert.Equal(1, CloneVerb.Run([SourceId, "--bogus"], _root));
+        await Assert.That(CloneVerb.Run([SourceId, "--bogus"], _root)).IsEqualTo(1);
     }
 }

@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using Claudinine.Mirror;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -51,8 +53,8 @@ public sealed class CompactorTests : IDisposable
             .FirstOrDefault(b => b["tool_use_id"]?.GetValue<string>() == toolUseId)?
             ["content"]?.GetValue<string>();
 
-    [Fact]
-    public void SupersededReadsAreStubbedOutsideRecencyWindow()
+    [Test]
+    public async Task SupersededReadsAreStubbedOutsideRecencyWindow()
     {
         string path = EightIdenticalReads(out var ids).WriteTo(_dir);
         string[] before = File.ReadAllLines(path);
@@ -60,41 +62,40 @@ public sealed class CompactorTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        Assert.Equal(before.Length, records.Length);
+        await Assert.That(records.Length).IsEqualTo(before.Length);
 
         // Reads 0 and 1 are superseded and outside the recency window → stubbed.
         foreach (string id in ids[..2])
         {
-            JsonObject stubbed = Assert.Single(records, r => ResultContent(r, id) is not null);
+            JsonObject stubbed = await Assert.That(records).HasSingleItem(r => ResultContent(r, id) is not null);
             string content = ResultContent(stubbed, id)!;
-            Assert.StartsWith("[claudinine: file read superseded", content);
-            Assert.Contains("src/foo.cs:1-100", content);
-            Assert.NotNull(stubbed["claudinine"]);
-            Assert.Equal(stubbed["uuid"]!.GetValue<string>(),
-                stubbed["claudinine"]!["origUuid"]!.GetValue<string>());
+            await Assert.That(content).StartsWith("[claudinine: file read superseded");
+            await Assert.That(content).Contains("src/foo.cs:1-100");
+            await Assert.That(stubbed["claudinine"]).IsNotNull();
+            await Assert.That(stubbed["claudinine"]!["origUuid"]!.GetValue<string>()).IsEqualTo(stubbed["uuid"]!.GetValue<string>());
         }
         // Reads 2..7 are within the recency window → untouched.
         foreach (string id in ids[2..])
         {
-            JsonObject kept = Assert.Single(records, r => ResultContent(r, id) is not null);
-            Assert.Equal(LongOutput, ResultContent(kept, id));
+            JsonObject kept = await Assert.That(records).HasSingleItem(r => ResultContent(r, id) is not null);
+            await Assert.That(ResultContent(kept, id)).IsEqualTo(LongOutput);
         }
         // Tail record untouched byte-for-byte.
-        Assert.Equal(before[^1], File.ReadAllLines(path)[^1]);
+        await Assert.That(File.ReadAllLines(path)[^1]).IsEqualTo(before[^1]);
     }
 
-    [Fact]
-    public void PassIsIdempotent()
+    [Test]
+    public async Task PassIsIdempotent()
     {
         string path = EightIdenticalReads(out _).WriteTo(_dir);
         Compactor.Run(path);
         string afterFirst = File.ReadAllText(path);
         Compactor.Run(path);
-        Assert.Equal(afterFirst, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(afterFirst);
     }
 
-    [Fact]
-    public void MirrorHoldsOriginalsBeforeCompaction()
+    [Test]
+    public async Task MirrorHoldsOriginalsBeforeCompaction()
     {
         string path = EightIdenticalReads(out _).WriteTo(_dir);
         string[] original = File.ReadAllLines(path);
@@ -102,39 +103,39 @@ public sealed class CompactorTests : IDisposable
         Compactor.Run(path);
 
         string mirrorPath = MirrorLocator.PathFor(path);
-        Assert.True(File.Exists(mirrorPath));
+        await Assert.That(File.Exists(mirrorPath)).IsTrue();
         string[] mirrorLines = File.ReadAllLines(mirrorPath);
 
         // Header first, then the ORIGINAL records verbatim — restore is a copy.
         JsonObject header = (JsonObject)JsonNode.Parse(mirrorLines[0])!;
-        Assert.Equal(Path.GetFullPath(path), header["claudinine"]!["mirrorOf"]!.GetValue<string>());
-        Assert.Equal(original, mirrorLines[1..]);
+        await Assert.That(header["claudinine"]!["mirrorOf"]!.GetValue<string>()).IsEqualTo(Path.GetFullPath(path));
+        await Assert.That(mirrorLines[1..]).IsEquivalentTo(original);
     }
 
-    [Fact]
-    public void MirrorGainsNothingNewOnRerunAndKeepsOriginals()
+    [Test]
+    public async Task MirrorGainsNothingNewOnRerunAndKeepsOriginals()
     {
         string path = EightIdenticalReads(out _).WriteTo(_dir);
         Compactor.Run(path);
         string mirrorAfterFirst = File.ReadAllText(MirrorLocator.PathFor(path));
         Compactor.Run(path); // stubs now in transcript; marker records must be skipped
-        Assert.Equal(mirrorAfterFirst, File.ReadAllText(MirrorLocator.PathFor(path)));
+        await Assert.That(File.ReadAllText(MirrorLocator.PathFor(path))).IsEqualTo(mirrorAfterFirst);
     }
 
-    [Fact]
-    public void UnparseableLineAbortsWholePass()
+    [Test]
+    public async Task UnparseableLineAbortsWholePass()
     {
         string path = EightIdenticalReads(out _)
             .RawLine("not json at all")
             .WriteTo(_dir);
         string before = File.ReadAllText(path);
         Compactor.Run(path);
-        Assert.Equal(before, File.ReadAllText(path));
-        Assert.False(File.Exists(MirrorLocator.PathFor(path))); // mirror untouched too
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
+        await Assert.That(File.Exists(MirrorLocator.PathFor(path))).IsFalse(); // mirror untouched too
     }
 
-    [Fact]
-    public void RewriteRefusesToReplaceTailRecord()
+    [Test]
+    public async Task RewriteRefusesToReplaceTailRecord()
     {
         // Tail-uuid invariant: the app chains the next append off the file's final
         // record. No rule should ever target it (supersession is later-covers-
@@ -146,12 +147,12 @@ public sealed class CompactorTests : IDisposable
         transcript.Records[^1].Replacement =
             (JsonObject)transcript.Records[^1].Node.DeepClone();
 
-        Assert.False(transcript.TryRewrite());
-        Assert.Equal(before, File.ReadAllText(path));
+        await Assert.That(transcript.TryRewrite()).IsFalse();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
     }
 
-    [Fact]
-    public void RewriteRefusesWhenFileGrewBetweenLoadAndSwap()
+    [Test]
+    public async Task RewriteRefusesWhenFileGrewBetweenLoadAndSwap()
     {
         // The app appends live during a turn; a record landing after our load
         // would be silently discarded by the swap — and mirror-first means it
@@ -164,12 +165,12 @@ public sealed class CompactorTests : IDisposable
         File.AppendAllText(path, """{"type":"user","uuid":"late-append"}""" + "\n");
         string withLateAppend = File.ReadAllText(path);
 
-        Assert.False(transcript.TryRewrite());
-        Assert.Equal(withLateAppend, File.ReadAllText(path)); // late record survives
+        await Assert.That(transcript.TryRewrite()).IsFalse();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(withLateAppend); // late record survives
     }
 
-    [Fact]
-    public void RewriteRefusesResultWhoseToolUseWasRemoved()
+    [Test]
+    public async Task RewriteRefusesResultWhoseToolUseWasRemoved()
     {
         // Pair atomicity: a surviving result carrier whose tool_use record was
         // removed dangles its sourceToolAssistantUUID (and its tool_use_id has no
@@ -185,12 +186,12 @@ public sealed class CompactorTests : IDisposable
         var transcript = Claudinine.Transcript.TranscriptFile.TryLoad(path)!;
         transcript.Records.Single(r => r.Uuid == useUuid).Removed = true;
 
-        Assert.False(transcript.TryRewrite());
-        Assert.Equal(before, File.ReadAllText(path));
+        await Assert.That(transcript.TryRewrite()).IsFalse();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
     }
 
-    [Fact]
-    public void ShortResultsAreNotWorthAStub()
+    [Test]
+    public async Task ShortResultsAreNotWorthAStub()
     {
         var b = new TranscriptBuilder();
         for (int i = 0; i < 8; i++)
@@ -202,11 +203,11 @@ public sealed class CompactorTests : IDisposable
         string path = b.WriteTo(_dir);
         string before = File.ReadAllText(path);
         Compactor.Run(path);
-        Assert.Equal(before, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
     }
 
-    [Fact]
-    public void NarrowerLaterReadsDoNotSupersedeAWiderOne()
+    [Test]
+    public async Task NarrowerLaterReadsDoNotSupersedeAWiderOne()
     {
         var b = new TranscriptBuilder().UserPrompt("look");
         b.BashRead("sed -n '1,100p' src/foo.cs", out string wideId, LongOutput);
@@ -224,12 +225,12 @@ public sealed class CompactorTests : IDisposable
         // (the narrow read at position 1 IS superseded by its later twins —
         // that part is ordinary dedup).
         JsonObject[] records = Load(path);
-        JsonObject wide = Assert.Single(records, r => ResultContent(r, wideId) is not null);
-        Assert.Equal(LongOutput, ResultContent(wide, wideId));
+        JsonObject wide = await Assert.That(records).HasSingleItem(r => ResultContent(r, wideId) is not null);
+        await Assert.That(ResultContent(wide, wideId)).IsEqualTo(LongOutput);
     }
 
-    [Fact]
-    public void MirrorPreservesRepeatedIdenticalUuidlessRecords()
+    [Test]
+    public async Task MirrorPreservesRepeatedIdenticalUuidlessRecords()
     {
         // Real transcripts repeat identical uuid-less lines (queue-operations);
         // the mirror must keep every copy or a restore loses records.
@@ -242,12 +243,12 @@ public sealed class CompactorTests : IDisposable
         Compactor.Run(path);
 
         string[] mirror = File.ReadAllLines(MirrorLocator.PathFor(path));
-        Assert.Equal(File.ReadAllLines(path).Length, mirror.Length - 1); // header + all records
-        Assert.Equal(2, mirror.Count(l => l == queueOp));
+        await Assert.That(mirror.Length - 1).IsEqualTo(File.ReadAllLines(path).Length); // header + all records
+        await Assert.That(mirror.Count(l => l == queueOp)).IsEqualTo(2);
     }
 
-    [Fact]
-    public void MirrorDoesNotReAppendLeafRemappedUuidlessRecords()
+    [Test]
+    public async Task MirrorDoesNotReAppendLeafRemappedUuidlessRecords()
     {
         // A last-prompt record whose leafUuid points into a collapsed span gets its
         // leaf remapped by the rewrite layer. On the NEXT pass that remapped variant
@@ -269,25 +270,25 @@ public sealed class CompactorTests : IDisposable
         Compactor.Run(path); // second pass sees the remapped variant
 
         string[] mirror = File.ReadAllLines(MirrorLocator.PathFor(path));
-        Assert.Equal(originalCount, mirror.Length - 1); // header + originals, nothing more
+        await Assert.That(mirror.Length - 1).IsEqualTo(originalCount); // header + originals, nothing more
     }
 
-    [Fact]
-    public void GarbageCollectionRemovesOrphanedMirrors()
+    [Test]
+    public async Task GarbageCollectionRemovesOrphanedMirrors()
     {
         string path = EightIdenticalReads(out _).WriteTo(_dir);
         Compactor.Run(path);
         string mirrorPath = MirrorLocator.PathFor(path);
-        Assert.True(File.Exists(mirrorPath));
+        await Assert.That(File.Exists(mirrorPath)).IsTrue();
 
         File.Delete(path);
         // Explicit dirs: the env-driven overload also sweeps the real home dirs.
         MirrorFile.CollectGarbage([Path.GetDirectoryName(mirrorPath)!]);
-        Assert.False(File.Exists(mirrorPath));
+        await Assert.That(File.Exists(mirrorPath)).IsFalse();
     }
 
-    [Fact]
-    public void GarbageCollectionSweepsEveryKnownDirectory()
+    [Test]
+    public async Task GarbageCollectionSweepsEveryKnownDirectory()
     {
         // Skip markers fan out to every dir holding the session's mirrors; an
         // uninstalled context's hooks never run again, so GC must sweep all known
@@ -300,49 +301,49 @@ public sealed class CompactorTests : IDisposable
 
         MirrorFile.CollectGarbage([otherDir]);
 
-        Assert.False(File.Exists(orphanMarker));
+        await Assert.That(File.Exists(orphanMarker)).IsFalse();
     }
 
     // ---- platform line endings: dedicated preservation paths, previously untested ----
 
-    [Fact]
-    public void CrlfTranscriptStaysCrlfAndMirrorNormalizesToLf()
+    [Test]
+    public async Task CrlfTranscriptStaysCrlfAndMirrorNormalizesToLf()
     {
         string path = EightIdenticalReads(out _).WriteTo(_dir, newline: "\r\n");
 
         Compactor.Run(path);
 
         string text = File.ReadAllText(path);
-        Assert.Contains("[claudinine", text); // compaction actually happened
+        await Assert.That(text).Contains("[claudinine"); // compaction actually happened
         string[] lines = text.Split('\n');
-        Assert.Equal("", lines[^1]); // trailing newline preserved
+        await Assert.That(lines[^1]).IsEqualTo(""); // trailing newline preserved
         for (int i = 0; i < lines.Length - 1; i++)
-            Assert.EndsWith("\r", lines[i]); // replaced AND untouched records stay CRLF
-        Assert.DoesNotContain('\r', File.ReadAllText(MirrorLocator.PathFor(path)));
+            await Assert.That(lines[i]).EndsWith("\r"); // replaced AND untouched records stay CRLF
+        await Assert.That(File.ReadAllText(MirrorLocator.PathFor(path))).DoesNotContain('\r');
 
         Compactor.Run(path); // idempotent on its own CRLF output
-        Assert.Equal(text, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(text);
     }
 
-    [Fact]
-    public void MissingTrailingNewlineIsPreserved()
+    [Test]
+    public async Task MissingTrailingNewlineIsPreserved()
     {
         string path = EightIdenticalReads(out _).WriteTo(_dir, trailingNewline: false);
 
         Compactor.Run(path);
 
         string text = File.ReadAllText(path);
-        Assert.Contains("[claudinine", text);
-        Assert.False(text.EndsWith('\n'));
+        await Assert.That(text).Contains("[claudinine");
+        await Assert.That(text.EndsWith('\n')).IsFalse();
 
         Compactor.Run(path);
-        Assert.Equal(text, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(text);
     }
 
     // ---- load sentinels: fail closed on shapes we could corrupt ----
 
-    [Fact]
-    public void InvalidUtf8LeavesFileByteForByteUntouched()
+    [Test]
+    public async Task InvalidUtf8LeavesFileByteForByteUntouched()
     {
         // The default UTF8 decoder silently swaps invalid bytes for U+FFFD; a pass
         // over such a file would write the mangled text back. Load must refuse.
@@ -353,11 +354,11 @@ public sealed class CompactorTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(bytes, File.ReadAllBytes(path));
+        await Assert.That(File.ReadAllBytes(path)).IsEquivalentTo(bytes);
     }
 
-    [Fact]
-    public void ByteOrderMarkLeavesFileUntouched()
+    [Test]
+    public async Task ByteOrderMarkLeavesFileUntouched()
     {
         // The app never writes a BOM; ReadAllText would strip it invisibly and the
         // rewrite would drop it from the file. Not our shape → do nothing.
@@ -367,11 +368,11 @@ public sealed class CompactorTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(bytes, File.ReadAllBytes(path));
+        await Assert.That(File.ReadAllBytes(path)).IsEquivalentTo(bytes);
     }
 
-    [Fact]
-    public void WrongTypedIdentityFieldLeavesFileUntouched()
+    [Test]
+    public async Task WrongTypedIdentityFieldLeavesFileUntouched()
     {
         // TryParse's Try- contract: a numeric uuid is an unfamiliar shape and must
         // abort the load, not crash the verb or half-parse the record.
@@ -383,6 +384,6 @@ public sealed class CompactorTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Equal(before, File.ReadAllBytes(path));
+        await Assert.That(File.ReadAllBytes(path)).IsEquivalentTo(before);
     }
 }

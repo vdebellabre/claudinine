@@ -1,5 +1,7 @@
 using Claudinine.Rules;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -20,41 +22,41 @@ public class DiffCollapseTests
          }
         """;
 
-    [Fact]
-    public void RealUnifiedDiffPassesGate() => Assert.True(DiffCollapse.LooksLikeUnifiedDiff(RealDiff));
+    [Test]
+    public async Task RealUnifiedDiffPassesGate() => await Assert.That(DiffCollapse.LooksLikeUnifiedDiff(RealDiff)).IsTrue();
 
-    [Fact]
-    public void CollapseKeepsChangesAndHeadersDropsContext()
+    [Test]
+    public async Task CollapseKeepsChangesAndHeadersDropsContext()
     {
         string collapsed = DiffCollapse.CollapseContext(RealDiff);
-        Assert.Contains("-public class A", collapsed);
-        Assert.Contains("+public class B", collapsed);
-        Assert.Contains("@@ -1,7 +1,7 @@", collapsed);
-        Assert.Contains("unchanged lines", collapsed);
-        Assert.DoesNotContain("using System.IO;", collapsed);
-        Assert.True(collapsed.Length < RealDiff.Length);
+        await Assert.That(collapsed).Contains("-public class A");
+        await Assert.That(collapsed).Contains("+public class B");
+        await Assert.That(collapsed).Contains("@@ -1,7 +1,7 @@");
+        await Assert.That(collapsed).Contains("unchanged lines");
+        await Assert.That(collapsed).DoesNotContain("using System.IO;");
+        await Assert.That(collapsed.Length < RealDiff.Length).IsTrue();
     }
 
     // The audit cases: a lone coincidental @@-line in non-diff output must never
     // trigger collapse.
-    [Fact]
-    public void LoneHunkShapedLineWithoutEnvelopeFailsGate()
+    [Test]
+    public async Task LoneHunkShapedLineWithoutEnvelopeFailsGate()
     {
         string ciText = "build log\n@@ -1,2 +3,4 @@\n  indented config\n  more config\n";
-        Assert.False(DiffCollapse.LooksLikeUnifiedDiff(ciText));
+        await Assert.That(DiffCollapse.LooksLikeUnifiedDiff(ciText)).IsFalse();
     }
 
-    [Fact]
-    public void DecoratedHunkLineInGitLogFragmentFailsGateWithoutEnvelope()
+    [Test]
+    public async Task DecoratedHunkLineInGitLogFragmentFailsGateWithoutEnvelope()
     {
         string gitLog = "commit abc\n\n    some message quoting @@ -1 +1 @@ inline\n";
-        Assert.False(DiffCollapse.LooksLikeUnifiedDiff(gitLog));
+        await Assert.That(DiffCollapse.LooksLikeUnifiedDiff(gitLog)).IsFalse();
     }
 
     // Audit P1: indented content AFTER a hunk (git log -p second commit's message
     // body) must be kept verbatim — inHunk resets on the first non-context line.
-    [Fact]
-    public void IndentedProseAfterHunkIsKeptVerbatim()
+    [Test]
+    public async Task IndentedProseAfterHunkIsKeptVerbatim()
     {
         string gitLogP = string.Join('\n',
             "diff --git a/f b/f",
@@ -69,14 +71,14 @@ public class DiffCollapseTests
             "    indented commit message line one",
             "    indented commit message line two");
         string collapsed = DiffCollapse.CollapseContext(gitLogP);
-        Assert.Contains("    indented commit message line one", collapsed);
-        Assert.Contains("    indented commit message line two", collapsed);
+        await Assert.That(collapsed).Contains("    indented commit message line one");
+        await Assert.That(collapsed).Contains("    indented commit message line two");
     }
 
-    [Fact]
-    public void ReturnsInputWhenCollapsingWouldNotShrink()
+    [Test]
+    public async Task ReturnsInputWhenCollapsingWouldNotShrink()
     {
         string tiny = "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b";
-        Assert.Equal(tiny, DiffCollapse.CollapseContext(tiny));
+        await Assert.That(DiffCollapse.CollapseContext(tiny)).IsEqualTo(tiny);
     }
 }

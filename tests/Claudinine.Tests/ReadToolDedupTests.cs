@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using Claudinine.Rules;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -28,39 +30,39 @@ public sealed class ReadToolDedupTests : IDisposable
             ["type"] = "tool_use", ["id"] = "t1", ["name"] = "Read", ["input"] = input,
         });
 
-    [Fact]
-    public void PlainReadClaimsDefaultWindow()
+    [Test]
+    public async Task PlainReadClaimsDefaultWindow()
     {
-        var t = Assert.Single(Extract(new JsonObject { ["file_path"] = @"C:\src\foo.cs" }));
-        Assert.Equal(new ReadTarget(@"C:\src\foo.cs", 1, ReadToolDedupRule.DefaultReadLimit), t);
+        var t = await Assert.That(Extract(new JsonObject { ["file_path"] = @"C:\src\foo.cs" })).HasSingleItem();
+        await Assert.That(t).IsEqualTo(new ReadTarget(@"C:\src\foo.cs", 1, ReadToolDedupRule.DefaultReadLimit));
     }
 
-    [Fact]
-    public void OffsetAndLimitMapToLineRange()
+    [Test]
+    public async Task OffsetAndLimitMapToLineRange()
     {
-        var t = Assert.Single(Extract(new JsonObject
+        var t = await Assert.That(Extract(new JsonObject
         {
             ["file_path"] = "f.cs", ["offset"] = 100, ["limit"] = 50,
-        }));
-        Assert.Equal(new ReadTarget("f.cs", 100, 149), t);
+        })).HasSingleItem();
+        await Assert.That(t).IsEqualTo(new ReadTarget("f.cs", 100, 149));
     }
 
-    [Fact]
-    public void OffsetWithoutLimitClaimsDefaultWindowFromOffset()
+    [Test]
+    public async Task OffsetWithoutLimitClaimsDefaultWindowFromOffset()
     {
-        var t = Assert.Single(Extract(new JsonObject { ["file_path"] = "f.cs", ["offset"] = 1500 }));
-        Assert.Equal(new ReadTarget("f.cs", 1500, 1500 + ReadToolDedupRule.DefaultReadLimit - 1), t);
+        var t = await Assert.That(Extract(new JsonObject { ["file_path"] = "f.cs", ["offset"] = 1500 })).HasSingleItem();
+        await Assert.That(t).IsEqualTo(new ReadTarget("f.cs", 1500, 1500 + ReadToolDedupRule.DefaultReadLimit - 1));
     }
 
-    [Fact]
-    public void UnknownInputFieldRefused() =>
-        Assert.Empty(Extract(new JsonObject { ["file_path"] = "f.pdf", ["pages"] = "1-5" }));
+    [Test]
+    public async Task UnknownInputFieldRefused() =>
+        await Assert.That(Extract(new JsonObject { ["file_path"] = "f.pdf", ["pages"] = "1-5" })).IsEmpty();
 
-    [Fact]
-    public void MissingPathRefused() => Assert.Empty(Extract(new JsonObject { ["offset"] = 1 }));
+    [Test]
+    public async Task MissingPathRefused() => await Assert.That(Extract(new JsonObject { ["offset"] = 1 })).IsEmpty();
 
-    [Fact]
-    public void ChainCollapseDigestCarrierNeverStomped()
+    [Test]
+    public async Task ChainCollapseDigestCarrierNeverStomped()
     {
         // Regression (found 2026-08-07 on d8aa7b17): a chain-collapse digest
         // reuses the anchor Read's tool_use_id, so on the NEXT pass this rule saw
@@ -82,11 +84,11 @@ public sealed class ReadToolDedupTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Contains(File.ReadAllLines(path), l => l.Contains("originally ran 14 separate tool calls"));
+        await Assert.That(File.ReadAllLines(path)).Contains(l => l.Contains("originally ran 14 separate tool calls"));
     }
 
-    [Fact]
-    public void EndToEndSupersession()
+    [Test]
+    public async Task EndToEndSupersession()
     {
         // One read per turn: keeps chain-collapse out of this dedup-focused test.
         var b = new TranscriptBuilder();
@@ -104,13 +106,13 @@ public sealed class ReadToolDedupTests : IDisposable
 
         string[] lines = File.ReadAllLines(path);
         int stubbed = lines.Count(l => l.Contains("[claudinine: file read superseded"));
-        Assert.Equal(2, stubbed); // 8 reads, recency keeps 6, first two superseded
+        await Assert.That(stubbed).IsEqualTo(2); // 8 reads, recency keeps 6, first two superseded
         // Raw JSONL escapes backslashes, so match the serialized form.
-        Assert.Contains(@"C:\\src\\foo.cs:10-109", string.Join("\n", lines));
+        await Assert.That(string.Join("\n", lines)).Contains(@"C:\\src\\foo.cs:10-109");
     }
 
-    [Fact]
-    public void TruncatedDefaultReadDoesNotSupersedeDeepOffsetRead()
+    [Test]
+    public async Task TruncatedDefaultReadDoesNotSupersedeDeepOffsetRead()
     {
         var b = new TranscriptBuilder().UserPrompt("look");
         b.ToolRead("f.cs", out string deepId, LongOutput, offset: 2500, limit: 50);
@@ -131,6 +133,6 @@ public sealed class ReadToolDedupTests : IDisposable
                 && r["type"]?.GetValue<string>() == "user");
         string content = (deep["message"]!["content"] as JsonArray)!.OfType<JsonObject>()
             .Single()["content"]!.GetValue<string>();
-        Assert.Equal(LongOutput, content); // deep read survives
+        await Assert.That(content).IsEqualTo(LongOutput); // deep read survives
     }
 }

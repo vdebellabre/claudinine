@@ -2,7 +2,9 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Claudinine.Mirror;
 using Claudinine.Rules;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -35,15 +37,16 @@ public sealed class ForkHealTests : IDisposable
     /// desktop fork: copy the compacted file under a new id, restamping ONLY the
     /// sessionId field — digest text keeps naming the parent, exactly as observed.
     /// </summary>
-    private string BuildForkedSession(out string parentPath)
+    private async Task<(string ForkPath, string ParentPath)> BuildForkedSession()
     {
+        string parentPath;
         var b = new TranscriptBuilder().UserPrompt("investigate");
         b.BashRead("sed -n '1,50p' src/a.cs", out _, LongOutput);
         b.BashRead("sed -n '1,50p' src/b.cs", out _, LongOutput + "b");
         b.AssistantText("done");
         parentPath = b.WriteTo(_dir);
         Compactor.Run(parentPath);
-        Assert.Contains("claudinine get test-session", File.ReadAllText(parentPath));
+        await Assert.That(File.ReadAllText(parentPath)).Contains("claudinine get test-session");
 
         string forkPath = Path.Combine(_dir, "fork-session.jsonl");
         var lines = File.ReadAllLines(parentPath).Select(l =>
@@ -54,7 +57,7 @@ public sealed class ForkHealTests : IDisposable
             return node.ToJsonString();
         });
         File.WriteAllText(forkPath, string.Join("\n", lines) + "\n", new UTF8Encoding(false));
-        return forkPath;
+        return (forkPath, parentPath);
     }
 
     private static HashSet<string> MirrorUuids(string mirrorPath) =>
@@ -62,71 +65,71 @@ public sealed class ForkHealTests : IDisposable
             .Select(l => ((JsonObject)JsonNode.Parse(l)!)["uuid"]?.GetValue<string>())
             .OfType<string>().ToHashSet();
 
-    [Fact]
-    public void ForkAdoptsParentMirrorAndRetargetsDigests()
+    [Test]
+    public async Task ForkAdoptsParentMirrorAndRetargetsDigests()
     {
-        string forkPath = BuildForkedSession(out string parentPath);
+        (string forkPath, string parentPath) = await BuildForkedSession();
 
         Compactor.Run(forkPath);
 
         // Digest refs now point at the fork's own session id.
         string text = File.ReadAllText(forkPath);
-        Assert.DoesNotContain("claudinine get test-session", text);
-        Assert.Contains("claudinine get fork-session", text);
+        await Assert.That(text).DoesNotContain("claudinine get test-session");
+        await Assert.That(text).Contains("claudinine get fork-session");
 
         // The fork's mirror holds everything the parent mirror held — including
         // the interior records chain-collapse removed, which exist NOWHERE else.
         var parentUuids = MirrorUuids(MirrorLocator.PathFor(parentPath));
         var forkUuids = MirrorUuids(MirrorLocator.PathFor(forkPath));
-        Assert.True(parentUuids.IsSubsetOf(forkUuids));
+        await Assert.That(parentUuids.IsSubsetOf(forkUuids)).IsTrue();
         var transcriptUuids = File.ReadAllLines(forkPath)
             .Select(l => ((JsonObject)JsonNode.Parse(l)!)["uuid"]?.GetValue<string>())
             .OfType<string>().ToHashSet();
-        Assert.Contains(parentUuids, u => !transcriptUuids.Contains(u));
+        await Assert.That(parentUuids).Contains(u => !transcriptUuids.Contains(u));
 
         // Merged records read as the fork's own history.
         foreach (string line in File.ReadAllLines(MirrorLocator.PathFor(forkPath)).Skip(1))
         {
             var node = (JsonObject)JsonNode.Parse(line)!;
             if (node["sessionId"] is not null)
-                Assert.Equal("fork-session", node["sessionId"]!.GetValue<string>());
+                await Assert.That(node["sessionId"]!.GetValue<string>()).IsEqualTo("fork-session");
         }
 
         // Parent transcript and mirror untouched.
-        Assert.Contains("claudinine get test-session", File.ReadAllText(parentPath));
-        Assert.True(File.Exists(MirrorLocator.PathFor(parentPath)));
+        await Assert.That(File.ReadAllText(parentPath)).Contains("claudinine get test-session");
+        await Assert.That(File.Exists(MirrorLocator.PathFor(parentPath))).IsTrue();
     }
 
-    [Fact]
-    public void MissingParentMirrorLeavesDigestsUntouched()
+    [Test]
+    public async Task MissingParentMirrorLeavesDigestsUntouched()
     {
-        string forkPath = BuildForkedSession(out string parentPath);
+        (string forkPath, string parentPath) = await BuildForkedSession();
         File.Delete(MirrorLocator.PathFor(parentPath));
 
         Compactor.Run(forkPath);
 
         // Fail-closed: nothing to merge from → refs keep naming the parent (they
         // are dead either way; retargeting would only mask that).
-        Assert.Contains("claudinine get test-session", File.ReadAllText(forkPath));
-        Assert.DoesNotContain("claudinine get fork-session", File.ReadAllText(forkPath));
+        await Assert.That(File.ReadAllText(forkPath)).Contains("claudinine get test-session");
+        await Assert.That(File.ReadAllText(forkPath)).DoesNotContain("claudinine get fork-session");
     }
 
-    [Fact]
-    public void HealIsIdempotent()
+    [Test]
+    public async Task HealIsIdempotent()
     {
-        string forkPath = BuildForkedSession(out _);
+        (string forkPath, _) = await BuildForkedSession();
         Compactor.Run(forkPath);
         string afterFirst = File.ReadAllText(forkPath);
         string mirrorAfterFirst = File.ReadAllText(MirrorLocator.PathFor(forkPath));
 
         Compactor.Run(forkPath);
 
-        Assert.Equal(afterFirst, File.ReadAllText(forkPath));
-        Assert.Equal(mirrorAfterFirst, File.ReadAllText(MirrorLocator.PathFor(forkPath)));
+        await Assert.That(File.ReadAllText(forkPath)).IsEqualTo(afterFirst);
+        await Assert.That(File.ReadAllText(MirrorLocator.PathFor(forkPath))).IsEqualTo(mirrorAfterFirst);
     }
 
-    [Fact]
-    public void ProseQuotingAnotherSessionsCommandIsNotRewritten()
+    [Test]
+    public async Task ProseQuotingAnotherSessionsCommandIsNotRewritten()
     {
         // Dev sessions quote retrieval commands in ordinary prose. Only records
         // carrying our claudinine marker are retargeted.
@@ -141,11 +144,12 @@ public sealed class ForkHealTests : IDisposable
         var transcript = Claudinine.Transcript.TranscriptFile.TryLoad(path)!;
         new ForkHealRule().Apply(transcript);
 
-        Assert.All(transcript.Records, r => Assert.Null(r.Replacement));
+        foreach (var r in transcript.Records)
+            await Assert.That(r.Replacement).IsNull();
     }
 
-    [Fact]
-    public void TailMarkedRecordStillMergesButIsNotRewritten()
+    [Test]
+    public async Task TailMarkedRecordStillMergesButIsNotRewritten()
     {
         // An interrupted fork can end exactly at a marked carrier. The mirror
         // merge must still happen (it is pure gain), but the tail record itself
@@ -161,14 +165,14 @@ public sealed class ForkHealTests : IDisposable
         var transcript = Claudinine.Transcript.TranscriptFile.TryLoad(path)!;
         new ForkHealRule().Apply(transcript);
 
-        Assert.All(transcript.Records, r => Assert.Null(r.Replacement));
-        Assert.True(transcript.TryRewrite());
-        Assert.Contains("11111111-0000-0000-0000-000000000001",
-            MirrorUuids(MirrorLocator.PathFor(path)));
+        foreach (var r in transcript.Records)
+            await Assert.That(r.Replacement).IsNull();
+        await Assert.That(transcript.TryRewrite()).IsTrue();
+        await Assert.That(MirrorUuids(MirrorLocator.PathFor(path))).Contains("11111111-0000-0000-0000-000000000001");
     }
 
-    [Fact]
-    public void QuotedCommandInsideACarrierIsNotAForkParent()
+    [Test]
+    public async Task QuotedCommandInsideACarrierIsNotAForkParent()
     {
         // Dev sessions run `claudinine get <other-session>` via Bash; the command
         // ends up quoted inside their OWN carriers' preview lines. The quoted
@@ -186,13 +190,13 @@ public sealed class ForkHealTests : IDisposable
 
         Compactor.Run(path);
 
-        Assert.Contains("claudinine get test-session", File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).Contains("claudinine get test-session");
         var forkUuids = MirrorUuids(MirrorLocator.PathFor(path));
-        Assert.DoesNotContain("11111111-0000-0000-0000-000000000001", forkUuids);
+        await Assert.That(forkUuids).DoesNotContain("11111111-0000-0000-0000-000000000001");
     }
 
-    [Fact]
-    public void PlaceholderSessionIdIsIgnored()
+    [Test]
+    public async Task PlaceholderSessionIdIsIgnored()
     {
         // ChainCollapseRule writes "<session-id>" when a record carries no
         // sessionId; that must never read as a fork parent.
@@ -205,9 +209,9 @@ public sealed class ForkHealTests : IDisposable
 
         var transcript = Claudinine.Transcript.TranscriptFile.TryLoad(path)!;
         new ForkHealRule().Apply(transcript);
-        Assert.True(transcript.TryRewrite());
+        await Assert.That(transcript.TryRewrite()).IsTrue();
 
-        Assert.Equal(before, File.ReadAllText(path));
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
     }
 
     private const string CarrierUuid = "99999999-0000-0000-0000-000000000099";

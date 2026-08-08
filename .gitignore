@@ -13,3 +13,6 @@ artifacts/
 
 # Local benchmarking only, never committed
 tests/POC reference/
+
+# Microsoft.Testing.Platform writes a per-run HTML report here.
+TestResults/

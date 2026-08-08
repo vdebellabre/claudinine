@@ -1,8 +1,10 @@
 using Claudinine.Rules;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 // Mirror tests mutate CLAUDE_PLUGIN_DATA (process-wide), so keep runs sequential.
-[assembly: CollectionBehavior(DisableTestParallelization = true)]
+[assembly: NotInParallel]
 
 namespace Claudinine.Tests;
 
@@ -10,141 +12,139 @@ public class BashReadParserTests
 {
     private static List<ReadTarget> Parse(string cmd) => BashReadParser.ParseReadTargets(cmd);
 
-    [Fact]
-    public void SedRange()
+    [Test]
+    public async Task SedRange()
     {
-        var t = Assert.Single(Parse("sed -n '10,20p' src/foo.cs"));
-        Assert.Equal(new ReadTarget("src/foo.cs", 10, 20), t);
+        var t = await Assert.That(Parse("sed -n '10,20p' src/foo.cs")).HasSingleItem();
+        await Assert.That(t).IsEqualTo(new ReadTarget("src/foo.cs", 10, 20));
     }
 
-    [Fact]
-    public void SedRangeUnquoted()
+    [Test]
+    public async Task SedRangeUnquoted()
     {
-        var t = Assert.Single(Parse("sed -n 10,20p src/foo.cs"));
-        Assert.Equal(new ReadTarget("src/foo.cs", 10, 20), t);
+        var t = await Assert.That(Parse("sed -n 10,20p src/foo.cs")).HasSingleItem();
+        await Assert.That(t).IsEqualTo(new ReadTarget("src/foo.cs", 10, 20));
     }
 
-    [Fact]
-    public void SedSingleLine()
+    [Test]
+    public async Task SedSingleLine()
     {
-        var t = Assert.Single(Parse("sed -n 42p foo.txt"));
-        Assert.Equal(new ReadTarget("foo.txt", 42, 42), t);
+        var t = await Assert.That(Parse("sed -n 42p foo.txt")).HasSingleItem();
+        await Assert.That(t).IsEqualTo(new ReadTarget("foo.txt", 42, 42));
     }
 
-    [Fact]
-    public void SedInvertedRangeRefused() => Assert.Empty(Parse("sed -n 20,10p foo.txt"));
+    [Test]
+    public async Task SedInvertedRangeRefused() => await Assert.That(Parse("sed -n 20,10p foo.txt")).IsEmpty();
 
-    [Fact]
-    public void SedInPlaceRefused() => Assert.Empty(Parse("sed -i 's/a/b/' foo.txt"));
+    [Test]
+    public async Task SedInPlaceRefused() => await Assert.That(Parse("sed -i 's/a/b/' foo.txt")).IsEmpty();
 
-    [Fact]
-    public void CatMultipleFiles()
+    [Test]
+    public async Task CatMultipleFiles()
     {
         var ts = Parse("cat a.txt b.txt");
-        Assert.Equal([new("a.txt", 1, null), new("b.txt", 1, null)], ts);
+        await Assert.That(ts).IsEquivalentTo(
+            [new ReadTarget("a.txt", 1, null), new ReadTarget("b.txt", 1, null)]);
     }
 
-    [Fact]
-    public void CatWithFlagRefused() => Assert.Empty(Parse("cat -n a.txt"));
+    [Test]
+    public async Task CatWithFlagRefused() => await Assert.That(Parse("cat -n a.txt")).IsEmpty();
 
-    [Fact]
-    public void CatQuotedPathWithSpaces()
+    [Test]
+    public async Task CatQuotedPathWithSpaces()
     {
-        var t = Assert.Single(Parse("cat \"my file.txt\""));
-        Assert.Equal("my file.txt", t.Path);
+        var t = await Assert.That(Parse("cat \"my file.txt\"")).HasSingleItem();
+        await Assert.That(t.Path).IsEqualTo("my file.txt");
     }
-
-    [Theory]
-    [InlineData("head -n 50 f.txt")]
-    [InlineData("head -50 f.txt")]
-    [InlineData("head --lines 50 f.txt")]
-    public void HeadForms(string cmd)
+    [Test]
+    [Arguments("head -n 50 f.txt")]
+    [Arguments("head -50 f.txt")]
+    [Arguments("head --lines 50 f.txt")]
+    public async Task HeadForms(string cmd)
     {
-        var t = Assert.Single(Parse(cmd));
-        Assert.Equal(new ReadTarget("f.txt", 1, 50), t);
+        var t = await Assert.That(Parse(cmd)).HasSingleItem();
+        await Assert.That(t).IsEqualTo(new ReadTarget("f.txt", 1, 50));
     }
 
-    [Fact]
-    public void HeadWithoutCountRefused() => Assert.Empty(Parse("head f.txt"));
+    [Test]
+    public async Task HeadWithoutCountRefused() => await Assert.That(Parse("head f.txt")).IsEmpty();
 
-    [Fact]
-    public void TailRefused() => Assert.Empty(Parse("tail -n 50 f.txt"));
+    [Test]
+    public async Task TailRefused() => await Assert.That(Parse("tail -n 50 f.txt")).IsEmpty();
 
-    [Fact]
-    public void NonReadVerbRefused() => Assert.Empty(Parse("grep foo f.txt"));
+    [Test]
+    public async Task NonReadVerbRefused() => await Assert.That(Parse("grep foo f.txt")).IsEmpty();
 
-    [Fact]
-    public void MixedSegmentPoisonsWholeCommand() => Assert.Empty(Parse("sed -n 1,5p f.txt ; pytest"));
+    [Test]
+    public async Task MixedSegmentPoisonsWholeCommand() => await Assert.That(Parse("sed -n 1,5p f.txt ; pytest")).IsEmpty();
 
-    [Fact]
-    public void SemicolonChainOfPureReads()
+    [Test]
+    public async Task SemicolonChainOfPureReads()
     {
         var ts = Parse("sed -n '1,5p' a.txt ; sed -n '6,10p' b.txt");
-        Assert.Equal(2, ts.Count);
+        await Assert.That(ts.Count).IsEqualTo(2);
     }
+    [Test]
+    [Arguments("cat a.txt | cat b.txt")] // pipe delivers only b — refusing avoids mis-crediting a
+    [Arguments("cat a.txt || cat b.txt")]
+    [Arguments("cat a.txt && cat b.txt")]
+    [Arguments("cat a.txt > out.txt")]
+    [Arguments("cat $(pick-file)")]
+    [Arguments("cat `pick-file`")]
+    [Arguments("cat a.txt &")]
+    public async Task UnsafeShellRefused(string cmd) => await Assert.That(Parse(cmd)).IsEmpty();
+    [Test]
+    [Arguments("cat 'unclosed")]
+    [Arguments("cat trailing\\")]
+    [Arguments("")]
+    public async Task UntokenizableRefused(string cmd) => await Assert.That(Parse(cmd)).IsEmpty();
 
-    [Theory]
-    [InlineData("cat a.txt | cat b.txt")] // pipe delivers only b — refusing avoids mis-crediting a
-    [InlineData("cat a.txt || cat b.txt")]
-    [InlineData("cat a.txt && cat b.txt")]
-    [InlineData("cat a.txt > out.txt")]
-    [InlineData("cat $(pick-file)")]
-    [InlineData("cat `pick-file`")]
-    [InlineData("cat a.txt &")]
-    public void UnsafeShellRefused(string cmd) => Assert.Empty(Parse(cmd));
-
-    [Theory]
-    [InlineData("cat 'unclosed")]
-    [InlineData("cat trailing\\")]
-    [InlineData("")]
-    public void UntokenizableRefused(string cmd) => Assert.Empty(Parse(cmd));
-
-    [Fact]
-    public void PathPrefixedVerbAccepted()
+    [Test]
+    public async Task PathPrefixedVerbAccepted()
     {
-        var t = Assert.Single(Parse("/usr/bin/sed -n 1,2p f.txt"));
-        Assert.Equal(new ReadTarget("f.txt", 1, 2), t);
+        var t = await Assert.That(Parse("/usr/bin/sed -n 1,2p f.txt")).HasSingleItem();
+        await Assert.That(t).IsEqualTo(new ReadTarget("f.txt", 1, 2));
     }
 
-    [Fact]
-    public void SedMultiRange()
+    [Test]
+    public async Task SedMultiRange()
     {
         var ts = Parse("sed -n '400,460p;800,860p' src/Service.cs");
-        Assert.Equal([new("src/Service.cs", 400, 460), new("src/Service.cs", 800, 860)], ts);
+        await Assert.That(ts).IsEquivalentTo(
+            [new ReadTarget("src/Service.cs", 400, 460), new ReadTarget("src/Service.cs", 800, 860)]);
     }
 
-    [Fact]
-    public void SedMultiRangeWithNonPrintPartRefused() =>
-        Assert.Empty(Parse("sed -n '1,5p;s/a/b/' f.txt"));
+    [Test]
+    public async Task SedMultiRangeWithNonPrintPartRefused() =>
+        await Assert.That(Parse("sed -n '1,5p;s/a/b/' f.txt")).IsEmpty();
 
-    [Fact]
-    public void LiteralEchoSeparatorsDoNotPoison()
+    [Test]
+    public async Task LiteralEchoSeparatorsDoNotPoison()
     {
         var ts = Parse("sed -n '1,10p' a.resx; echo \"=== FR ===\"; sed -n '1,10p' b.resx");
-        Assert.Equal([new("a.resx", 1, 10), new("b.resx", 1, 10)], ts);
+        await Assert.That(ts).IsEquivalentTo(
+            [new ReadTarget("a.resx", 1, 10), new ReadTarget("b.resx", 1, 10)]);
     }
+    [Test]
+    [Arguments("echo hello")]                    // echo alone: nothing read
+    [Arguments("echo a; echo b")]
+    [Arguments("echo $HOME; cat a.txt")]         // env-dependent echo poisons
+    [Arguments("echo -n x; cat a.txt")]          // flags poison
+    public async Task EchoEdgeCasesYieldNoTargets(string cmd) => await Assert.That(Parse(cmd)).IsEmpty();
+    [Test]
+    [Arguments(1, 100, 10, 20, true)]   // superset covers
+    [Arguments(10, 20, 10, 20, true)]   // exact covers
+    [Arguments(10, 20, 9, 20, false)]   // starts too late
+    [Arguments(10, 20, 10, 21, false)]  // ends too early
+    public async Task CoversRanges(int aStart, int aEnd, int bStart, int bEnd, bool expected) =>
+        await Assert.That(new ReadTarget("f", aStart, aEnd).Covers(new ReadTarget("f", bStart, bEnd))).IsEqualTo(expected);
 
-    [Theory]
-    [InlineData("echo hello")]                    // echo alone: nothing read
-    [InlineData("echo a; echo b")]
-    [InlineData("echo $HOME; cat a.txt")]         // env-dependent echo poisons
-    [InlineData("echo -n x; cat a.txt")]          // flags poison
-    public void EchoEdgeCasesYieldNoTargets(string cmd) => Assert.Empty(Parse(cmd));
-
-    [Theory]
-    [InlineData(1, 100, 10, 20, true)]   // superset covers
-    [InlineData(10, 20, 10, 20, true)]   // exact covers
-    [InlineData(10, 20, 9, 20, false)]   // starts too late
-    [InlineData(10, 20, 10, 21, false)]  // ends too early
-    public void CoversRanges(int aStart, int aEnd, int bStart, int bEnd, bool expected) =>
-        Assert.Equal(expected, new ReadTarget("f", aStart, aEnd).Covers(new ReadTarget("f", bStart, bEnd)));
-
-    [Fact]
-    public void OpenEndedCoversEverythingAtOrAfterStart()
+    [Test]
+    public async Task OpenEndedCoversEverythingAtOrAfterStart()
     {
-        Assert.True(new ReadTarget("f", 1, null).Covers(new ReadTarget("f", 50, 60)));
-        Assert.True(new ReadTarget("f", 1, null).Covers(new ReadTarget("f", 1, null)));
-        Assert.False(new ReadTarget("f", 1, 100).Covers(new ReadTarget("f", 50, null)));
-        Assert.False(new ReadTarget("f", 1, null).Covers(new ReadTarget("g", 1, 2)));
+        await Assert.That(new ReadTarget("f", 1, null).Covers(new ReadTarget("f", 50, 60))).IsTrue();
+        await Assert.That(new ReadTarget("f", 1, null).Covers(new ReadTarget("f", 1, null))).IsTrue();
+        await Assert.That(new ReadTarget("f", 1, 100).Covers(new ReadTarget("f", 50, null))).IsFalse();
+        await Assert.That(new ReadTarget("f", 1, null).Covers(new ReadTarget("g", 1, 2))).IsFalse();
     }
 }

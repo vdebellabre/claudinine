@@ -1,5 +1,7 @@
 using Claudinine.Rules;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace Claudinine.Tests;
 
@@ -10,8 +12,8 @@ namespace Claudinine.Tests;
 /// </summary>
 public class PreviewRendererTests
 {
-    [Fact]
-    public void PytestSummaryWinsOverHead()
+    [Test]
+    public async Task PytestSummaryWinsOverHead()
     {
         string text = "collected 12 items\n"
             + "test_a.py::test_one PASSED\n"
@@ -20,130 +22,130 @@ public class PreviewRendererTests
 
         string preview = PreviewRenderer.RenderPreview("Bash", "python -m pytest", text);
 
-        Assert.Contains("RESULT: 1 failed, 11 passed", preview);
-        Assert.Contains("first failures: test_b.py::test_two", preview);
+        await Assert.That(preview).Contains("RESULT: 1 failed, 11 passed");
+        await Assert.That(preview).Contains("first failures: test_b.py::test_two");
     }
 
-    [Fact]
-    public void ErrorMarkerLineSurfacedNotHead()
+    [Test]
+    public async Task ErrorMarkerLineSurfacedNotHead()
     {
         string text = "step one ok\nstep two ok\nerror: everything broke\ntail line";
 
         string preview = PreviewRenderer.RenderPreview("Bash", "make build", text);
 
-        Assert.Contains("CONTAINS 'error:'", preview);
-        Assert.Contains("everything broke", preview);
+        await Assert.That(preview).Contains("CONTAINS 'error:'");
+        await Assert.That(preview).Contains("everything broke");
     }
 
-    [Fact]
-    public void ErrorFlagPrefixesPreview()
+    [Test]
+    public async Task ErrorFlagPrefixesPreview()
     {
         string preview = PreviewRenderer.RenderPreview("Bash", "ls", "plain output", isError: true);
 
-        Assert.StartsWith("[ERROR] ", preview);
+        await Assert.That(preview).StartsWith("[ERROR] ");
     }
 
-    [Fact]
-    public void EditPreviewNamesThePathNotTheSuccessSentence()
+    [Test]
+    public async Task EditPreviewNamesThePathNotTheSuccessSentence()
     {
         string preview = PreviewRenderer.RenderPreview(
             "Edit", @"src\Claudinine\Foo.cs", "The file has been updated successfully.");
 
-        Assert.Contains(@"applied to src\Claudinine\Foo.cs", preview);
-        Assert.DoesNotContain("has been updated", preview);
+        await Assert.That(preview).Contains(@"applied to src\Claudinine\Foo.cs");
+        await Assert.That(preview).DoesNotContain("has been updated");
     }
 
-    [Fact]
-    public void ReadPreviewSkipsGutterAndPunctuationOnlyLines()
+    [Test]
+    public async Task ReadPreviewSkipsGutterAndPunctuationOnlyLines()
     {
         string text = "     1\t{\n     2\t  \"name\": \"claudinine\",\n     3\tclass Foo\n";
 
         string preview = PreviewRenderer.RenderPreview("Read", "package.json", text);
 
-        Assert.DoesNotContain("     1", preview); // gutter stripped
-        Assert.Contains("lines ::", preview);
-        Assert.Contains("\"name\": \"claudinine\"", preview); // first informative line
+        await Assert.That(preview).DoesNotContain("     1"); // gutter stripped
+        await Assert.That(preview).Contains("lines ::");
+        await Assert.That(preview).Contains("\"name\": \"claudinine\""); // first informative line
     }
 
-    [Fact]
-    public void JsonArrayDescribedByShapeNotPunctuation()
+    [Test]
+    public async Task JsonArrayDescribedByShapeNotPunctuation()
     {
         string text = """[{"id":1,"name":"a"},{"id":2,"name":"b"},{"id":3,"name":"c"}]""";
 
         string preview = PreviewRenderer.RenderPreview("mcp__something__list", "", text);
 
-        Assert.Contains("JSON array, 3 item(s)", preview);
-        Assert.Contains("keys [id, name]", preview);
+        await Assert.That(preview).Contains("JSON array, 3 item(s)");
+        await Assert.That(preview).Contains("keys [id, name]");
     }
 
-    [Fact]
-    public void JsonObjectDescribedByKeys()
+    [Test]
+    public async Task JsonObjectDescribedByKeys()
     {
         string preview = PreviewRenderer.RenderPreview(
             "mcp__api__get", "", """{"status":"ok","count":42}""");
 
-        Assert.Contains("JSON object", preview);
-        Assert.Contains("count", preview);
-        Assert.Contains("status", preview);
+        await Assert.That(preview).Contains("JSON object");
+        await Assert.That(preview).Contains("count");
+        await Assert.That(preview).Contains("status");
     }
 
-    [Fact]
-    public void SectionedOutputNamesEverySection()
+    [Test]
+    public async Task SectionedOutputNamesEverySection()
     {
         string text = "=== hooks.json ===\nfirst body\n=== settings.json ===\nsecond body\n";
 
         string preview = PreviewRenderer.RenderPreview("Bash", "cat hooks.json settings.json", text);
 
-        Assert.Contains("2 sections", preview);
-        Assert.Contains("hooks.json: first body", preview);
-        Assert.Contains("settings.json: second body", preview);
+        await Assert.That(preview).Contains("2 sections");
+        await Assert.That(preview).Contains("hooks.json: first body");
+        await Assert.That(preview).Contains("settings.json: second body");
     }
 
-    [Fact]
-    public void GitStatusPreviewCountsLines()
+    [Test]
+    public async Task GitStatusPreviewCountsLines()
     {
         string text = " M src/a.cs\n?? src/b.cs\n";
 
         string preview = PreviewRenderer.RenderPreview("Bash", "git status --short", text);
 
-        Assert.Contains("2 status line(s)", preview);
+        await Assert.That(preview).Contains("2 status line(s)");
     }
 
-    [Fact]
-    public void GitLogPreviewCountsCommits()
+    [Test]
+    public async Task GitLogPreviewCountsCommits()
     {
         string text = "abc123 first\ndef456 second\nfed789 third\n";
 
         string preview = PreviewRenderer.RenderPreview("Bash", "git log --oneline -3", text);
 
-        Assert.Contains("3 commit line(s)", preview);
+        await Assert.That(preview).Contains("3 commit line(s)");
     }
 
-    [Fact]
-    public void TailPipelineShowsTheTail()
+    [Test]
+    public async Task TailPipelineShowsTheTail()
     {
         string text = string.Join("\n", Enumerable.Range(1, 50).Select(i => $"row {i}"));
 
         string preview = PreviewRenderer.RenderPreview("Bash", "cat data.txt | tail -5", text);
 
-        Assert.StartsWith("tail ::", preview);
-        Assert.Contains("row 50", preview);
+        await Assert.That(preview).StartsWith("tail ::");
+        await Assert.That(preview).Contains("row 50");
     }
 
-    [Fact]
-    public void EmptyOutputSaysSo()
+    [Test]
+    public async Task EmptyOutputSaysSo()
     {
-        Assert.Equal("(no output)", PreviewRenderer.RenderPreview("Bash", "true", "   \n  "));
+        await Assert.That(PreviewRenderer.RenderPreview("Bash", "true", "   \n  ")).IsEqualTo("(no output)");
     }
 
-    [Fact]
-    public void BannerOnlyLinesNeverBecomeThePreview()
+    [Test]
+    public async Task BannerOnlyLinesNeverBecomeThePreview()
     {
         string text = "==========\nactual content here\n";
 
         string preview = PreviewRenderer.RenderPreview("Bash", "run.sh", text);
 
-        Assert.Contains("actual content here", preview);
-        Assert.DoesNotContain("==========", preview);
+        await Assert.That(preview).Contains("actual content here");
+        await Assert.That(preview).DoesNotContain("==========");
     }
 }
