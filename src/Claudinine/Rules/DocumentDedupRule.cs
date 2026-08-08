@@ -9,6 +9,11 @@ namespace Claudinine.Rules;
 /// Deduplicate large identical text blocks (CLAUDE.md re-injection, repeated file
 /// attachments): later occurrences become a one-line stub pointing back at the
 /// first (faithful port of cozempic's document-dedup, ≥1KB blocks).
+/// Known ordering caveat, accepted: chain-collapse runs AFTER this rule and may
+/// remove the record holding the "first seen earlier" occurrence in the same
+/// pass — the stub then points at content that survives only in the mirror.
+/// Rare (needs a ≥1KB duplicate inside a collapsed turn) and non-destructive:
+/// the original is always mirrored before either rule touches anything.
 /// </summary>
 internal sealed class DocumentDedupRule : ICompactionRule
 {
