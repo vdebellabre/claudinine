@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<!-- TUnit runs on Microsoft.Testing.Platform: the test project is its own
+         runner executable, not a VSTest-hosted library. -->
+		<OutputType>Exe</OutputType>
+		<IsPackable>false</IsPackable>
+
+		<!-- AnalysisMode=all targets shipped library APIs; several of its rules are
+		     actively wrong for a test assembly:
+		       CA1707  test names use Method_Scenario underscores on purpose
+		       CA1515  TUnit discovers public classes, so they cannot be internal
+		       CA1849  synchronous File.* is deliberate here — the tests assert on
+		               file state, and async IO would add noise without value
+		       CA2007  ConfigureAwait is meaningless: TUnit owns the context
+		       CA1307  StringComparison on Contains adds ceremony to plain asserts
+		       CA1822  test helpers stay instance members for readability
+		       CA1875  same, on the assertion-helper shape
+		     Everything else stays on, including warnings-as-errors. -->
+		<NoWarn>$(NoWarn);CA1707;CA1515;CA1849;CA2007;CA1307;CA1822;CA1875</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\Claudinine\Claudinine.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="TUnit" />
+	</ItemGroup>
+
+</Project>

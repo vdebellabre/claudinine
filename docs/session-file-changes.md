@@ -126,7 +126,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `dotnet test tests/Claudinine.Tests` — 238 tests, covering each rule, the
+- `dotnet test src/Claudinine.Tests` — 238 tests, covering each rule, the
   validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.

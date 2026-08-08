@@ -1,0 +1,32 @@
+<Project>
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+
+		<AnalysisLevel>latest</AnalysisLevel>
+		<AnalysisMode>all</AnalysisMode>
+		<RunAnalyzersDuringBuild>true</RunAnalyzersDuringBuild>
+
+		<TreatWarningsAsErrors Condition="'$(Configuration)' != 'Debug'">true</TreatWarningsAsErrors>
+
+		<!-- IDE0058: unused expression values are idiomatic here (fluent builders).
+		     CA1031 (catch general exception): deliberate and load-bearing. A hook must
+		       never break the session it runs in, so every entry point and every
+		       filesystem touch swallows *anything* and degrades silently — narrowing
+		       these to specific types would let an unanticipated exception escape and
+		       take the user's session down. HookRunnerTests asserts this contract.
+		     CA2000 (dispose before losing scope): the only site is the process-wide
+		       stdin stream in Program.cs, which lives for the life of the process. -->
+		<NoWarn>$(NOWARN);IDE0058;CA1031;CA2000</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Roslynator.Analyzers">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		</PackageReference>
+	</ItemGroup>
+
+</Project>
