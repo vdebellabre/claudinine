@@ -34,8 +34,12 @@ jobs:
       # Native AOT cannot cross-compile across OSes: this matrix IS the
       # release build. Publishing on every push is the early warning for
       # any trim/AOT-unfriendly change.
+      # Target the csproj, not the directory: the directory resolves to
+      # Claudinine.slnx, which also carries the test project. That project is an
+      # exe (Microsoft.Testing.Platform) and a non-self-contained exe cannot
+      # reference this self-contained one — NETSDK1151.
       - name: Publish (Native AOT)
-        run: dotnet publish src/Claudinine -c Release -r ${{ matrix.rid }} -o publish/${{ matrix.rid }}
+        run: dotnet publish src/Claudinine/Claudinine.csproj -c Release -r ${{ matrix.rid }} -o publish/${{ matrix.rid }}
 
       - name: Smoke test
         if: ${{ !startsWith(matrix.rid, 'win-') }}
