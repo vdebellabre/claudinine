@@ -40,7 +40,7 @@ internal sealed class MegaBlockTrimRule : ICompactionRule
                 bi++;
                 if (block is not JsonObject b)
                     continue;
-                string? btype = b["type"]?.GetValue<string>();
+                string? btype = b["type"].GetString();
                 string? field = btype switch
                 {
                     "text" => "text",

@@ -70,6 +70,7 @@ internal static class CloneVerb
             return 1;
         }
 
+        string? targetMirror = null; // set the moment we own a mirror file to clean up
         try
         {
             string? title = RewriteTranscript(sourceTranscript, targetTranscript, sourceId, targetId);
@@ -77,22 +78,34 @@ internal static class CloneVerb
             if (title is not null)
                 Console.WriteLine($"  Title:      {title}");
 
-            string? clonedMirror = CloneMirror(sourceId, targetId, targetTranscript, home);
-            if (clonedMirror is not null)
-                Console.WriteLine($"  Mirror:     {clonedMirror}");
+            string? sourceMirror = FindSourceMirror(sourceId, home);
+            if (sourceMirror is not null)
+            {
+                string candidate = Path.Combine(
+                    Path.GetDirectoryName(sourceMirror)!, targetId + ".jsonl");
+                if (!File.Exists(candidate))
+                {
+                    targetMirror = candidate;
+                    CloneMirror(sourceMirror, candidate, targetId, targetTranscript);
+                }
+            }
+            if (targetMirror is not null)
+                Console.WriteLine($"  Mirror:     {targetMirror}");
             else
                 Console.WriteLine("  Mirror:     none found — retrieval refs will not resolve.");
 
             Console.WriteLine();
             Console.WriteLine($"  Clone ready. Resume it with:  claude --resume {targetId}");
-            Console.WriteLine($"  The original session ({sourceId[..8]}) is untouched.");
+            Console.WriteLine($"  The original session ({Rules.RuleHelpers.RefPrefix(sourceId)}) is untouched.");
             return 0;
         }
         catch (Exception ex)
         {
-            // A half-written clone is worse than none: it would show up in the resume
-            // picker as a plausible session and fail on load.
+            // A half-written clone is worse than none: the transcript would show up in
+            // the resume picker as a plausible session and fail on load, and a partial
+            // headerless mirror is invisible to CollectGarbage forever.
             try { if (File.Exists(targetTranscript)) File.Delete(targetTranscript); } catch { }
+            try { if (targetMirror is not null && File.Exists(targetMirror)) File.Delete(targetMirror); } catch { }
             Console.Error.WriteLine($"clone failed: {ex.Message}");
             return 1;
         }
@@ -131,11 +144,11 @@ internal static class CloneVerb
                 RebindSessionId(node, targetId);
                 RewriteRetrievalCommands(node, sourceId, targetId);
 
-                if (node["type"]?.GetValue<string>() == "custom-title")
+                if (node["type"].GetString() == "custom-title")
                 {
                     // Titles are appended repeatedly, last-wins. Suffix each one so the
                     // clone is distinguishable no matter which the app reads.
-                    string? original = node["customTitle"]?.GetValue<string>();
+                    string? original = node["customTitle"].GetString();
                     if (original is not null)
                     {
                         string suffixed = Suffixed(original);
@@ -152,7 +165,7 @@ internal static class CloneVerb
             {
                 // No title in the source: the app derives one from the first prompt, so
                 // both sessions would read alike. Give the clone an explicit one.
-                lastTitle = Suffixed(sourceId[..8]);
+                lastTitle = Suffixed(Rules.RuleHelpers.RefPrefix(sourceId));
                 var titleRecord = new JsonObject
                 {
                     ["type"] = "custom-title",
@@ -187,11 +200,20 @@ internal static class CloneVerb
     /// Rewrite the `claudinine get &lt;sid&gt; …` commands our own digests embed in their
     /// text. Without this the clone's digests would send every retrieval at the source
     /// session id — which resolves to the source mirror, or to nothing once the source
-    /// is archived. Three rules emit these commands (chain-collapse, carrier-header
-    /// dedup, anchor-input stubs); all of them spell the id literally, so one textual
-    /// substitution covers every current and future emitter.
+    /// is archived. Every emitter (chain-collapse, carrier-header dedup, anchor-input
+    /// stubs, image-strip) spells exactly `claudinine get &lt;full-id&gt;`, so the rewrite
+    /// matches that whole phrase — NEVER the bare id, which also occurs in strings that
+    /// must survive verbatim (persisted-output sidecar paths under the source session's
+    /// directory are the only pointer to those files).
     /// </summary>
     private static void RewriteRetrievalCommands(JsonNode? node, string sourceId, string targetId)
+    {
+        string sourcePhrase = "claudinine get " + sourceId;
+        string targetPhrase = "claudinine get " + targetId;
+        RewritePhrase(node, sourcePhrase, targetPhrase);
+    }
+
+    private static void RewritePhrase(JsonNode? node, string sourcePhrase, string targetPhrase)
     {
         switch (node)
         {
@@ -200,13 +222,13 @@ internal static class CloneVerb
                 {
                     if (obj[key] is JsonValue value
                         && value.TryGetValue<string>(out string? text)
-                        && text.Contains(sourceId, StringComparison.OrdinalIgnoreCase))
+                        && text.Contains(sourcePhrase, StringComparison.OrdinalIgnoreCase))
                     {
-                        obj[key] = text.Replace(sourceId, targetId, StringComparison.OrdinalIgnoreCase);
+                        obj[key] = text.Replace(sourcePhrase, targetPhrase, StringComparison.OrdinalIgnoreCase);
                     }
                     else
                     {
-                        RewriteRetrievalCommands(obj[key], sourceId, targetId);
+                        RewritePhrase(obj[key], sourcePhrase, targetPhrase);
                     }
                 }
                 break;
@@ -215,17 +237,30 @@ internal static class CloneVerb
                 {
                     if (array[i] is JsonValue value
                         && value.TryGetValue<string>(out string? text)
-                        && text.Contains(sourceId, StringComparison.OrdinalIgnoreCase))
+                        && text.Contains(sourcePhrase, StringComparison.OrdinalIgnoreCase))
                     {
-                        array[i] = text.Replace(sourceId, targetId, StringComparison.OrdinalIgnoreCase);
+                        array[i] = text.Replace(sourcePhrase, targetPhrase, StringComparison.OrdinalIgnoreCase);
                     }
                     else
                     {
-                        RewriteRetrievalCommands(array[i], sourceId, targetId);
+                        RewritePhrase(array[i], sourcePhrase, targetPhrase);
                     }
                 }
                 break;
         }
+    }
+
+    /// <summary>The source session's mirror, from the first search dir that has one.</summary>
+    private static string? FindSourceMirror(string sourceId, string home)
+    {
+        foreach (string dir in MirrorFile.SearchDirectories(
+            Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"), home))
+        {
+            string candidate = Path.Combine(dir, sourceId + ".jsonl");
+            if (File.Exists(candidate))
+                return candidate;
+        }
+        return null;
     }
 
     /// <summary>
@@ -235,28 +270,9 @@ internal static class CloneVerb
     /// clone's mirror collected the moment the source transcript is archived.
     /// Written next to the source mirror — the dir the writing hook actually uses.
     /// </summary>
-    private static string? CloneMirror(
-        string sourceId, string targetId, string targetTranscript, string home)
+    private static void CloneMirror(
+        string sourceMirror, string targetMirror, string targetId, string targetTranscript)
     {
-        string? sourceMirror = null;
-        foreach (string dir in MirrorFile.SearchDirectories(
-            Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"), home))
-        {
-            string candidate = Path.Combine(dir, sourceId + ".jsonl");
-            if (File.Exists(candidate))
-            {
-                sourceMirror = candidate;
-                break;
-            }
-        }
-        if (sourceMirror is null)
-            return null;
-
-        string targetMirror = Path.Combine(
-            Path.GetDirectoryName(sourceMirror)!, targetId + ".jsonl");
-        if (File.Exists(targetMirror))
-            return null;
-
         using var stream = new FileStream(targetMirror, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false));
         bool first = true;
@@ -292,7 +308,6 @@ internal static class CloneVerb
         }
         writer.Flush();
         stream.Flush(flushToDisk: true);
-        return targetMirror;
     }
 
     /// <summary>Resolve a session id (exact, else unique prefix) to its transcript.</summary>

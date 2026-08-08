@@ -56,14 +56,14 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
                 blockIndex++;
                 if (block is not JsonObject b)
                     continue;
-                string? btype = b["type"]?.GetValue<string>();
+                string? btype = b["type"].GetString();
                 if (btype is not ("text" or "tool_result"))
                     continue;
 
                 // text blocks carry "text"; tool_result only qualifies with string content.
                 bool isText = btype == "text";
                 string? text = isText
-                    ? (b["text"] as JsonValue)?.GetValue<string>()
+                    ? (b["text"] as JsonValue).GetString()
                     : (b["content"] as JsonValue) is JsonValue cv && cv.TryGetValue<string>(out string? cs) ? cs : null;
                 if (string.IsNullOrEmpty(text))
                     continue;
@@ -87,19 +87,21 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
     /// </summary>
     private static string? DedupIn(string text, HashSet<string> seen)
     {
-        string newText = text;
-        bool changed = false;
+        // Remove by position, never by value: Replace(value, "") would also erase
+        // the first occurrence when the SAME reminder repeats within this text,
+        // leaving it surviving nowhere in context.
+        List<(int Index, int Length)>? repeats = null;
         foreach (Match m in Reminder().Matches(text))
         {
             string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(m.Value)));
             if (!seen.Add(hash))
-            {
-                newText = newText.Replace(m.Value, "");
-                changed = true;
-            }
+                (repeats ??= []).Add((m.Index, m.Length));
         }
-        if (!changed)
+        if (repeats is null)
             return null;
-        return ExcessNewlines().Replace(newText, "\n\n").Trim();
+        var sb = new StringBuilder(text);
+        for (int i = repeats.Count - 1; i >= 0; i--)
+            sb.Remove(repeats[i].Index, repeats[i].Length);
+        return ExcessNewlines().Replace(sb.ToString(), "\n\n").Trim();
     }
 }

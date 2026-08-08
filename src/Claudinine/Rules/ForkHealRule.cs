@@ -100,7 +100,7 @@ internal sealed partial class ForkHealRule : ICompactionRule
                 RetargetStrings(clone, sid, currentSid);
             // The marker identifies what the record IS, not who touched it last —
             // same convention as carrier-header-dedup.
-            string existingRule = (node["claudinine"] as JsonObject)?["rule"]?.GetValue<string>() ?? Name;
+            string existingRule = (node["claudinine"] as JsonObject)?["rule"].GetString() ?? Name;
             RuleHelpers.SetReplacement(rec, clone, existingRule);
         }
     }

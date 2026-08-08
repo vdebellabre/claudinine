@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Claudinine.Transcript;
 
 namespace Claudinine.Rules;
 
@@ -17,7 +18,7 @@ internal sealed class BashReadDedupRule : ReadSupersessionRule
 
     protected internal override List<ReadTarget> ExtractTargets(JsonObject toolUseBlock)
     {
-        string? cmd = (toolUseBlock["input"] as JsonObject)?["command"]?.GetValue<string>();
+        string? cmd = (toolUseBlock["input"] as JsonObject)?["command"].GetString();
         return BashReadParser.ParseReadTargets(cmd);
     }
 }

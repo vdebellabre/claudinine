@@ -129,6 +129,43 @@ public sealed class CloneVerbTests : IDisposable
     }
 
     [Fact]
+    public void PersistedOutputSidecarPathSurvivesClone()
+    {
+        // The app's <persisted-output> stubs embed an absolute sidecar path under
+        // the SOURCE session's directory. The clone never copies that directory and
+        // the path is the only pointer to the file — it must survive verbatim.
+        // Only the `claudinine get <sid>` retrieval phrase gets retargeted.
+        string sidecar = $@"C:\Users\u\.claude\projects\proj\{SourceId}\tool-results\x.txt";
+        string content = "<persisted-output>\nFull output saved to: " + sidecar
+            + $"\n</persisted-output>\nsee also: claudinine get {SourceId} --ref abc12345 --full";
+        var rec = new JsonObject
+        {
+            ["type"] = "user",
+            ["uuid"] = "u1",
+            ["sessionId"] = SourceId,
+            ["message"] = new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "tool_result",
+                    ["tool_use_id"] = "t1",
+                    ["content"] = content,
+                }),
+            },
+        };
+        WriteTranscript(rec.ToJsonString());
+
+        Assert.Equal(0, CloneVerb.Run([SourceId], _root));
+
+        string cloneId = CloneId();
+        string cloned = ReadRecords(TranscriptPath(cloneId))[0]["message"]!["content"]![0]!["content"]!
+            .GetValue<string>();
+        Assert.Contains(sidecar, cloned);                        // pointer intact
+        Assert.Contains($"claudinine get {cloneId}", cloned);    // retrieval retargeted
+        Assert.DoesNotContain($"claudinine get {SourceId}", cloned);
+    }
+
+    [Fact]
     public void RepointsMirrorHeaderAtCloneTranscript()
     {
         // Load-bearing: CollectGarbage deletes mirrors whose mirrorOf target is gone,

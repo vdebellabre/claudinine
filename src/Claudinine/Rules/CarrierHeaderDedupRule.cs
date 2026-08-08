@@ -36,7 +36,7 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
                 continue;
             JsonObject node = RuleHelpers.CurrentNode(rec);
             foreach (JsonObject block in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                .Where(b => b["type"]?.GetValue<string>() == "tool_result"))
+                .Where(b => b["type"].GetString() == "tool_result"))
             {
                 // Carrier content is a plain string by construction (ChainCollapseRule
                 // sets it directly); anything else is not ours.
@@ -61,11 +61,11 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
 
                 JsonObject clone = (JsonObject)node.DeepClone();
                 foreach (JsonObject cb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
-                    .Where(b => b["type"]?.GetValue<string>() == "tool_result"))
+                    .Where(b => b["type"].GetString() == "tool_result"))
                 {
                     cb["content"] = rewritten;
                 }
-                string existingRule = (node["claudinine"] as JsonObject)?["rule"]?.GetValue<string>()
+                string existingRule = (node["claudinine"] as JsonObject)?["rule"].GetString()
                     ?? ChainCollapseRule.RuleName;
                 RuleHelpers.SetReplacement(rec, clone, existingRule);
             }

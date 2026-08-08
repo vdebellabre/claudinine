@@ -263,7 +263,72 @@ public sealed class CompactorTests : IDisposable
         Assert.True(File.Exists(mirrorPath));
 
         File.Delete(path);
-        MirrorFile.CollectGarbage();
+        // Explicit dirs: the env-driven overload also sweeps the real home dirs.
+        MirrorFile.CollectGarbage([Path.GetDirectoryName(mirrorPath)!]);
         Assert.False(File.Exists(mirrorPath));
+    }
+
+    [Fact]
+    public void GarbageCollectionSweepsEveryKnownDirectory()
+    {
+        // Skip markers fan out to every dir holding the session's mirrors; an
+        // uninstalled context's hooks never run again, so GC must sweep all known
+        // dirs, not just this context's write dir.
+        string otherDir = Path.Combine(_dir, "other-context", "mirrors");
+        Directory.CreateDirectory(otherDir);
+        string orphanMarker = Path.Combine(otherDir, "dead-session.skip");
+        File.WriteAllText(orphanMarker,
+            """{"claudinine":{"v":"1","skipCompactionOf":"C:\\gone\\dead-session.jsonl"}}""" + "\n");
+
+        MirrorFile.CollectGarbage([otherDir]);
+
+        Assert.False(File.Exists(orphanMarker));
+    }
+
+    // ---- load sentinels: fail closed on shapes we could corrupt ----
+
+    [Fact]
+    public void InvalidUtf8LeavesFileByteForByteUntouched()
+    {
+        // The default UTF8 decoder silently swaps invalid bytes for U+FFFD; a pass
+        // over such a file would write the mangled text back. Load must refuse.
+        string path = EightIdenticalReads(out _).WriteTo(_dir);
+        byte[] bytes = File.ReadAllBytes(path);
+        bytes[bytes.Length / 2] = 0xFF; // invalid UTF-8 anywhere in the file
+        File.WriteAllBytes(path, bytes);
+
+        Compactor.Run(path);
+
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void ByteOrderMarkLeavesFileUntouched()
+    {
+        // The app never writes a BOM; ReadAllText would strip it invisibly and the
+        // rewrite would drop it from the file. Not our shape → do nothing.
+        string path = EightIdenticalReads(out _).WriteTo(_dir);
+        byte[] bytes = [0xEF, 0xBB, 0xBF, .. File.ReadAllBytes(path)];
+        File.WriteAllBytes(path, bytes);
+
+        Compactor.Run(path);
+
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void WrongTypedIdentityFieldLeavesFileUntouched()
+    {
+        // TryParse's Try- contract: a numeric uuid is an unfamiliar shape and must
+        // abort the load, not crash the verb or half-parse the record.
+        string path = EightIdenticalReads(out _)
+            .RawLine("""{"type":"user","uuid":123,"sessionId":"test-session"}""")
+            .AssistantText("tail")
+            .WriteTo(_dir);
+        byte[] before = File.ReadAllBytes(path);
+
+        Compactor.Run(path);
+
+        Assert.Equal(before, File.ReadAllBytes(path));
     }
 }

@@ -38,14 +38,14 @@ internal abstract class ReadSupersessionRule : ICompactionRule
             {
                 if (block is not JsonObject b)
                     continue;
-                if (b["type"]?.GetValue<string>() != "tool_use")
+                if (b["type"].GetString() != "tool_use")
                     continue;
-                if (b["name"]?.GetValue<string>() is not string name || !IsReadTool(name))
+                if (b["name"].GetString() is not string name || !IsReadTool(name))
                     continue;
                 var targets = ExtractTargets(b);
                 if (targets.Count == 0)
                     continue;
-                if (b["id"]?.GetValue<string>() is string toolUseId && toolUseId.Length > 0)
+                if (b["id"].GetString() is string toolUseId && toolUseId.Length > 0)
                     reads.Add((toolUseId, targets));
             }
         }
@@ -79,9 +79,9 @@ internal abstract class ReadSupersessionRule : ICompactionRule
             {
                 if (block is not JsonObject b)
                     continue;
-                if (b["type"]?.GetValue<string>() != "tool_result")
+                if (b["type"].GetString() != "tool_result")
                     continue;
-                if (b["tool_use_id"]?.GetValue<string>() is not string toolUseId
+                if (b["tool_use_id"].GetString() is not string toolUseId
                     || !superseded.TryGetValue(toolUseId, out List<ReadTarget>? targets))
                     continue;
                 string current = RuleHelpers.ResultText(b);
@@ -98,7 +98,7 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 clone ??= (JsonObject)RuleHelpers.CurrentNode(rec).DeepClone();
                 foreach (JsonNode? cb in RuleHelpers.ContentBlocks(clone))
                 {
-                    if (cb is JsonObject cbo && cbo["tool_use_id"]?.GetValue<string>() == toolUseId)
+                    if (cb is JsonObject cbo && cbo["tool_use_id"].GetString() == toolUseId)
                     {
                         string desc = string.Join(", ", targets);
                         cbo["content"] = $"[claudinine: file read superseded by a later read of {desc}]";

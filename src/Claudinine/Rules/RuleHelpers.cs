@@ -73,11 +73,18 @@ internal static class RuleHelpers
             return s;
         if (c is JsonArray parts)
             return string.Concat(parts.OfType<JsonObject>()
-                .Select(p => p["text"]?.GetValue<string>() ?? ""));
+                .Select(p => p["text"].GetString() ?? ""));
         return "";
     }
 
     public static int Utf8Len(string s) => Encoding.UTF8.GetByteCount(s);
+
+    /// <summary>
+    /// The uuid prefix retrieval refs are addressed by. Guarded: real uuids are
+    /// GUIDs, but an alien transcript's short uuid must not throw (a throw kills
+    /// the whole pass); `get` matches refs by StartsWith, so a short ref still resolves.
+    /// </summary>
+    public static string RefPrefix(string uuid) => uuid.Length >= 8 ? uuid[..8] : uuid;
 
     /// <summary>
     /// True if this content is one of our own stubs — rules must never re-process
@@ -120,8 +127,8 @@ internal static class RuleHelpers
         if (toolResultBlock["content"] is not JsonArray parts)
             return "";
         var kinds = parts.OfType<JsonObject>()
-            .Where(p => p["type"]?.GetValue<string>() is "image" or "document")
-            .Select(p => (p["source"] as JsonObject)?["media_type"]?.GetValue<string>() ?? "media")
+            .Where(p => p["type"].GetString() is "image" or "document")
+            .Select(p => (p["source"] as JsonObject)?["media_type"].GetString() ?? "media")
             .ToList();
         return string.Join("+", kinds.GroupBy(k => k)
             .Select(g => g.Count() > 1 ? $"{g.Key} x{g.Count()}" : g.Key));
@@ -151,14 +158,14 @@ internal static class RuleHelpers
     /// </summary>
     public static bool IsUserPrompt(JsonObject record)
     {
-        if (record["type"]?.GetValue<string>() != "user")
+        if (record["type"].GetString() != "user")
             return false;
         JsonNode? content = (record["message"] as JsonObject)?["content"];
         if (content is JsonValue v && v.TryGetValue<string>(out _))
             return true;
         if (content is JsonArray list)
             return !list.OfType<JsonObject>()
-                .Any(b => b["type"]?.GetValue<string>() == "tool_result");
+                .Any(b => b["type"].GetString() == "tool_result");
         return false;
     }
 }

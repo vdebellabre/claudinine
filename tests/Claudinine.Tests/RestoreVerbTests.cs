@@ -271,11 +271,12 @@ public sealed class RestoreVerbTests : IDisposable
         string marker = Path.Combine(MirrorsDir, "test-session.skip");
         Assert.True(File.Exists(marker));
 
-        MirrorFile.CollectGarbage();
+        // Explicit dirs: the env-driven overload also sweeps the real home dirs.
+        MirrorFile.CollectGarbage([MirrorsDir]);
         Assert.True(File.Exists(marker)); // transcript alive: marker stays
 
         File.Delete(path);
-        MirrorFile.CollectGarbage();
+        MirrorFile.CollectGarbage([MirrorsDir]);
         Assert.False(File.Exists(marker)); // transcript gone: marker reaped
     }
 

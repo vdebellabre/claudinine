@@ -121,7 +121,7 @@ internal static class RestoreVerb
         {
             string? header = File.ReadLines(mirrorPath, Encoding.UTF8).FirstOrDefault();
             if (header is null) return null;
-            return (JsonNode.Parse(header) as JsonObject)?["claudinine"]?["mirrorOf"]?.GetValue<string>();
+            return (JsonNode.Parse(header) as JsonObject)?["claudinine"]?["mirrorOf"].GetString();
         }
         catch
         {
@@ -159,11 +159,11 @@ internal static class RestoreVerb
                     forkMerged = true;
                     continue; // heal separator: bookkeeping, not a record
                 }
-                if (rec?["uuid"]?.GetValue<string>() is string uuid)
+                if (rec?["uuid"].GetString() is string uuid)
                 {
                     if (!seenUuids.Add(uuid))
                         continue;
-                    result.Add(new Line(line, uuid, rec["parentUuid"]?.GetValue<string>()));
+                    result.Add(new Line(line, uuid, rec["parentUuid"].GetString()));
                 }
                 else
                 {
@@ -243,7 +243,7 @@ internal static class RestoreVerb
         foreach (TranscriptRecord rec in transcript.Records)
         {
             if (rec.Uuid is string uuid && !restoredUuids.Contains(uuid))
-                return $"mirror does not cover live record {uuid[..8]}";
+                return $"mirror does not cover live record {Rules.RuleHelpers.RefPrefix(uuid)}";
         }
         if (restored.Count < transcript.Records.Count)
             return "restored file would be smaller than the live one";

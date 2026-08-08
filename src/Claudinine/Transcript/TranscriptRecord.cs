@@ -33,27 +33,26 @@ internal sealed class TranscriptRecord
     {
         bool hadCr = line.EndsWith('\r');
         string json = hadCr ? line[..^1] : line;
-        JsonObject obj;
         try
         {
-            if (JsonNode.Parse(json) is not JsonObject parsed)
+            if (JsonNode.Parse(json) is not JsonObject obj)
                 return null;
-            obj = parsed;
+            // Identity fields stay strict: a wrong-typed uuid/parentUuid/type is an
+            // unfamiliar shape, and the throw lands in this catch → format sentinel.
+            return new TranscriptRecord
+            {
+                RawLine = line,
+                Node = obj,
+                Uuid = obj["uuid"]?.GetValue<string>(),
+                ParentUuid = obj["parentUuid"]?.GetValue<string>(),
+                Type = obj["type"]?.GetValue<string>(),
+                HadCarriageReturn = hadCr,
+            };
         }
         catch
         {
             return null;
         }
-
-        return new TranscriptRecord
-        {
-            RawLine = line,
-            Node = obj,
-            Uuid = obj["uuid"]?.GetValue<string>(),
-            ParentUuid = obj["parentUuid"]?.GetValue<string>(),
-            Type = obj["type"]?.GetValue<string>(),
-            HadCarriageReturn = hadCr,
-        };
     }
 
     /// <summary>
@@ -68,7 +67,7 @@ internal sealed class TranscriptRecord
         if (Type == "user" && IsTruthy(Node["isCompactSummary"]))
             return true;
         if (Type == "system" &&
-            Node["subtype"]?.GetValue<string>() is "compact_boundary" or "microcompact_boundary")
+            Node["subtype"].GetString() is "compact_boundary" or "microcompact_boundary")
             return true;
         if (IsTruthy(Node["isVisibleInTranscriptOnly"]))
             return true;

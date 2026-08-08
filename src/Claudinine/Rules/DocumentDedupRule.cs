@@ -48,7 +48,7 @@ internal sealed class DocumentDedupRule : ICompactionRule
                 JsonObject node = RuleHelpers.CurrentNode(rec);
                 if (RuleHelpers.ContentBlocks(node).ElementAtOrDefault(blockIndex) is not JsonObject block)
                     continue;
-                string? btype = block["type"]?.GetValue<string>();
+                string? btype = block["type"].GetString();
 
                 string preview = RuleHelpers.TextOf(block);
                 preview = preview[..Math.Min(80, preview.Length)].Replace('\n', ' ');

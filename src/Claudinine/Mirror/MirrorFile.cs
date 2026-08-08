@@ -299,7 +299,7 @@ internal static class MirrorFile
                     JsonObject? rec;
                     try { rec = JsonNode.Parse(line) as JsonObject; } catch { continue; }
                     // The uuid requirement also skips the parent mirror's header.
-                    if (rec?["uuid"]?.GetValue<string>() is not string uuid)
+                    if (rec?["uuid"].GetString() is not string uuid)
                         continue;
                     if (!seen.Add(uuid))
                         continue;
@@ -329,7 +329,7 @@ internal static class MirrorFile
     {
         try
         {
-            return (JsonNode.Parse(line) as JsonObject)?["uuid"]?.GetValue<string>();
+            return (JsonNode.Parse(line) as JsonObject)?["uuid"].GetString();
         }
         catch
         {
@@ -388,12 +388,22 @@ internal static class MirrorFile
     /// <summary>
     /// Delete mirrors whose transcript no longer exists (the app ages transcripts
     /// out itself). Run at SessionStart; failures are ignored record by record.
+    /// Sweeps every known mirror dir, not just this context's write dir — skip
+    /// markers fan out to all of them, and an uninstalled context's hooks never
+    /// run again to clean up their own.
     /// </summary>
-    public static void CollectGarbage()
+    public static void CollectGarbage() => CollectGarbage(SearchDirectories());
+
+    /// <summary>Explicit-dirs seam, same reason as SearchDirectories: tests must
+    /// never sweep (and delete from) the developer's real mirror dirs.</summary>
+    internal static void CollectGarbage(IReadOnlyList<string> dirs)
     {
-        string dir = MirrorsDirectory();
-        if (!Directory.Exists(dir))
-            return;
+        foreach (string dir in dirs)
+            CollectGarbage(dir);
+    }
+
+    private static void CollectGarbage(string dir)
+    {
         foreach (string mirror in Directory.EnumerateFiles(dir, "*.jsonl"))
         {
             try
@@ -401,7 +411,7 @@ internal static class MirrorFile
                 string? headerLine = File.ReadLines(mirror, Encoding.UTF8).FirstOrDefault();
                 if (headerLine is null) continue;
                 if (JsonNode.Parse(headerLine) is not JsonObject header) continue;
-                string? mirrorOf = header["claudinine"]?["mirrorOf"]?.GetValue<string>();
+                string? mirrorOf = header["claudinine"]?["mirrorOf"].GetString();
                 if (mirrorOf is not null && !File.Exists(mirrorOf))
                     File.Delete(mirror);
             }
@@ -417,7 +427,7 @@ internal static class MirrorFile
                 string? line = File.ReadLines(marker, Encoding.UTF8).FirstOrDefault();
                 if (line is null) continue;
                 if (JsonNode.Parse(line) is not JsonObject header) continue;
-                string? target = header["claudinine"]?["skipCompactionOf"]?.GetValue<string>();
+                string? target = header["claudinine"]?["skipCompactionOf"].GetString();
                 if (target is not null && !File.Exists(target))
                     File.Delete(marker);
             }
@@ -457,7 +467,7 @@ internal static class MirrorFile
                 // fall through to raw hash
             }
         }
-        string? uuid = knownUuid ?? obj?["uuid"]?.GetValue<string>();
+        string? uuid = knownUuid ?? obj?["uuid"].GetString();
         if (uuid is not null)
             return "u:" + uuid;
         if (obj?["leafUuid"] is not null)

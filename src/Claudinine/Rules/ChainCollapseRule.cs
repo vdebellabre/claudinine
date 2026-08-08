@@ -88,7 +88,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
             if (type == "assistant")
             {
                 var uses = RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                    .Where(x => x["type"]?.GetValue<string>() == "tool_use").ToList();
+                    .Where(x => x["type"].GetString() == "tool_use").ToList();
                 if (uses.Count > 1)
                     return; // legacy multi-use record: not a chain, don't touch
                 if (uses.Count == 1)
@@ -96,21 +96,21 @@ internal sealed class ChainCollapseRule : ICompactionRule
                     if (draining)
                         return; // new use while the batch is partially answered
                     JsonObject u = uses[0];
-                    if (u["id"]?.GetValue<string>() is not string id || id.Length == 0)
+                    if (u["id"].GetString() is not string id || id.Length == 0)
                         return;
-                    pending.Add((i, id, u["name"]?.GetValue<string>() ?? "?", RuleHelpers.PrimaryArg(u)));
+                    pending.Add((i, id, u["name"].GetString() ?? "?", RuleHelpers.PrimaryArg(u)));
                 }
             }
             else if (type == "user")
             {
                 var blocks = RuleHelpers.ContentBlocks(node).OfType<JsonObject>().ToList();
-                var results = blocks.Where(x => x["type"]?.GetValue<string>() == "tool_result").ToList();
+                var results = blocks.Where(x => x["type"].GetString() == "tool_result").ToList();
                 if (results.Count == 0)
                     continue; // an image share or similar — leave it alone, keep scanning
                 if (results.Count > 1 || blocks.Count != results.Count)
                     return; // legacy multi-result or mixed carrier: don't touch
                 JsonObject r = results[0];
-                int match = pending.FindIndex(p => p.Id == r["tool_use_id"]?.GetValue<string>());
+                int match = pending.FindIndex(p => p.Id == r["tool_use_id"].GetString());
                 if (match < 0)
                     return; // orphan or duplicate result
                 if (rec.Uuid is null)
@@ -135,7 +135,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         Call anchor = calls.MinBy(c => c.UseIndex)!;
         TranscriptRecord anchorResult = records[anchor.ResultIndex];
         if ((RuleHelpers.CurrentNode(anchorResult)["claudinine"] as JsonObject)?["rule"]
-                ?.GetValue<string>() == Name)
+                .GetString() == Name)
             return; // already collapsed (idempotence)
 
         int spanStart = anchor.UseIndex;
@@ -153,7 +153,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         var callByResult = calls.ToDictionary(c => c.ResultIndex);
 
         // Pass 2: build the digest in reading order and decide removals.
-        string? sessionId = records[spanStart].Node["sessionId"]?.GetValue<string>();
+        string? sessionId = records[spanStart].Node["sessionId"].GetString();
         var digest = new StringBuilder();
         digest.Append(Header(calls.Count, sessionId));
         var toRemove = new List<TranscriptRecord>();
@@ -175,9 +175,9 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 if (!isAnchorUse)
                 {
                     foreach (JsonObject tb in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                        .Where(x => x["type"]?.GetValue<string>() == "text"))
+                        .Where(x => x["type"].GetString() == "text"))
                     {
-                        string t = tb["text"]?.GetValue<string>()?.Trim() ?? "";
+                        string t = tb["text"].GetString()?.Trim() ?? "";
                         if (t.Length > 0)
                             digest.Append("    (note) ").Append(t.Replace("\n", "\n    ")).Append('\n');
                     }
@@ -186,7 +186,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
             else if (resultIndexes.Contains(i))
             {
                 Call c = callByResult[i];
-                string refId = records[c.ResultIndex].Uuid![..8];
+                string refId = RuleHelpers.RefPrefix(records[c.ResultIndex].Uuid!);
                 string preview = PreviewRenderer.RenderPreview(c.Tool, c.Arg, c.ResultText, c.IsError);
                 // Media blocks are invisible to text extraction — without this
                 // note a screenshot-only result digests as "(no output)".
@@ -204,7 +204,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
             rec.Removed = true;
         JsonObject clone = (JsonObject)RuleHelpers.CurrentNode(anchorResult).DeepClone();
         foreach (JsonObject rb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
-            .Where(x => x["tool_use_id"]?.GetValue<string>() == anchor.ToolUseId))
+            .Where(x => x["tool_use_id"].GetString() == anchor.ToolUseId))
         {
             rb["content"] = digest.ToString().TrimEnd('\n');
         }
@@ -234,7 +234,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
     {
         var blocks = RuleHelpers.ContentBlocks(node).OfType<JsonObject>().ToList();
         return blocks.Count > 0 && blocks.All(b =>
-            b["type"]?.GetValue<string>() is "text" or "thinking");
+            b["type"].GetString() is "text" or "thinking");
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];

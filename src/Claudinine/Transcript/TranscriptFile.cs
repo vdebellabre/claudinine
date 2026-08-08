@@ -15,10 +15,18 @@ internal sealed class TranscriptFile
 
     public static TranscriptFile? TryLoad(string path)
     {
+        // Strict decode: the default UTF8 decoder silently swaps invalid bytes for
+        // U+FFFD, which the rewrite would then write back — the one way this class
+        // could corrupt instead of abort. Refuse a BOM the same way: the app never
+        // writes one, and ReadAllText would strip it invisibly.
         string text;
         try
         {
-            text = File.ReadAllText(path, Encoding.UTF8);
+            byte[] bytes = File.ReadAllBytes(path);
+            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+                return null;
+            text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(bytes);
         }
         catch
         {
@@ -189,7 +197,16 @@ internal sealed class TranscriptFile
         string temp = Path + ".claudinine-tmp";
         try
         {
-            File.WriteAllText(temp, rewritten, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                writer.Write(rewritten);
+                writer.Flush();
+                // Durable before the swap: a rename can survive a power cut that the
+                // data didn't, leaving a truncated transcript — same reasoning as the
+                // mirror append's flushToDisk.
+                stream.Flush(flushToDisk: true);
+            }
             File.Move(temp, Path, overwrite: true);
             return true;
         }

@@ -23,7 +23,7 @@ internal sealed class StopHookSummaryStripRule : ICompactionRule
             if (rec.Type != "system" || rec.IsProtected())
                 continue;
             JsonObject node = rec.Node;
-            if (node["subtype"]?.GetValue<string>() != "stop_hook_summary")
+            if (node["subtype"].GetString() != "stop_hook_summary")
                 continue;
             if (IsTruthy(node["hasOutput"]) || IsTruthy(node["preventedContinuation"]))
                 continue;

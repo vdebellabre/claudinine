@@ -57,6 +57,26 @@ public sealed class NoiseRulesTests : IDisposable
         Assert.Equal(1, occurrences); // only the first copy survives
     }
 
+    [Fact]
+    public void DuplicateReminderWithinOneMessageKeepsFirst()
+    {
+        // Regression: removal by value (Replace) also erased the first copy when
+        // the same reminder repeated inside a single text — it then survived
+        // nowhere. Removal must be positional.
+        string reminder = "<system-reminder>always use tabs " + new string('r', 300) + "</system-reminder>";
+        var b = new TranscriptBuilder()
+            .UserPrompt("ask\n" + reminder + "\nmore context\n" + reminder)
+            .AssistantText("noted")
+            .UserPrompt("done")
+            .AssistantText("ok");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string text = AllText(path);
+        Assert.Equal(1, text.Split("always use tabs").Length - 1);
+    }
+
     // ---- document-dedup ----
 
     [Fact]

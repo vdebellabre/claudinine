@@ -48,7 +48,7 @@ internal sealed class ToolResultAgeRule : ICompactionRule
             foreach (JsonNode? block in RuleHelpers.ContentBlocks(node))
             {
                 bi++;
-                if (block is not JsonObject b || b["type"]?.GetValue<string>() != "tool_result")
+                if (block is not JsonObject b || b["type"].GetString() != "tool_result")
                     continue;
                 if (b["content"] is not JsonValue cv || !cv.TryGetValue<string>(out string? content))
                     continue;
@@ -151,7 +151,7 @@ internal sealed class ToolResultAgeRule : ICompactionRule
     private static string BuildStub(JsonObject block, string content,
         List<TranscriptRecord> records, int pos, string? persistedPath = null)
     {
-        string? toolUseId = block["tool_use_id"]?.GetValue<string>();
+        string? toolUseId = block["tool_use_id"].GetString();
         string toolName = "", toolPath = "";
         if (toolUseId is not null)
         {
@@ -160,10 +160,10 @@ internal sealed class ToolResultAgeRule : ICompactionRule
                 foreach (JsonNode? n in RuleHelpers.ContentBlocks(records[p].Node))
                 {
                     if (n is not JsonObject u
-                        || u["type"]?.GetValue<string>() != "tool_use"
-                        || u["id"]?.GetValue<string>() != toolUseId)
+                        || u["type"].GetString() != "tool_use"
+                        || u["id"].GetString() != toolUseId)
                         continue;
-                    toolName = u["name"]?.GetValue<string>() ?? "";
+                    toolName = u["name"].GetString() ?? "";
                     if (u["input"] is JsonObject input)
                     {
                         toolPath = StringField(input, "file_path")

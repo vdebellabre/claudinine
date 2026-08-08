@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Claudinine.Mirror;
 using Claudinine.Rules;
+using Claudinine.Transcript;
 
 namespace Claudinine;
 
@@ -77,7 +78,7 @@ internal static class GetVerb
                 if (first) { first = false; continue; } // header
                 JsonObject? rec;
                 try { rec = JsonNode.Parse(line) as JsonObject; } catch { continue; }
-                if (rec?["uuid"]?.GetValue<string>() is not string uuid)
+                if (rec?["uuid"].GetString() is not string uuid)
                     continue;
                 if (!seenRecords.Add(uuid))
                     continue;
@@ -89,7 +90,7 @@ internal static class GetVerb
                     continue;
                 }
                 foreach (JsonObject b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
-                    .Where(x => x["type"]?.GetValue<string>() == "tool_result"))
+                    .Where(x => x["type"].GetString() == "tool_result"))
                 {
                     string text = RuleHelpers.ResultText(b);
                     if (text.Length == 0)
@@ -105,11 +106,11 @@ internal static class GetVerb
                 if (refPrefix is null)
                     continue;
                 foreach (JsonObject b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
-                    .Where(x => x["type"]?.GetValue<string>() == "tool_use"))
+                    .Where(x => x["type"].GetString() == "tool_use"))
                 {
                     if (b["input"] is not JsonObject input)
                         continue;
-                    string name = b["name"]?.GetValue<string>() ?? "?";
+                    string name = b["name"].GetString() ?? "?";
                     matches.Add((uuid, "", "", $"{name} input: {input.ToJsonString(RelaxedJson)}"));
                 }
             }
@@ -126,7 +127,7 @@ internal static class GetVerb
 
         foreach ((string uuid, _, _, string text) in matches)
         {
-            string tag = uuid[..8];
+            string tag = RuleHelpers.RefPrefix(uuid);
             if (info)
             {
                 Console.WriteLine($"[{tag}] {RuleHelpers.Utf8Len(text)} bytes, {text.Split('\n').Length} lines (~{text.Length / 4} tokens)");
@@ -163,7 +164,7 @@ internal static class GetVerb
         int n = 0;
         foreach (JsonObject b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>())
         {
-            string? btype = b["type"]?.GetValue<string>();
+            string? btype = b["type"].GetString();
             if (btype is "image" or "document")
             {
                 DecodeOne(b, uuid, n++, lines);
@@ -171,7 +172,7 @@ internal static class GetVerb
             else if (btype == "tool_result" && b["content"] is JsonArray inner)
             {
                 foreach (JsonObject ib in inner.OfType<JsonObject>()
-                    .Where(x => x["type"]?.GetValue<string>() is "image" or "document"))
+                    .Where(x => x["type"].GetString() is "image" or "document"))
                 {
                     DecodeOne(ib, uuid, n++, lines);
                 }
@@ -185,13 +186,13 @@ internal static class GetVerb
     {
         if (block["source"] is not JsonObject source)
             return;
-        string? sourceType = source["type"]?.GetValue<string>();
+        string? sourceType = source["type"].GetString();
         if (sourceType == "url")
         {
-            lines.Add($"media {index} is a URL source: {source["url"]?.GetValue<string>() ?? "?"}");
+            lines.Add($"media {index} is a URL source: {source["url"].GetString() ?? "?"}");
             return;
         }
-        if (sourceType != "base64" || source["data"]?.GetValue<string>() is not string data)
+        if (sourceType != "base64" || source["data"].GetString() is not string data)
             return;
         byte[] bytes;
         try
@@ -203,10 +204,10 @@ internal static class GetVerb
             lines.Add($"media {index}: base64 decode failed");
             return;
         }
-        string mediaType = source["media_type"]?.GetValue<string>() ?? "application/octet-stream";
+        string mediaType = source["media_type"].GetString() ?? "application/octet-stream";
         string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "claudinine", "media");
         Directory.CreateDirectory(dir);
-        string path = System.IO.Path.Combine(dir, $"{uuid[..8]}-{index}{Extension(mediaType)}");
+        string path = System.IO.Path.Combine(dir, $"{RuleHelpers.RefPrefix(uuid)}-{index}{Extension(mediaType)}");
         File.WriteAllBytes(path, bytes);
         lines.Add($"wrote {path} ({mediaType}, {Math.Max(1, bytes.Length / 1024)}KB) — use the Read tool on this file to view it");
     }

@@ -36,8 +36,8 @@ internal sealed class ImageStripRule : ICompactionRule
                 continue; // recently shared — keep
 
             JsonObject node = RuleHelpers.CurrentNode(rec);
-            string? sid = node["sessionId"]?.GetValue<string>();
-            string? refPrefix = rec.Uuid is { Length: >= 8 } u ? u[..8] : null;
+            string? sid = node["sessionId"].GetString();
+            string? refPrefix = rec.Uuid is string u ? RuleHelpers.RefPrefix(u) : null;
             JsonObject? clone = null;
             int bi = -1;
             foreach (JsonNode? block in RuleHelpers.ContentBlocks(node))
@@ -45,7 +45,7 @@ internal sealed class ImageStripRule : ICompactionRule
                 bi++;
                 if (block is not JsonObject b)
                     continue;
-                switch (b["type"]?.GetValue<string>())
+                switch (b["type"].GetString())
                 {
                     case "image":
                     case "document" when SourceType(b) == "base64":
@@ -53,7 +53,7 @@ internal sealed class ImageStripRule : ICompactionRule
                         break;
 
                     case "text" when sid is not null && refPrefix is not null
-                        && b["text"]?.GetValue<string>() is string t
+                        && b["text"].GetString() is string t
                         && t.StartsWith(LegacyStubPrefix, StringComparison.Ordinal):
                         // The original media info is gone from a legacy stub;
                         // "image" is all it ever replaced.
@@ -66,7 +66,7 @@ internal sealed class ImageStripRule : ICompactionRule
                         for (int ti = 0; ti < inner.Count; ti++)
                         {
                             if (inner[ti] is not JsonObject ib
-                                || ib["type"]?.GetValue<string>() != "image")
+                                || ib["type"].GetString() != "image")
                                 continue;
                             clone ??= (JsonObject)node.DeepClone();
                             var cloneResult = (JsonObject)RuleHelpers.ContentBlocks(clone).ElementAt(bi)!;
@@ -104,15 +104,15 @@ internal sealed class ImageStripRule : ICompactionRule
     }
 
     private static string? SourceType(JsonObject block) =>
-        (block["source"] as JsonObject)?["type"]?.GetValue<string>();
+        (block["source"] as JsonObject)?["type"].GetString();
 
     /// <summary>"image/png, 498KB" — enough to decide whether retrieval is worth it.</summary>
     private static string Describe(JsonObject block)
     {
         var source = block["source"] as JsonObject;
-        string label = source?["media_type"]?.GetValue<string>()
-            ?? block["type"]?.GetValue<string>() ?? "image";
-        if (source?["data"]?.GetValue<string>() is string data && data.Length > 0)
+        string label = source?["media_type"].GetString()
+            ?? block["type"].GetString() ?? "image";
+        if (source?["data"].GetString() is string data && data.Length > 0)
             label += $", {Math.Max(1, data.Length * 3L / 4 / 1024)}KB";
         else if (SourceType(block) == "url")
             label += ", url source";
