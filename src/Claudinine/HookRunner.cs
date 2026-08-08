@@ -18,6 +18,12 @@ internal static class HookRunner
             if (input?.TranscriptPath is null || !File.Exists(input.TranscriptPath))
                 return 0;
 
+            // A session frozen by `restore-compaction-off` keeps its mirror
+            // fresh but is never compacted — an explicit restore must not be
+            // silently undone. Global housekeeping (GC) still runs.
+            string sid = Path.GetFileNameWithoutExtension(input.TranscriptPath);
+            bool skipped = MirrorFile.IsCompactionSkipped(sid);
+
             // Every event runs the same idempotent pass; they differ only in
             // which part of the file still has work in it. UserPromptSubmit is
             // the steady-state workhorse (the turn that just ended), SessionEnd
@@ -29,11 +35,13 @@ internal static class HookRunner
                 case "UserPromptSubmit":
                 case "SessionEnd":
                 case "PreCompact":
-                    Compactor.Run(input.TranscriptPath);
+                    if (skipped) Compactor.MirrorOnly(input.TranscriptPath);
+                    else Compactor.Run(input.TranscriptPath);
                     break;
 
                 case "SessionStart":
-                    Compactor.Run(input.TranscriptPath);
+                    if (skipped) Compactor.MirrorOnly(input.TranscriptPath);
+                    else Compactor.Run(input.TranscriptPath);
                     MirrorFile.CollectGarbage();
                     SessionDirGc.Run(input.TranscriptPath, input.SessionId);
                     break;

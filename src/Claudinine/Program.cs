@@ -5,6 +5,8 @@ return args switch
     ["hook", ..] => HookRunner.Run(Console.OpenStandardInput()),
     ["get", .. var getArgs] => GetVerb.Run(getArgs),
     ["clone", .. var cloneArgs] => CloneVerb.Run(cloneArgs),
+    ["restore-compaction-on", .. var onArgs] => RestoreVerb.Run(onArgs, compactionOn: true),
+    ["restore-compaction-off", .. var offArgs] => RestoreVerb.Run(offArgs, compactionOn: false),
     ["version", ..] or ["--version", ..] => Verbs.Version(),
     _ => Verbs.Usage(),
 };
@@ -21,7 +23,8 @@ namespace Claudinine
 
         public static int Usage()
         {
-            Console.Error.WriteLine("usage: claudinine <hook|get|clone|version>");
+            Console.Error.WriteLine(
+                "usage: claudinine <hook|get|clone|restore-compaction-on|restore-compaction-off|version>");
             return 1;
         }
     }

@@ -12,6 +12,21 @@ namespace Claudinine;
 /// </summary>
 internal static class Compactor
 {
+    /// <summary>
+    /// Mirror without compacting — the pass for sessions frozen by
+    /// `restore-compaction-off`: the backup stays fresh (crash protection, and
+    /// re-enabling later has everything), the transcript is never touched.
+    /// </summary>
+    public static void MirrorOnly(string transcriptPath)
+    {
+        TranscriptFile? transcript = TranscriptFile.TryLoad(transcriptPath);
+        if (transcript is null)
+            return;
+        MirrorFile.TryAppendMissing(transcript);
+        if (Environment.GetEnvironmentVariable("CLAUDININE_DEBUG") is not null)
+            Console.Error.WriteLine("[claudinine debug] compaction skipped (skip marker present); mirror updated");
+    }
+
     public static void Run(string transcriptPath)
     {
         TranscriptFile? transcript = TranscriptFile.TryLoad(transcriptPath);

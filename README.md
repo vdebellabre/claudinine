@@ -43,7 +43,11 @@ for exactly what is modified, why, and what the safety guarantees are.
 Note: the transcript also backs the session scrollback, so compacted tool
 outputs appear as short stubs when you scroll back after a resume. The full
 originals are preserved in the per-session mirror, retrievable with
-`claudinine get <session-id> --ref <ref> [--grep P | --info | --full]`.
+`claudinine get <session-id> --ref <ref> [--grep P | --info | --full | --media]`.
+To undo compaction entirely, run `claudinine restore-compaction-off <session-id>`
+while the session is closed: the transcript is rebuilt verbatim from the mirror
+and the session is left alone from then on (`restore-compaction-on` restores it
+once and lets compaction resume).
 
 ## Engineering
 

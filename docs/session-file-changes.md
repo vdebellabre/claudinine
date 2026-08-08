@@ -92,7 +92,15 @@ Two further properties worth stating:
   records: ~37.8k tokens replayed from cache, no error, no UI breakage.
 - **Nothing is destroyed.** Full original content stays in the mirror and is
   retrievable with `claudinine get <session-id> --ref <ref> [--grep P | --info |
-  --full]`. A mirror is deleted only once its own transcript no longer exists.
+  --full | --media]`. A mirror is deleted only once its own transcript no longer
+  exists.
+- **Everything is reversible.** `claudinine restore-compaction-off <session-id>`
+  (run while the session is closed) rebuilds the transcript from its mirror —
+  verified line-identical to the pre-compaction original on the heaviest real
+  sessions — and freezes the session: hooks keep mirroring it but never compact
+  it again, so the restore is never silently undone.
+  `claudinine restore-compaction-on <session-id>` restores it once and lets
+  steady-state compaction resume (it also unfreezes a frozen session).
 
 ## Known, accepted trade-offs
 
@@ -101,7 +109,8 @@ Stated plainly, because they are real:
 - **Scrollback shows stubs.** The transcript also backs the UI's scrollback, so
   after a resume, compacted tool outputs appear as short digests rather than the
   original text. The full content is in the mirror, not lost, but it is one
-  retrieval step away instead of inline.
+  retrieval step away instead of inline — and `restore-compaction-off` brings the
+  whole session back verbatim if you want it.
 - **It is not free of assumptions about an undocumented format.** The transcript
   schema is Claude Code's internal format and can change. The mitigations are the
   format sentinel (unknown shape → do nothing), structural rather than textual

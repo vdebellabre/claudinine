@@ -54,7 +54,7 @@ internal static class GetVerb
             return 1;
         }
 
-        List<string> mirrorPaths = FindMirrors(session);
+        List<string> mirrorPaths = MirrorFile.FindSessionMirrors(session);
         if (mirrorPaths.Count == 0)
         {
             IReadOnlyList<string> searched = MirrorFile.SearchDirectories();
@@ -221,30 +221,4 @@ internal static class GetVerb
         _ => ".bin",
     };
 
-    /// <summary>
-    /// Match mirrors by session-id prefix (refs use 8-char prefixes; so can
-    /// sessions) across every known mirror directory. The same session may have a
-    /// mirror in several dirs (cross-context resume) — all of them are returned; a
-    /// prefix that resolves to more than one distinct session id matches nothing.
-    /// </summary>
-    private static List<string> FindMirrors(string session)
-    {
-        var exact = new List<string>();
-        var byPrefix = new List<string>();
-        foreach (string dir in MirrorFile.SearchDirectories())
-        {
-            string candidate = System.IO.Path.Combine(dir, session + ".jsonl");
-            if (File.Exists(candidate))
-                exact.Add(candidate);
-            else
-                byPrefix.AddRange(Directory.EnumerateFiles(dir, session + "*.jsonl"));
-        }
-        if (exact.Count > 0)
-            return exact;
-        int distinct = byPrefix
-            .Select(p => System.IO.Path.GetFileNameWithoutExtension(p))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-        return distinct == 1 ? byPrefix : [];
-    }
 }
