@@ -110,6 +110,24 @@ internal static class RuleHelpers
         content.StartsWith("[claudinine", StringComparison.Ordinal);
 
     /// <summary>
+    /// The human-meaningful argument of a tool_use input, for one-line previews:
+    /// first non-empty well-known key, else the first non-empty string value.
+    /// </summary>
+    public static string PrimaryArg(JsonObject toolUse)
+    {
+        if (toolUse["input"] is not JsonObject input)
+            return "";
+        foreach (string key in (string[])["command", "file_path", "path", "pattern", "url", "query", "prompt"])
+        {
+            if (input[key] is JsonValue v && v.TryGetValue<string>(out string? s) && s.Length > 0)
+                return s.ReplaceLineEndings(" ");
+        }
+        return input.Select(kv => kv.Value).OfType<JsonValue>()
+            .Select(v => v.TryGetValue<string>(out string? s) ? s : null)
+            .FirstOrDefault(s => !string.IsNullOrEmpty(s))?.ReplaceLineEndings(" ") ?? "";
+    }
+
+    /// <summary>
     /// A real user prompt for turn counting (cozempic's _is_user_prompt): type user,
     /// content either a plain string or a list with no tool_result blocks.
     /// </summary>

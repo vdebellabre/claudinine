@@ -98,7 +98,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                     JsonObject u = uses[0];
                     if (u["id"]?.GetValue<string>() is not string id || id.Length == 0)
                         return;
-                    pending.Add((i, id, u["name"]?.GetValue<string>() ?? "?", PrimaryArg(u)));
+                    pending.Add((i, id, u["name"]?.GetValue<string>() ?? "?", RuleHelpers.PrimaryArg(u)));
                 }
             }
             else if (type == "user")
@@ -231,20 +231,6 @@ internal sealed class ChainCollapseRule : ICompactionRule
         var blocks = RuleHelpers.ContentBlocks(node).OfType<JsonObject>().ToList();
         return blocks.Count > 0 && blocks.All(b =>
             b["type"]?.GetValue<string>() is "text" or "thinking");
-    }
-
-    private static string PrimaryArg(JsonObject toolUse)
-    {
-        if (toolUse["input"] is not JsonObject input)
-            return "";
-        foreach (string key in (string[])["command", "file_path", "path", "pattern", "url", "query", "prompt"])
-        {
-            if (input[key] is JsonValue v && v.TryGetValue<string>(out string? s) && s.Length > 0)
-                return s.ReplaceLineEndings(" ");
-        }
-        return input.Select(kv => kv.Value).OfType<JsonValue>()
-            .Select(v => v.TryGetValue<string>(out string? s) ? s : null)
-            .FirstOrDefault(s => !string.IsNullOrEmpty(s))?.ReplaceLineEndings(" ") ?? "";
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];

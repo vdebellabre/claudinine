@@ -32,8 +32,10 @@ internal static class RuleCatalog
         // (mostly) original content; whatever it leaves behind ages normally.
         new ChainCollapseRule(),
         // Immediately after chain-collapse: slims the retrieval boilerplate of
-        // every carrier but the file's first, including carriers born this pass.
+        // every carrier but the file's first, including carriers born this pass,
+        // then retires the anchor tool_use's dead-weight input.
         new CarrierHeaderDedupRule(),
+        new AnchorInputStubRule(),
         new ToolResultAgeRule(),
         new MegaBlockTrimRule(),
         new ImageStripRule(),

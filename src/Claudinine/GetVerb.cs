@@ -14,6 +14,10 @@ namespace Claudinine;
 /// </summary>
 internal static class GetVerb
 {
+    /// <summary>Human/model-readable JSON: no "-style escaping of quotes and symbols.</summary>
+    private static readonly System.Text.Json.JsonSerializerOptions RelaxedJson =
+        new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
     public static int Run(string[] args)
     {
         if (args.Length == 0)
@@ -79,6 +83,19 @@ internal static class GetVerb
                         && !text.Contains(grep, StringComparison.OrdinalIgnoreCase))
                         continue;
                     matches.Add((uuid, "", "", text));
+                }
+                // A --ref can also address a tool_use record: anchor-input stubs
+                // point here for the original input. Only when explicitly addressed
+                // — plain --grep stays an output search, not an input search.
+                if (refPrefix is null)
+                    continue;
+                foreach (JsonObject b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
+                    .Where(x => x["type"]?.GetValue<string>() == "tool_use"))
+                {
+                    if (b["input"] is not JsonObject input)
+                        continue;
+                    string name = b["name"]?.GetValue<string>() ?? "?";
+                    matches.Add((uuid, "", "", $"{name} input: {input.ToJsonString(RelaxedJson)}"));
                 }
             }
         }
