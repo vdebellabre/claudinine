@@ -64,6 +64,8 @@ internal sealed class TranscriptFile
         if (records.Count == 0)
             return null;
 
+        MarkPreserved(records);
+
         return new TranscriptFile
         {
             Path = path,
@@ -72,6 +74,46 @@ internal sealed class TranscriptFile
             LoadedLength = loadedLength,
             IsSidechainFile = records.All(r => r.IsSidechain),
         };
+    }
+
+    /// <summary>
+    /// Flag every record named by a compact_boundary's
+    /// compactMetadata.preservedMessages.allUuids so IsProtected() covers them.
+    /// After a boundary the app loads the summary PLUS these records; they are
+    /// referenced by uuid only, never by the parent chain, so removing one is
+    /// invisible to dangling-parent validation. Missing entries are tolerated —
+    /// the app itself names uuids that were never written (2 of 8 in d8aa7b17).
+    /// </summary>
+    private static void MarkPreserved(List<TranscriptRecord> records)
+    {
+        HashSet<string>? preserved = null;
+        foreach (var rec in records)
+        {
+            if (rec.Type != "system" ||
+                rec.Node["subtype"].GetString() is not ("compact_boundary" or "microcompact_boundary"))
+            {
+                continue;
+            }
+            if (rec.Node["compactMetadata"] is not JsonObject meta ||
+                meta["preservedMessages"] is not JsonObject pm ||
+                pm["allUuids"] is not JsonArray all)
+            {
+                continue;
+            }
+            foreach (var entry in all)
+            {
+                if (entry?.GetValue<string>() is string uuid && uuid.Length > 0)
+                    (preserved ??= new HashSet<string>(StringComparer.Ordinal)).Add(uuid);
+            }
+        }
+        if (preserved is null)
+            return;
+
+        foreach (var rec in records)
+        {
+            if (rec.Uuid is string u && preserved.Contains(u))
+                rec.IsBoundaryPreserved = true;
+        }
     }
 
     public bool HasChanges => Records.Any(r => r.Replacement is not null || r.Removed);

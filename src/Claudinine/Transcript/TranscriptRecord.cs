@@ -54,11 +54,27 @@ internal sealed class TranscriptRecord
     }
 
     /// <summary>
+    /// Set at load time when a compact_boundary names this record in
+    /// compactMetadata.preservedMessages.allUuids — see TranscriptFile.MarkPreserved.
+    /// Those uuids are a THIRD reference class alongside parentUuid and leafUuid:
+    /// they are the records the app keeps in context beside the summary after a
+    /// boundary, and nothing in the chain points at them, so dangling-parent
+    /// validation cannot catch their removal.
+    /// </summary>
+    public bool IsBoundaryPreserved { get; set; }
+
+    /// <summary>
     /// True if this record must never be removed or structurally modified.
     /// Ported from cozempic's is_protected, minus its in-memory tag keys.
     /// </summary>
     public bool IsProtected()
     {
+        // Corpus 2026-08-09 (d8aa7b17): StopHookSummaryStripRule removed a
+        // stop_hook_summary that the boundary listed as preserved — a zero-signal
+        // record by its own rule's reckoning, but part of the post-boundary context.
+        if (IsBoundaryPreserved)
+            return true;
+
         if (Type is "content-replacement" or "marble-origami-commit"
             or "marble-origami-snapshot" or "worktree-state" or "task-summary")
         {
