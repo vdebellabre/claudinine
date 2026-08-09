@@ -1,7 +1,7 @@
 {
   "name": "claudinine",
   "description": "Silent Claude Code context optimizer: compacts transcripts at re-read boundaries (bash-read dedup, archive retrieval, chain-collapse). Install and forget.",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "author": {
     "name": "vlajoumard"
   },
