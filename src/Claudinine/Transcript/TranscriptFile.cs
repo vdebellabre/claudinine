@@ -13,6 +13,16 @@ internal sealed class TranscriptFile
     /// <summary>On-disk byte length at load time — the swap re-checks it (see TryRewrite).</summary>
     public required long LoadedLength { get; init; }
 
+    /// <summary>
+    /// True when EVERY record carries isSidechain: true — the file is a subagent
+    /// transcript (agent-*.jsonl under the session dir's subagents/), where the
+    /// sidechain IS the conversation, not foreign matter. Corpus check 2026-08-09:
+    /// all 57 on-disk subagent files are 100% sidechain-flagged, while a main
+    /// transcript always contains unflagged records — one unflagged record is
+    /// enough to classify as main, so guards written for main files stay armed.
+    /// </summary>
+    public required bool IsSidechainFile { get; init; }
+
     public static TranscriptFile? TryLoad(string path)
     {
         // Strict decode: the default UTF8 decoder silently swaps invalid bytes for
@@ -60,6 +70,7 @@ internal sealed class TranscriptFile
             Records = records,
             EndsWithNewline = endsWithNewline,
             LoadedLength = loadedLength,
+            IsSidechainFile = records.All(r => r.IsSidechain),
         };
     }
 

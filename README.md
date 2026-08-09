@@ -164,9 +164,11 @@ envelope overhead dilutes the bytes but not the tokens.
 - **UserPromptSubmit** — after each of your prompts, the turn that just
   finished is mirrored to a sidecar file, then compacted in the live transcript.
 - **SessionEnd** — the final turn gets the same treatment, leaving the file
-  clean at rest.
-- **SessionStart / PreCompact** — full-scan repair for crash leftovers, plus
-  garbage collection of mirrors and orphaned session directories.
+  clean at rest. Subagent transcripts (`<session>/subagents/agent-*.jsonl`) are
+  swept here too, each with its own mirror.
+- **SessionStart / PreCompact** — full-scan repair for crash leftovers
+  (including the subagent sweep), plus garbage collection of mirrors and
+  orphaned session directories.
 
 Compaction never touches the live in-memory context of a running session — the
 payout arrives at the next transcript load. Every rewrite is validated before an

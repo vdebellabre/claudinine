@@ -77,6 +77,14 @@ internal sealed class TranscriptRecord
     }
 
     /// <summary>
+    /// True when the record belongs to a sidechain (subagent) conversation. In a
+    /// MAIN transcript such records are foreign matter spliced into the chain; in
+    /// a subagent file (<see cref="TranscriptFile.IsSidechainFile"/>) they are the
+    /// conversation itself — guards must read both together.
+    /// </summary>
+    public bool IsSidechain => IsTruthy(Node["isSidechain"]);
+
+    /// <summary>
     /// A real user turn: message.content is a plain string (tool-result carriers
     /// use a list). DELIBERATELY narrower than RuleHelpers.IsUserPrompt (the age
     /// clock): an image-share user message ticks the clock but must not act as a

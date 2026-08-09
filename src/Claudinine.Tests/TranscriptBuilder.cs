@@ -1,7 +1,13 @@
 namespace Claudinine.Tests;
 
-/// <summary>Builds synthetic transcript JSONL shaped like the app's records.</summary>
-internal sealed class TranscriptBuilder
+/// <summary>
+/// Builds synthetic transcript JSONL shaped like the app's records.
+/// With <paramref name="sidechain"/> the chained records are shaped like a
+/// subagent transcript (isSidechain: true + agentId on every record) — don't mix
+/// in the attachment emitters' explicit main-chain flags or the uuid-less
+/// metadata emitters, which would declassify the file.
+/// </summary>
+internal sealed class TranscriptBuilder(bool sidechain = false)
 {
     private readonly List<string> _lines = [];
     private string? _lastUuid;
@@ -414,6 +420,11 @@ internal sealed class TranscriptBuilder
             ["sessionId"] = "test-session",
             ["message"] = message,
         };
+        if (sidechain)
+        {
+            record["isSidechain"] = true;
+            record["agentId"] = "abc123def456abc12";
+        }
         if (sourceToolAssistantUuid is not null)
             record["sourceToolAssistantUUID"] = sourceToolAssistantUuid;
         if (toolUseResult is not null)

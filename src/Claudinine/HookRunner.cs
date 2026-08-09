@@ -32,6 +32,15 @@ internal static class HookRunner
                 case "UserPromptSubmit" or "SessionEnd" or "PreCompact" or "SessionStart":
                     if (skipped) Compactor.MirrorOnly(input.TranscriptPath);
                     else Compactor.Run(input.TranscriptPath);
+                    if (input.HookEventName is "SessionEnd" or "SessionStart")
+                    {
+                        // Subagent transcripts get no hook events of their own, so
+                        // they ride the session's boundary events — off the
+                        // per-prompt critical path (a first pass over a large
+                        // subagents/ dir mirrors tens of MB). SessionEnd leaves
+                        // them clean at rest, SessionStart repairs after a crash.
+                        CompactSubagents(input.TranscriptPath, skipped);
+                    }
                     if (input.HookEventName == "SessionStart")
                     {
                         // Housekeeping rides the once-per-session event, off the
@@ -47,6 +56,50 @@ internal static class HookRunner
         catch
         {
             return 0;
+        }
+    }
+
+    /// <summary>
+    /// Run the same idempotent pass over every subagent transcript of this
+    /// session (&lt;session-uuid&gt;/subagents/agent-*.jsonl). Each agent file gets
+    /// its own stem-keyed mirror, so retrieval, restore, skip markers and mirror
+    /// GC all work unchanged. A frozen session freezes its subagents too; an
+    /// individually restored agent file carries its own skip marker. Per-file
+    /// fail-closed: one unreadable file must not stop the sweep.
+    /// </summary>
+    private static void CompactSubagents(string transcriptPath, bool sessionSkipped)
+    {
+        try
+        {
+            string dir = Path.Combine(
+                Path.GetDirectoryName(transcriptPath)!,
+                Path.GetFileNameWithoutExtension(transcriptPath),
+                "subagents");
+            if (!Directory.Exists(dir))
+                return;
+            foreach (string file in Directory.EnumerateFiles(dir, "agent-*.jsonl"))
+            {
+                try
+                {
+                    if (sessionSkipped
+                        || SkipMarkers.IsCompactionSkipped(Path.GetFileNameWithoutExtension(file)))
+                    {
+                        Compactor.MirrorOnly(file);
+                    }
+                    else
+                    {
+                        Compactor.Run(file);
+                    }
+                }
+                catch
+                {
+                    // next agent file
+                }
+            }
+        }
+        catch
+        {
+            // no subagents dir we can read: nothing to sweep
         }
     }
 }

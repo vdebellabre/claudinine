@@ -27,8 +27,11 @@ pointer in the transcript.
 
 Two locations, both belonging to this plugin or the session it is compacting:
 
-1. **The session transcript**, rewritten in place (details below).
-2. **A per-session mirror**, `<CLAUDE_PLUGIN_DATA>/mirrors/<session-id>.jsonl`.
+1. **The session transcript**, rewritten in place (details below). Subagent
+   transcripts (`<session>/subagents/agent-*.jsonl`) get the same treatment,
+   swept at SessionEnd and SessionStart.
+2. **A per-session mirror**, `<CLAUDE_PLUGIN_DATA>/mirrors/<session-id>.jsonl`
+   (for a subagent transcript, `mirrors/agent-<id>.jsonl`).
    `CLAUDE_PLUGIN_DATA` is the documented writable per-plugin directory; if it is
    unset the fallback is `~/.claudinine/mirrors`. The mirror is append-only and
    holds the uncompacted content — it is what the transcript would have been.
@@ -126,8 +129,8 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet test Claudinine.Tests` — 238 tests, covering each rule, the
-  validation gate, and the rechaining logic.
+- `cd src && dotnet run --project Claudinine.Tests` — 248 tests, covering each
+  rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.
 - The rewrite is idempotent: run the hook twice over a transcript copy and the

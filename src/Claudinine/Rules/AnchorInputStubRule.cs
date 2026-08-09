@@ -30,6 +30,10 @@ internal sealed class AnchorInputStubRule : ICompactionRule
     public void Apply(TranscriptFile transcript)
     {
         var records = transcript.Records;
+        // File stem = mirror key (session id for main files, agent-<id> for
+        // subagent files); a subagent record's own sessionId names the PARENT
+        // session, whose mirror never holds this record.
+        string sid = Path.GetFileNameWithoutExtension(transcript.Path);
 
         // tool_use id -> index of the assistant record carrying it.
         var useIndexById = new Dictionary<string, int>();
@@ -66,12 +70,12 @@ internal sealed class AnchorInputStubRule : ICompactionRule
                     continue;
                 }
 
-                StubAnchorInput(records[useIdx], useId);
+                StubAnchorInput(records[useIdx], useId, sid);
             }
         }
     }
 
-    private void StubAnchorInput(TranscriptRecord useRec, string useId)
+    private void StubAnchorInput(TranscriptRecord useRec, string useId, string sid)
     {
         var node = RuleHelpers.CurrentNode(useRec);
         var use = RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
@@ -85,9 +89,6 @@ internal sealed class AnchorInputStubRule : ICompactionRule
             return;
         if (useRec.Uuid is null)
             return; // retrieval addressing needs the uuid
-        string? sid = node["sessionId"].GetString();
-        if (sid is null)
-            return;
 
         string preview = RuleHelpers.PrimaryArg(use);
         var clone = (JsonObject)node.DeepClone();

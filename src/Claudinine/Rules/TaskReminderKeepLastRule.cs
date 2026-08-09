@@ -42,5 +42,5 @@ internal sealed class TaskReminderKeepLastRule : ICompactionRule
         && rec.Node["attachment"] is JsonObject att
         && att["type"] is JsonValue v && v.TryGetValue(out string? t)
         && t == "task_reminder"
-        && !(rec.Node["isSidechain"] is JsonValue sc && sc.TryGetValue(out bool b) && b);
+        && !rec.IsSidechain;
 }

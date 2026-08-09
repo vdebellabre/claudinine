@@ -18,7 +18,14 @@ namespace Claudinine.Rules;
 ///
 /// Fail-closed: any shape this rule does not fully understand (legacy multi-use
 /// records, a new use while a batch is partially answered, orphan results,
-/// protected or sidechain records inside the span) skips the whole turn.
+/// protected records — or sidechain records inside a MAIN transcript's span)
+/// skips the whole turn. In a subagent file (every record isSidechain: true,
+/// see TranscriptFile.IsSidechainFile) the sidechain guard is off: the
+/// sidechain IS the conversation there, and these files are exactly the
+/// dense-span shape this rule is strongest on. Digest headers address
+/// retrieval by the FILE STEM (= mirror key: session id for main files,
+/// agent-&lt;id&gt; for subagent files) — a subagent record's sessionId names its
+/// PARENT session, whose mirror never holds these records.
 /// </summary>
 internal sealed class ChainCollapseRule : ICompactionRule
 {
@@ -62,15 +69,17 @@ internal sealed class ChainCollapseRule : ICompactionRule
             int end = b + 1 < bounds.Count ? bounds[b + 1] : records.Count;
             if (end <= start)
                 continue;
-            CollapseTurn(records, start, end);
+            CollapseTurn(transcript, start, end);
         }
     }
 
     private sealed record Call(int UseIndex, int ResultIndex, string ToolUseId,
         string Tool, string Arg, string ResultText, bool IsError, string Media);
 
-    private void CollapseTurn(List<TranscriptRecord> records, int start, int end)
+    private void CollapseTurn(TranscriptFile transcript, int start, int end)
     {
+        var records = transcript.Records;
+
         // Pass 1: enumerate the turn's calls; anything unexpected aborts the turn.
         // A parallel batch shows up as consecutive uses accumulating in `pending`,
         // drained by results in any order; a new use before the batch is fully
@@ -84,8 +93,8 @@ internal sealed class ChainCollapseRule : ICompactionRule
             var rec = records[i];
             if (rec.IsProtected())
                 return;
-            if (rec.Node["isSidechain"] is JsonValue sv && sv.TryGetValue(out bool sc) && sc)
-                return;
+            if (rec.IsSidechain && !transcript.IsSidechainFile)
+                return; // sidechain material spliced into a MAIN transcript's turn
             var node = RuleHelpers.CurrentNode(rec);
             string? type = rec.Type;
 
@@ -158,10 +167,13 @@ internal sealed class ChainCollapseRule : ICompactionRule
         var resultIndexes = calls.Select(c => c.ResultIndex).ToHashSet();
         var callByResult = calls.ToDictionary(c => c.ResultIndex);
 
-        // Pass 2: build the digest in reading order and decide removals.
-        string? sessionId = records[spanStart].Node["sessionId"].GetString();
+        // Pass 2: build the digest in reading order and decide removals. The
+        // retrieval id is the FILE STEM, not the records' sessionId: the two are
+        // equal for main transcripts, but a subagent record's sessionId names the
+        // PARENT session while its mirror is keyed by the agent file stem.
+        string sid = Path.GetFileNameWithoutExtension(transcript.Path);
         var digest = new StringBuilder();
-        digest.Append(Header(calls.Count, sessionId));
+        digest.Append(Header(calls.Count, sid));
         var toRemove = new List<TranscriptRecord>();
 
         for (int i = spanStart; i <= spanEnd; i++)
@@ -217,9 +229,8 @@ internal sealed class ChainCollapseRule : ICompactionRule
         RuleHelpers.SetReplacement(anchorResult, clone, Name);
     }
 
-    private static string Header(int callCount, string? sessionId)
+    private static string Header(int callCount, string sid)
     {
-        string sid = sessionId ?? "<session-id>";
         return
             CarrierPrefix + $"{callCount} separate tool calls. " +
             "Full outputs live in the session mirror; each [ref] line is one real call, " +
