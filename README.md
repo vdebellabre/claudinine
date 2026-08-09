@@ -26,10 +26,10 @@ in the way anymore. Your next session starts lean.
 - **Nothing is thrown away.** Full outputs are kept in a side file, and you can
   pull any of them back or undo the whole thing (see [Getting your details back](#getting-your-details-back)).
 
-The bigger the session, the more it helps. Across 95 real sessions, transcripts
-shrank from **152.6 MB to 35.8 MB (77%)**. Short, conversation-heavy sessions
-shrink around 43%; sessions over 3 MB — the ones that were actually hurting —
-shrink around 79%.
+The bigger the session, the more it helps. Across 76 real sessions, transcripts
+shrank from **144.6 MB to 31.7 MB**, cutting **81% of the tokens**. Small,
+conversation-heavy sessions shrink around 41%; sessions over 1 MB — the ones
+that were actually hurting — shrink around 82%.
 
 ## Comparison with Cozempic
 
@@ -83,25 +83,33 @@ practical difference shows up:
 
 ### Measured side by side
 
-Both tools were run over the same corpus of 77 real sessions (130 MB of
-transcripts), each on its own copy so neither saw the other's output — every
-one a transcript neither tool had ever touched, so both start from the same
-untouched baseline. Cozempic ran its strongest prescription
-(`treat -rx aggressive`). Token counts are BPE counts over the message payload
-— text, thinking, tool inputs and tool results — so the JSON envelope is
-excluded and both tools are measured with the same ruler.
+Both tools were run over the same corpus of 76 real sessions (145 MB of
+transcripts, including the 43 subagent transcripts belonging to 18 of them),
+each on its own copy so neither saw the other's output — every one a transcript
+neither tool had ever touched, so both start from the same untouched baseline.
+Cozempic ran its strongest prescription (`treat -rx aggressive`). Token counts
+are BPE counts over the message payload — text, thinking, tool inputs and tool
+results — so the JSON envelope is excluded and both tools are measured with the
+same ruler.
 
 | | baseline | Claudinine | Cozempic |
 |---|---|---|---|
-| **All sessions** (n=77) | 130.3 MB / 19.22 M tok | 28.6 MB (78.1%) / **4.24 M tok (77.9%)** | 64.0 MB (50.8%) / 7.14 M tok (62.9%) |
-| **Over 1 MB** (n=36) | 113.3 MB / 16.62 M tok | 22.6 MB (80.0%) / **3.49 M tok (79.0%)** | 55.4 MB (51.1%) / 6.06 M tok (63.6%) |
-| **100 KB – 1 MB** (n=33) | 16.6 MB / 2.58 M tok | 5.7 MB (65.9%) / **0.73 M tok (71.6%)** | 8.4 MB (49.6%) / 1.07 M tok (58.7%) |
-| **Under 100 KB** (n=8) | 0.4 MB / 0.02 M tok | 22.3% / **41.2%** | 18.6% / 22.1% |
+| **All sessions** (n=76) | 144.6 MB / 24.49 M tok | 31.7 MB (78.1%) / **4.65 M tok (81.0%)** | 72.6 MB (49.8%) / 11.43 M tok (53.3%) |
+| **Over 1 MB** (n=40) | 130.5 MB / 22.30 M tok | 27.2 MB (79.1%) / **4.09 M tok (81.7%)** | 65.4 MB (49.9%) / 10.60 M tok (52.5%) |
+| **100 KB – 1 MB** (n=27) | 13.7 MB / 2.16 M tok | 4.2 MB (69.4%) / **0.54 M tok (74.8%)** | 6.8 MB (50.3%) / 0.81 M tok (62.5%) |
+| **Under 100 KB** (n=9) | 0.5 MB / 0.03 M tok | 26.6% / **41.0%** | 21.3% / 30.8% |
 
-Claudinine saves more tokens on 67 of the 77 sessions, and the gap widens with
-size: on sessions over 1 MB it wins 34 of 36. It is also about 15× faster over
-the corpus (10s against 151s), which is what a native binary buys over a Python
+Claudinine saves more tokens on 61 of the 76 sessions, and the gap widens with
+size: on sessions over 1 MB it wins 37 of 40. It is also about 20× faster over
+the corpus (7s against 143s), which is what a native binary buys over a Python
 process spawned per session.
+
+Subagent transcripts compact especially well, since a subagent run is one long
+uninterrupted chain of tool calls — exactly the shape chain-collapse is built
+for. Across the 18 sessions that have them, Claudinine saves 79.1% of tokens
+against Cozempic's 51.7%, winning 17 of the 18. Claudinine finds those files
+itself from the session directory; Cozempic has no session-directory concept,
+so it was pointed at each one explicitly.
 
 Cozempic does things Claudinine deliberately does not: live token monitoring,
 agent-team protection across compaction, and interactive diagnosis. If you want
