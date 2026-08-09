@@ -179,10 +179,46 @@ internal sealed class TranscriptBuilder(bool sidechain = false)
     }
 
     /// <summary>
+    /// MCP-style tool call: the result's content is an ARRAY of text blocks (the
+    /// wire shape every MCP server returns), unlike built-in tools' plain string.
+    /// </summary>
+    public TranscriptBuilder McpToolCall(string toolName, out string toolUseId, params string[] texts)
+    {
+        toolUseId = $"toolu_{_seq + 1:D4}";
+        Add("assistant", new JsonObject
+        {
+            ["role"] = "assistant",
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "tool_use",
+                ["id"] = toolUseId,
+                ["name"] = toolName,
+                ["input"] = new JsonObject { ["query"] = "status" },
+            }),
+        });
+        Add("user", new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "tool_result",
+                ["tool_use_id"] = toolUseId,
+                ["content"] = new JsonArray([.. texts.Select(t => (JsonNode)new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = t,
+                })]),
+            }),
+        });
+        return this;
+    }
+
+    /// <summary>
     /// A tool call whose result carries a base64 screenshot nested in its content
     /// array, as browser/computer tools return them.
     /// </summary>
-    public TranscriptBuilder ScreenshotToolCall(out string toolUseId, byte[]? data = null)
+    public TranscriptBuilder ScreenshotToolCall(out string toolUseId, byte[]? data = null,
+        string text = "screenshot taken")
     {
         toolUseId = $"toolu_{_seq + 1:D4}";
         Add("assistant", new JsonObject
@@ -204,7 +240,7 @@ internal sealed class TranscriptBuilder(bool sidechain = false)
                 ["type"] = "tool_result",
                 ["tool_use_id"] = toolUseId,
                 ["content"] = new JsonArray(
-                    new JsonObject { ["type"] = "text", ["text"] = "screenshot taken" },
+                    new JsonObject { ["type"] = "text", ["text"] = text },
                     new JsonObject
                     {
                         ["type"] = "image",

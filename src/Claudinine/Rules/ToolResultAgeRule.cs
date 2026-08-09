@@ -14,6 +14,10 @@ namespace Claudinine.Rules;
 ///   Old:      replace with a one-line stub naming the tool, its target and the
 ///             original size.
 ///
+/// Applies to both content shapes: the built-in tools' plain string, and the
+/// MCP servers' array of text blocks (each text block ages independently; other
+/// block types are left alone — image-strip owns media).
+///
 /// Originals are always in the mirror first; stubs carry origUuid for retrieval.
 /// </summary>
 internal sealed class ToolResultAgeRule : ICompactionRule
@@ -46,37 +50,65 @@ internal sealed class ToolResultAgeRule : ICompactionRule
                 bi++;
                 if (block is not JsonObject b || b["type"].GetString() != "tool_result")
                     continue;
-                if (b["content"] is not JsonValue cv || !cv.TryGetValue(out string? content))
-                    continue;
-                if (content.Length < MinContentChars || RuleHelpers.IsClaudinineStub(content))
-                    continue;
-                // Never re-TRIM our own trim output (see TrimSentinel). Stubbing
-                // trimmed content when it ages into the old tier is still fine
-                // (and much smaller).
-                bool alreadyTrimmed = content.Contains(RuleHelpers.TrimSentinel, StringComparison.Ordinal);
-                if (!age.IsOld(pos) && alreadyTrimmed)
-                    continue;
 
-                // Persisted-output stubs point at a sidecar file that nothing ever
-                // collects; the path must survive any rewrite (see PersistedOutputPath).
-                // Stubbing carries it explicitly; trimming can't guarantee the path
-                // line lands inside a kept half, so leave those blocks alone.
-                string? persisted = RuleHelpers.PersistedOutputPath(content);
-                if (persisted is not null && !age.IsOld(pos))
-                    continue;
+                if (b["content"] is JsonValue cv && cv.TryGetValue(out string? content))
+                {
+                    if (Rewrite(content, age.IsOld(pos), b, records, pos) is string newContent)
+                        RuleHelpers.CloneBlockAt(ref clone, node, bi)["content"] = newContent;
+                }
+                else if (b["content"] is JsonArray parts)
+                {
+                    // MCP array shape: each text block is an independent payload.
+                    for (int ti = 0; ti < parts.Count; ti++)
+                    {
+                        if (parts[ti] is not JsonObject ib
+                            || ib["type"].GetString() != "text"
+                            || ib["text"].GetString() is not string text)
+                        {
+                            continue;
+                        }
 
-                string newContent = age.IsOld(pos)
-                    ? BuildStub(b, content, records, pos, persisted)
-                    : TrimOversized(Minify(content));
-                if (newContent == content || newContent.Length >= content.Length)
-                    continue;
-
-                RuleHelpers.CloneBlockAt(ref clone, node, bi)["content"] = newContent;
+                        if (Rewrite(text, age.IsOld(pos), b, records, pos) is not string newText)
+                            continue;
+                        var resultClone = RuleHelpers.CloneBlockAt(ref clone, node, bi);
+                        ((JsonObject)((JsonArray)resultClone["content"]!)[ti]!)["text"] = newText;
+                    }
+                }
             }
 
             if (clone is not null)
                 RuleHelpers.SetReplacement(rec, clone, Name);
         }
+    }
+
+    /// <summary>
+    /// The tiered decision for one text payload, shared by both content shapes:
+    /// null to keep as-is, else the replacement (old → stub, mid → minify + trim).
+    /// </summary>
+    private static string? Rewrite(string content, bool old, JsonObject block,
+        List<TranscriptRecord> records, int pos)
+    {
+        if (content.Length < MinContentChars || RuleHelpers.IsClaudinineStub(content))
+            return null;
+        // Never re-TRIM our own trim output (see TrimSentinel). Stubbing trimmed
+        // content when it ages into the old tier is still fine (and much smaller).
+        if (!old && content.Contains(RuleHelpers.TrimSentinel, StringComparison.Ordinal))
+            return null;
+
+        // Persisted-output stubs point at a sidecar file that nothing ever
+        // collects; the path must survive any rewrite (see PersistedOutputPath).
+        // Stubbing carries it explicitly; trimming can't guarantee the path
+        // line lands inside a kept half, so leave those blocks alone.
+        string? persisted = RuleHelpers.PersistedOutputPath(content);
+        if (persisted is not null && !old)
+            return null;
+
+        string newContent = old
+            ? BuildStub(block, content, records, pos, persisted)
+            : TrimOversized(Minify(content));
+        return newContent == content || newContent.Length >= content.Length
+            ? null
+            : newContent;
     }
 
     /// <summary>Mid-age: JSON minification (only if it meaningfully shrinks), then diff collapse.</summary>

@@ -168,6 +168,71 @@ public sealed class NoiseRulesTests : IDisposable
         await Assert.That(stub).Contains("batch0.txt");
     }
 
+    /// <summary>Inner texts of an array-content tool_result, in block order.</summary>
+    private static string[] ArrayTexts(string transcriptPath, string toolUseId) => Load(transcriptPath)
+        .Select(r => (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>()
+            .FirstOrDefault(x => x["tool_use_id"]?.GetValue<string>() == toolUseId))
+        .FirstOrDefault(x => x is not null)?["content"] is JsonArray parts
+            ? [.. parts.OfType<JsonObject>().Select(p => p["text"]?.GetValue<string>() ?? "")]
+            : [];
+
+    [Test]
+    public async Task McpArrayContentAgesLikeStringContent()
+    {
+        // MCP results carry a content ARRAY of text blocks; the pre-fix rule only
+        // matched string content, so these escaped every tier (corpus: 332 blocks,
+        // ~449K chars). Each big text block must age like a string payload; blocks
+        // under the size floor stay verbatim.
+        string Output(string tag) => string.Join("\n",
+            Enumerable.Range(1, 300).Select(i => $"{tag} line {i} " + new string('x', 40)));
+        var b = new TranscriptBuilder().UserPrompt("start");
+        b.McpToolCall("mcp__grafana__query", out string oldId,
+            Output("old"), "old meta " + new string('m', 200), "tiny meta");
+        AgeBy(b, AgeIndex.MidAgeTurns + 5);
+        b.McpToolCall("mcp__grafana__query", out string midId, Output("mid"));
+        AgeBy(b, AgeIndex.OldAgeTurns - AgeIndex.MidAgeTurns);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string[] oldTexts = ArrayTexts(path, oldId);
+        await Assert.That(oldTexts[0]).StartsWith("[claudinine");           // old tier: stub
+        await Assert.That(oldTexts[0]).Contains("mcp__grafana__query");     // named from the tool_use
+        await Assert.That(oldTexts[1]).StartsWith("[claudinine");           // every big block stubs
+        await Assert.That(oldTexts[2]).IsEqualTo("tiny meta");              // under MinContentChars: verbatim
+
+        string[] midTexts = ArrayTexts(path, midId);
+        await Assert.That(midTexts[0]).Contains("lines trimmed by claudinine"); // mid tier: head/tail trim
+        await Assert.That(midTexts[0]).StartsWith("mid line 1 ");
+
+        // Idempotence: a second full pass over own output changes nothing.
+        string after = AllText(path);
+        Compactor.Run(path);
+        await Assert.That(AllText(path)).IsEqualTo(after);
+    }
+
+    [Test]
+    public async Task OldMixedMediaResultComposesWithImageStrip()
+    {
+        // Age rule and image-strip rewrite the SAME record in one pass (the second
+        // rule must clone the first's replacement, not the original): the big text
+        // block gets the age stub, the image gets the retrieval stub.
+        string bigText = string.Join("\n", Enumerable.Range(1, 200).Select(i => $"page line {i}"));
+        var b = new TranscriptBuilder().UserPrompt("look");
+        b.ScreenshotToolCall(out string id, data: new byte[4096], text: bigText);
+        AgeBy(b, AgeIndex.OldAgeTurns + 5);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string[] texts = ArrayTexts(path, id);
+        await Assert.That(texts[0]).StartsWith("[claudinine");
+        await Assert.That(texts[0]).Contains("computer");
+        await Assert.That(texts[1]).Contains("--media"); // image-strip's retrieval stub survived
+    }
+
     [Test]
     public async Task RecentToolResultsUntouched()
     {
