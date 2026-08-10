@@ -15,7 +15,7 @@ Claudinine trims the bulk as you go. It keeps a short summary of what happened
 and moves the full details to a side file, so nothing is lost — it is just not
 in the way anymore. Your next session starts lean.
 
-## Why you might want this
+## Why use Claudinine
 
 - **Your long sessions stay usable.** Less filler in the transcript means more
   room for the actual conversation before Claude has to compact.
@@ -30,6 +30,64 @@ The bigger the session, the more it helps. Across 76 real sessions, transcripts
 shrank from **144.6 MB to 31.7 MB**, cutting **81% of the tokens**. Small,
 conversation-heavy sessions shrink around 41%; sessions over 1 MB — the ones
 that were actually hurting — shrink around 82%.
+
+## One thing to expect
+
+Your scrollback and the transcript are the same file, so after you resume a
+session, older tool outputs show up as short stubs instead of their full text.
+That is the compaction in effect — the originals are still on disk.
+
+## Install
+
+Add the marketplace, then install the plugin:
+
+```bash
+/plugin marketplace add vdebellabre/claudinine
+```
+
+```bash
+/plugin install claudinine
+```
+
+That is the whole setup. Claudinine runs silently from then on.
+
+Requires Claude Code 2.1.224 or later. Compatible with Claude Desktop and Claude CLI.
+Published for x64/arm64 on Windows, macOS and Linux.
+
+### Staying up to date
+
+Third-party marketplaces do not auto-update by default, so new versions will not
+arrive on their own. In the CLI, turn it on once with `/plugin` → **Marketplaces**
+→ `claudinine` → **Enable auto-update**. The desktop app has no equivalent toggle
+— its plugin pane only offers a manual **Update** button — so set it by hand in
+`~/.claude/settings.json`:
+
+```json
+"extraKnownMarketplaces": {
+  "claudinine": {
+    "source": { "source": "github", "repo": "vdebellabre/claudinine" },
+    "autoUpdate": true
+  }
+}
+```
+
+Both apps read the same file, so doing it either way covers both. Updates are
+fetched in the background shortly after a session starts and load on the next
+launch, never mid-session.
+
+### Getting your details back
+
+You can undo compaction for a session entirely, while it is closed. The transcript is
+rebuilt verbatim from the mirror, and Claudinine can leave that session alone from
+then on:
+
+```bash
+claudinine restore-compaction-off <session-id>
+```
+
+Use `restore-compaction-on` instead to restore then let compaction resume.
+
+---
 
 ## Comparison with Cozempic
 
@@ -115,41 +173,6 @@ Cozempic does things Claudinine deliberately does not: live token monitoring,
 agent-team protection across compaction, and interactive diagnosis. If you want
 a tool you drive, look there. Claudinine is for people who want the transcript
 to stay small and never think about it again.
-
-## Install
-
-Add the marketplace, then install the plugin:
-
-```bash
-/plugin marketplace add vdebellabre/claudinine
-```
-
-```bash
-/plugin install claudinine
-```
-
-That is the whole setup. Claudinine runs silently from then on.
-
-Requires Claude Code 2.1.224 or later. Compatible with Claude Desktop and Claude CLI.
-Published for x64/arm64 on Windows, macOS and Linux.
-
-## One thing to expect
-
-Your scrollback and the transcript are the same file, so after you resume a
-session, older tool outputs show up as short stubs instead of their full text.
-That is the compaction you asked for — the originals are still on disk.
-
-### Getting your details back
-
-You can undo compaction for a session entirely, while it is closed. The transcript is
-rebuilt verbatim from the mirror, and Claudinine can leave that session alone from
-then on:
-
-```bash
-claudinine restore-compaction-off <session-id>
-```
-
-Use `restore-compaction-on` instead to restore then let compaction resume.
 
 ---
 
