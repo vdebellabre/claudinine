@@ -37,6 +37,39 @@ internal sealed class HookInput
     public string? Trigger { get; set; }
 }
 
+/// <summary>
+/// What Claude Code sends on stdin to a `statusLine` command. A different
+/// envelope from <see cref="HookInput"/>, and the only one carrying live context
+/// usage — hooks never see token counts. Fields we do not use are omitted;
+/// unknown ones are ignored by design, as with every input we parse.
+/// </summary>
+internal sealed class StatuslineInput
+{
+    [JsonPropertyName("session_id")]
+    public string? SessionId { get; set; }
+
+    [JsonPropertyName("transcript_path")]
+    public string? TranscriptPath { get; set; }
+
+    [JsonPropertyName("context_window")]
+    public ContextWindow? ContextWindow { get; set; }
+}
+
+/// <summary>
+/// Live context usage, from the most recent API response — the number no hook
+/// can observe. Absent before the first response of a session.
+/// </summary>
+internal sealed class ContextWindow
+{
+    /// <summary>Tokens currently in the window; includes cache reads and writes.</summary>
+    [JsonPropertyName("total_input_tokens")]
+    public int? TotalInputTokens { get; set; }
+
+    [JsonPropertyName("used_percentage")]
+    public double? UsedPercentage { get; set; }
+}
+
 [JsonSourceGenerationOptions(ReadCommentHandling = System.Text.Json.JsonCommentHandling.Skip)]
 [JsonSerializable(typeof(HookInput))]
+[JsonSerializable(typeof(StatuslineInput))]
 internal sealed partial class ClaudinineJsonContext : JsonSerializerContext;

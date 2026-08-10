@@ -3,6 +3,7 @@ using Claudinine;
 return args switch
 {
     ["hook", ..] => HookRunner.Run(Console.OpenStandardInput()),
+    ["statusline", ..] => StatuslineVerb.Run(Console.OpenStandardInput()),
     ["get", .. var getArgs] => GetVerb.Run(getArgs),
     ["clone", .. var cloneArgs] => CloneVerb.Run(cloneArgs),
     ["restore-compaction-on", .. var onArgs] => RestoreVerb.Run(onArgs, compactionOn: true),
@@ -24,7 +25,7 @@ namespace Claudinine
         public static int Usage()
         {
             Console.Error.WriteLine(
-                "usage: claudinine <hook|get|clone|restore-compaction-on|restore-compaction-off|version>");
+                "usage: claudinine <hook|statusline|get|clone|restore-compaction-on|restore-compaction-off|version>");
             return 1;
         }
     }
