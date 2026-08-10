@@ -12,7 +12,19 @@ internal static class HookRunner
         try
         {
             var input = JsonSerializer.Deserialize(stdin, ClaudinineJsonContext.Default.HookInput);
-            if (input?.TranscriptPath is null || !File.Exists(input.TranscriptPath))
+            if (input?.TranscriptPath is null)
+                return 0;
+
+            // The app seeds its context buffer from the transcript BEFORE
+            // SessionStart hooks run, so the file as it stands right now IS what
+            // this session holds. Stamp it before the repair pass below mutates
+            // anything — the statusline prices a reload against this watermark.
+            // Deliberately ahead of the exists-guard: a brand-new session has no
+            // transcript yet and must stamp as "loaded nothing".
+            if (input.HookEventName == "SessionStart")
+                LoadStamp.Write(input.TranscriptPath);
+
+            if (!File.Exists(input.TranscriptPath))
                 return 0;
 
             // A session frozen by `restore-compaction-off` keeps its mirror

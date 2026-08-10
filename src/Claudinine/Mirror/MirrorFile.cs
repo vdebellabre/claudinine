@@ -180,7 +180,8 @@ internal static class MirrorFile
     }
 
     /// <summary>
-    /// Delete mirrors (and skip markers, via <see cref="SkipMarkers.CollectGarbage"/>)
+    /// Delete mirrors (and skip markers and load stamps, via
+    /// <see cref="SkipMarkers.CollectGarbage"/> / <see cref="LoadStamp.CollectGarbage"/>)
     /// whose transcript no longer exists — the app ages transcripts out itself.
     /// Run at SessionStart; failures are ignored file by file. Sweeps every known
     /// mirror dir, not just this context's write dir: skip markers fan out to all
@@ -197,6 +198,7 @@ internal static class MirrorFile
         {
             CollectGarbage(dir);
             SkipMarkers.CollectGarbage(dir);
+            LoadStamp.CollectGarbage(dir);
         }
     }
 

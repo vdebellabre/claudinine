@@ -113,108 +113,73 @@ internal static class StatuslineVerb
         return reclaimable;
     }
 
-    /// <summary>What compaction has taken out of the live buffer, in bytes.</summary>
-    /// <param name="LiveBytes">What the session loads today (the compacted records).</param>
-    /// <param name="RemovedBytes">What collapsing those records took out.</param>
-    private readonly record struct Measurement(long LiveBytes, long RemovedBytes)
+    /// <summary>What a reload would take out of the live buffer, in bytes.</summary>
+    /// <param name="LiveBytes">What a reload would load (the transcript's records today).</param>
+    /// <param name="RemovedBytes">What the buffer holds beyond that.</param>
+    internal readonly record struct Measurement(long LiveBytes, long RemovedBytes)
     {
-        /// <summary>What the buffer WOULD hold had we never compacted.</summary>
+        /// <summary>What the buffer holds now (loaded + appended, uncollapsed).</summary>
         public long UncompactedBytes => LiveBytes + RemovedBytes;
     }
 
     /// <summary>
-    /// Bytes compaction removed, measured EXACTLY rather than inferred.
+    /// Bytes a reload would return, measured EXACTLY rather than inferred.
     ///
-    /// An earlier version compared file sizes (mirror vs transcript) and divided.
-    /// That is wrong in both directions and silently so. The mirror also holds
-    /// records the transcript no longer has, and after a `/compact` the app
-    /// truncates the transcript at the boundary while the mirror keeps its own
-    /// shape — so the two totals are not comparable, and the ratio can report a
-    /// large "saving" when almost nothing has been collapsed. Observed on a real
-    /// session: the ratio claimed 77%, the true figure was 0.3%.
+    /// Two earlier versions were wrong in ways users saw. Comparing file sizes
+    /// (mirror vs transcript) and dividing reported 77% on a session whose true
+    /// figure was 0.3% — the two totals are not comparable. Pairing records by
+    /// uuid against the MIRROR fixed that but reported the standing gap, which
+    /// SURVIVES a reload: seconds after resuming, the bar still claimed ~48k
+    /// reclaimable when the true figure was zero, because the buffer had just
+    /// been re-seeded from the compacted file while the mirror kept its fat
+    /// originals forever.
     ///
-    /// Instead, pair each record by uuid. A uuid present in both files whose
-    /// mirror copy is larger is a record we collapsed, and the difference is
-    /// precisely what left the buffer. Records the transcript dropped entirely
+    /// The reference is therefore not the mirror but what the buffer actually
+    /// holds, per record: the load stamp — written at every SessionStart, i.e.
+    /// at the last load/reload — for records that existed then, the mirror
+    /// original for records appended and compacted since, and the record itself
+    /// otherwise. A record's reclaim is buffer size minus its transcript size
+    /// today; records compacted before the last load contribute zero because the
+    /// stamp already saw them small. Records the transcript dropped entirely
     /// (pre-boundary history) are correctly ignored: they are not in the live
     /// buffer either, so reloading would not return them.
     ///
-    /// Null when nothing has been collapsed, or when either file is unreadable.
+    /// Null when nothing is reclaimable, when either file is unreadable, or when
+    /// there is no stamp (session last loaded under a build without the
+    /// watermark) — silence over the misleading standing-gap number.
     /// </summary>
-    private static Measurement? Measure(string transcriptPath)
+    internal static Measurement? Measure(string transcriptPath)
     {
         var transcript = new FileInfo(transcriptPath);
         if (!transcript.Exists || transcript.Length == 0)
             return null;
 
+        Dictionary<string, long>? loaded = LoadStamp.Read(transcriptPath);
+        if (loaded is null)
+            return null;
+
+        // No mirror ⇒ nothing was ever compacted (mirror-first invariant), and
+        // post-load compactions are priced off the mirror's originals.
         string? mirrorPath = FindMirror(transcriptPath);
         if (mirrorPath is null)
             return null;
-
-        Dictionary<string, long> mirrorSizes = RecordSizes(mirrorPath);
-        if (mirrorSizes.Count == 0)
-            return null;
+        var mirrorSizes = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach ((string uuid, long size) in LoadStamp.ScanRecordSizes(mirrorPath))
+            mirrorSizes[uuid] = size;
 
         long live = 0;
         long removed = 0;
-        foreach ((string uuid, long size) in RecordSizesEnumerable(transcriptPath))
+        foreach ((string uuid, long size) in LoadStamp.ScanRecordSizes(transcriptPath))
         {
             live += size;
-            if (mirrorSizes.TryGetValue(uuid, out long original) && original > size)
-                removed += original - size;
+            long buffer = loaded.TryGetValue(uuid, out long atLoad) ? atLoad
+                : mirrorSizes.TryGetValue(uuid, out long original) ? original
+                : size;
+            if (buffer > size)
+                removed += buffer - size;
         }
 
         return live > 0 && removed > 0 ? new Measurement(live, removed) : null;
-    }
-
-    /// <summary>Byte length of every uuid-bearing record in a jsonl file.</summary>
-    private static Dictionary<string, long> RecordSizes(string path)
-    {
-        var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
-        foreach ((string uuid, long size) in RecordSizesEnumerable(path))
-            sizes[uuid] = size;
-        return sizes;
-    }
-
-    /// <summary>
-    /// Streams (uuid, byte-length) per line. Reads line by line rather than
-    /// loading the file: transcripts run to megabytes and this executes once per
-    /// assistant message, inside a 300ms debounce.
-    ///
-    /// The uuid is pulled with a targeted scan rather than a full parse — we need
-    /// one field out of records that carry entire tool outputs, and parsing them
-    /// all would dominate the budget.
-    /// </summary>
-    private static IEnumerable<(string Uuid, long Size)> RecordSizesEnumerable(string path)
-    {
-        foreach (string line in File.ReadLines(path))
-        {
-            if (line.Length == 0)
-                continue;
-            string? uuid = ExtractUuid(line);
-            if (uuid is not null)
-                yield return (uuid, Encoding.UTF8.GetByteCount(line));
-        }
-    }
-
-    /// <summary>
-    /// The value of the top-level "uuid" field, or null if absent.
-    ///
-    /// Deliberately a substring scan, not a JSON parse: these records embed whole
-    /// tool outputs, and the transcript is re-read once per assistant message.
-    /// A false positive would need the literal `"uuid":"` inside archived content
-    /// AND a matching uuid in the other file, which costs an over-count of one
-    /// record rather than a wrong verdict.
-    /// </summary>
-    private static string? ExtractUuid(string line)
-    {
-        const string Key = "\"uuid\":\"";
-        int start = line.IndexOf(Key, StringComparison.Ordinal);
-        if (start < 0)
-            return null;
-        start += Key.Length;
-        int end = line.IndexOf('"', start);
-        return end > start ? line[start..end] : null;
     }
 
     /// <summary>
