@@ -21,15 +21,16 @@ namespace Claudinine;
 internal static class StatuslineVerb
 {
     /// <summary>
-    /// Below this, the reclaim is not worth a line of the user's status bar —
-    /// under ~5% the reload costs more attention than it returns.
+    /// Below this, the reclaim is not worth a line of the user's status bar.
+    ///
+    /// An absolute token count, deliberately not a percentage: what decides
+    /// whether a reload is worth the interruption is how much context comes back,
+    /// and that is a token figure. A percentage answers a different question and
+    /// scales the wrong way — 5% of a small window is a couple of thousand tokens
+    /// (not worth a reload), while a genuinely large reclaim late in a big session
+    /// can sit under 5% and stay hidden precisely when it matters most.
     /// </summary>
-    private const double InterestingPercent = 5.0;
-
-    /// <summary>
-    /// Sub-1k reclaims are noise at status-bar resolution.
-    /// </summary>
-    private const long InterestingTokens = 1000;
+    private const long InterestingTokens = 50_000;
 
     public static int Run(Stream stdin)
     {
@@ -68,17 +69,20 @@ internal static class StatuslineVerb
         if (Measure(input.TranscriptPath!) is not { } m)
             return null;
 
+        // The token figure is the ONLY gate: it is what the threshold is
+        // expressed in, so a reclaim we cannot price in tokens cannot be judged
+        // against it. That means no percent-only fallback — before the first API
+        // response there is no `total_input_tokens` and the bar stays silent,
+        // rather than showing a figure held to a different (weaker) bar.
+        if (ReclaimableTokens(m, input.ContextWindow) is not { } tokens)
+            return null;
+
         // Percent of what the session WOULD load uncompacted — i.e. of the live
         // buffer, since the buffer holds the uncollapsed conversation. Not a
         // percentage of the file on disk: the file is the compacted side.
+        // Decoration only: it gives the token figure a sense of scale.
         double percent = (double)m.RemovedBytes / m.UncompactedBytes * 100.0;
-        if (percent < InterestingPercent)
-            return null;
-
-        long? reclaimable = ReclaimableTokens(m, input.ContextWindow);
-        return reclaimable is { } tokens
-            ? $"claudinine · ~{Humanize(tokens)} reclaimable · {percent:F0}% of context · /exit + resume"
-            : $"claudinine · {percent:F0}% reclaimable · /exit + resume";
+        return $"claudinine · ~{Humanize(tokens)} reclaimable · {percent:F0}% of context · /exit + resume";
     }
 
     /// <summary>
@@ -96,8 +100,9 @@ internal static class StatuslineVerb
     /// buffer. The rate is observed from THIS session rather than assumed, so it
     /// already reflects how this particular conversation tokenizes.
     ///
-    /// Null when there is no usable live measurement: before the first API
-    /// response, or when the result would be noise.
+    /// Null when there is no usable live measurement (before the first API
+    /// response) or when the reclaim is below <see cref="InterestingTokens"/> —
+    /// this is where the status bar's one gate lives.
     /// </summary>
     private static long? ReclaimableTokens(Measurement m, ContextWindow? window)
     {

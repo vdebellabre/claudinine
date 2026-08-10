@@ -169,6 +169,61 @@ public sealed class StatuslineVerbTests : IDisposable
         });
         await Assert.That(line).IsNotNull();
         await Assert.That(line!).Contains("reclaimable");
+        // Above the 50k gate the figure is reported in k-tokens, so the line must
+        // carry a token count — not just a bare percentage.
+        await Assert.That(line!).Contains("k tokens");
+    }
+
+    /// <summary>
+    /// The gate is an absolute token count, so the SAME measured reclaim must
+    /// show or hide purely on how many tokens it prices at. Both cases use one
+    /// transcript and vary only the live window: tokens-per-byte is derived from
+    /// it, so a small window puts the identical byte reclaim under the bar.
+    /// Pins the threshold's units — a percentage gate would report both.
+    /// </summary>
+    [Test]
+    public async Task RenderStaysSilentBelowTokenThreshold()
+    {
+        string stem = NewStem();
+        string path = Path.Combine(_dir, stem + ".jsonl");
+        LoadStamp.Write(path);
+        FatTurns().WriteTo(_dir, stem + ".jsonl");
+        Compactor.Run(path);
+
+        // Sanity: the byte reclaim is a large FRACTION of this buffer, so the old
+        // 5%-of-context gate would have printed a line here.
+        var m = StatuslineVerb.Measure(path);
+        await Assert.That(m.HasValue).IsTrue();
+        double percent = (double)m!.Value.RemovedBytes / m.Value.UncompactedBytes * 100.0;
+        await Assert.That(percent).IsGreaterThan(5.0);
+
+        // ...but priced against a small window it is only a few thousand tokens.
+        string? line = StatuslineVerb.Render(new StatuslineInput
+        {
+            TranscriptPath = path,
+            ContextWindow = new ContextWindow { TotalInputTokens = 10_000 },
+        });
+        await Assert.That(line).IsNull();
+    }
+
+    /// <summary>
+    /// No live window (before the first API response) means no token figure, and
+    /// the token figure is the only gate — so there is nothing to judge and the
+    /// bar says nothing, rather than falling back to a percent-only line held to
+    /// a weaker bar than the user asked for.
+    /// </summary>
+    [Test]
+    public async Task RenderStaysSilentWithoutLiveWindow()
+    {
+        string stem = NewStem();
+        string path = Path.Combine(_dir, stem + ".jsonl");
+        LoadStamp.Write(path);
+        FatTurns().WriteTo(_dir, stem + ".jsonl");
+        Compactor.Run(path);
+
+        await Assert.That(StatuslineVerb.Measure(path).HasValue).IsTrue();
+        string? line = StatuslineVerb.Render(new StatuslineInput { TranscriptPath = path });
+        await Assert.That(line).IsNull();
     }
 
     [Test]
