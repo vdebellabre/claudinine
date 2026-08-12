@@ -21,6 +21,17 @@ on:
         description: 'Override the manifest version before packing. Defaults to the version already in the tree.'
         required: false
         type: string
+      # Validation (push / PR) only needs the matrix to compile and the tests to
+      # pass: the packing half is a zip plus an upload over inputs that a source
+      # change cannot alter, so it is dead weight on every develop push. It still
+      # runs on every release dispatch, which is the gate that matters -- but that
+      # means a regression in pack-plugin.ps1 or eng/shims/ now surfaces at
+      # release time rather than at PR time.
+      pack:
+        description: 'Pack and verify the archive. Release dispatch needs it; validation does not.'
+        required: false
+        default: true
+        type: boolean
     outputs:
       version:
         description: 'Plugin version taken from the manifest at the built ref.'
@@ -99,7 +110,11 @@ jobs:
       # Ship the binary only. `claudinine*` also matched the stripped symbol
       # files (claudinine.dbg / .pdb), which are bigger than the binary and are
       # never committed to bin/<rid>/.
-      - uses: actions/upload-artifact@v7
+      #
+      # These artifacts exist solely to feed the package job, so skip the upload
+      # when nothing will consume them -- this is most of what validation saves.
+      - if: inputs.pack
+        uses: actions/upload-artifact@v7
         with:
           name: claudinine-${{ matrix.rid }}
           path: |
@@ -117,6 +132,7 @@ jobs:
   package:
     name: package
     needs: publish
+    if: inputs.pack
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.pack.outputs.version }}
