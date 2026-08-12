@@ -110,6 +110,14 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: claudinine
 
+      # TEMPORARY: the main ruleset's bypass_actors entry needs this
+      # installation-id, not the app-id -- GitHub's ruleset docs don't say
+      # which one a bypass actor_id means, and app-id got rejected by the
+      # ruleset in practice. Remove this step once the ruleset is confirmed
+      # working with the right id.
+      - name: Debug -- print installation id
+        run: echo "installation-id=${{ steps.app-token.outputs.installation-id }}"
+
       # Points git's credential helper at `gh`, which reads GH_TOKEN -- the
       # documented way to authenticate a plain `git push` with a minted App
       # token (actions/create-github-app-token's own README). Simpler and less
