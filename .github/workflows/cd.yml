@@ -16,17 +16,24 @@ on:
         options: [patch, minor, major]
 
 jobs:
-  # The bump lands as a commit BEFORE the build, because the packed archive
-  # carries the version and build.yml checks out a ref rather than inheriting a
-  # dirty tree. Building the bump commit also means the tag published below
-  # points at a tree that already states the released version.
+  # The bump is committed AND PUSHED before the build, because build.yml runs
+  # actions/checkout, which fetches the ref from the remote -- it cannot see a
+  # commit that exists only in this runner's filesystem. (Holding the commit as
+  # a bundle and passing it between jobs fails with "upload-pack: not our ref".)
+  #
+  # The cost of pushing first: a build or publish failure leaves main carrying a
+  # bumped version with no release behind it. That is recoverable -- re-dispatch,
+  # and the next bump computes from the manifest as it now stands -- and nothing
+  # consumes the manifest version except the packer, while marketplace.json
+  # still points at the last good release.
   #
   # The digest pin is not known yet (it depends on the archive this commit
-  # produces), so it is amended into this same commit by the release job, which
-  # then tags it. Nothing is pushed until the archive exists.
+  # produces), so the release job commits it on top and tags that commit.
   bump:
     name: bump
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.bump.outputs.version }}
       sha: ${{ steps.commit.outputs.sha }}
@@ -40,27 +47,32 @@ jobs:
           $r = ./eng/bump-version.ps1 -Component '${{ inputs.bump }}'
           "version=$($r.Version)" >> $env:GITHUB_OUTPUT
 
-      # Committed locally and left unpushed: the release job amends the digest
-      # pin in, and an unpushed commit keeps a failed run from leaving a bumped
-      # version on main with no release behind it.
-      - name: Commit bump
+      # Refuse before touching main if the target release already exists: the
+      # version was just computed from the dropdown, so a collision means the
+      # invariant broke (a stale tag, or a prior run that tagged but failed to
+      # publish, or two dispatches racing).
+      - name: Refuse to republish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.bump.outputs.version }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::release $tag already exists; refusing to republish." \
+                 "The bump should have produced an unused version -- check for a" \
+                 "stale tag or a concurrent release run."
+            exit 1
+          fi
+
+      - name: Commit and push bump
         id: commit
         run: |
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git add .claude-plugin/plugin.json src/Claudinine/Claudinine.csproj
           git diff --cached --quiet && { echo '::error::bump produced no change'; exit 1; }
-          git commit -m "Release ${{ steps.bump.outputs.version }}"
+          git commit -m "Bump to ${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          git bundle create bump.bundle HEAD
-
-      # The commit exists only in this runner, so hand it to the next jobs as a
-      # bundle rather than pushing it.
-      - uses: actions/upload-artifact@v7
-        with:
-          name: bump-commit
-          path: bump.bundle
-          if-no-files-found: error
 
   # Same build CI runs, against the bumped tree.
   build:
@@ -76,49 +88,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Stand on the pushed bump commit, not on whatever main is now: a push that
+      # landed between the bump and here must not be swept into this release.
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: bump-commit
-          path: bundle
+          ref: ${{ needs.bump.outputs.sha }}
 
       - uses: actions/download-artifact@v8
         with:
           name: claudinine-archive
           path: artifacts
 
-      # Restore the unpushed bump commit and stand on it.
-      - name: Restore bump commit
-        run: |
-          git fetch bundle/bump.bundle HEAD
-          git checkout --detach ${{ needs.bump.outputs.sha }}
-
-      # An existing tag here is not user error -- the version was just computed
-      # from the dropdown, so it cannot name an existing release. It means the
-      # invariant broke (a stale tag, or a prior run that tagged but failed to
-      # publish, or two dispatches racing). Fail loudly rather than overwrite:
-      # silently re-uploading is what let a published asset drift from the
-      # digest pinned in marketplace.json. The zip is not byte-reproducible, so
-      # any re-upload changes the digest.
-      - name: Refuse to republish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="v${{ needs.bump.outputs.version }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "::error::release $tag already exists; refusing to republish." \
-                 "The bump should have produced an unused version -- check for a" \
-                 "stale tag or a concurrent release run."
-            exit 1
-          fi
-
-      # Amend the digest pin into the bump commit, so the tag and main never
-      # disagree about which digest is pinned. Gated on the marketplace already
-      # using an archive source: on a relative-path source there is nothing to
-      # pin.
+      # The pin lands as its own commit on top of the pushed bump. Both commits
+      # are ancestors of the tag pushed below, so the tag and main never disagree
+      # about which digest is pinned. Gated on the marketplace already using an
+      # archive source: on a relative-path source there is nothing to pin.
       - name: Pin archive digest
         shell: pwsh
         run: |
@@ -133,7 +117,7 @@ jobs:
             if (git diff --cached --quiet) {
               Write-Host 'pin already current'
             } else {
-              git commit --amend --no-edit
+              git commit -m "Pin archive $version"
             }
           } else {
             Write-Host 'marketplace on relative-path source; skipping digest pin'
