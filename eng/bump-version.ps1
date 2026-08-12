@@ -44,11 +44,19 @@ if (-not $Repo) {
 # No prior release at all (a brand-new repo) starts at 0.0.0, so a first patch
 # bump produces 0.0.1. gh exits non-zero when there are no releases; that is
 # the one case this treats as "no current version" rather than an error.
-$latestTag = gh release list --repo $Repo --limit 1 --json tagName --jq '.[0].tagName' 2>$null
-if ($LASTEXITCODE -ne 0 -or -not $latestTag) {
+# Wrapped in try/catch, not just an exit-code check: under
+# $ErrorActionPreference = 'Stop', a native command's stderr can surface as a
+# terminating error depending on the PowerShell/runner combination, which an
+# exit-code-only check would miss entirely.
+try {
+    $latestTag = gh release list --repo $Repo --limit 1 --json tagName --jq '.[0].tagName' 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not $latestTag) {
+        $current = '0.0.0'
+    } else {
+        $current = $latestTag -replace '^v', ''
+    }
+} catch {
     $current = '0.0.0'
-} else {
-    $current = $latestTag -replace '^v', ''
 }
 
 if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)$') {

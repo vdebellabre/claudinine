@@ -51,6 +51,11 @@ jobs:
       - name: Compute next version
         id: next
         shell: pwsh
+        env:
+          # bump-version.ps1 calls `gh release list` to find the last released
+          # version now that develop carries none in-tree; that call needs
+          # this token to authenticate at all.
+          GH_TOKEN: ${{ github.token }}
         run: |
           $r = ./eng/bump-version.ps1 -Component '${{ inputs.bump }}' -WhatIf
           "version=$($r.Version)" >> $env:GITHUB_OUTPUT
