@@ -69,6 +69,38 @@ are mirror **bookkeeping** (`MirrorFormat.Line`), not evidence of compaction —
 a `rule`-stamped record means compacted content, and that must never appear in a
 baseline.
 
+## Comparing
+
+```bash
+uv run --with tiktoken python eng/bench/compare.py
+```
+
+Needs the release binary (`pwsh eng/publish-win.ps1` → `publish/win-x64/`) and, for
+the cozempic column, a checkout at `~/source/cozempic-quiet` (`--cozempic` to point
+elsewhere). Writes `bench/results.json` and prints the README table.
+
+Options: `--rx` (cozempic prescription, default `aggressive` — its strongest),
+`--only main|agent`, `--jobs`, `--report-only` (re-print from an existing results
+file without re-running).
+
+Each file is copied twice, once per tool, into separate work dirs so neither tool
+sees the other's output. Both are measured with the same ruler: cl100k_base over
+payload text — text and thinking blocks, tool_result content, tool_use input —
+with the JSON envelope excluded, since that is not what the model is billed for.
+Byte percentages understate the token saving by roughly 3.5x through envelope
+dilution, so the token column is the one that supports a context claim.
+
+Two guards worth knowing about:
+
+- **Idempotence.** Every Claudinine file gets a second pass whose output must be
+  byte-identical. A rewrite that keeps shrinking on re-run is a bug, and would
+  otherwise silently flatter the score.
+- **A harness failure counts as zero saving** rather than dropping the row, so a
+  crash can never be mistaken for a win. Errors are printed above the table.
+
+Wall-clock is reported but is not like-for-like: Claudinine is one native process
+per file, cozempic pays Python startup per file.
+
 ## Manifest
 
 `bench/corpus/manifest.json` records, for every scanned session: its
