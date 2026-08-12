@@ -60,10 +60,15 @@ jobs:
           $r = ./eng/bump-version.ps1 -Component '${{ inputs.bump }}' -WhatIf
           "version=$($r.Version)" >> $env:GITHUB_OUTPUT
 
-      # Refuse early if the target release already exists: the version was just
-      # computed from the dropdown, so a collision means the invariant broke (a
-      # stale tag, or a prior run that tagged but failed to publish, or two
-      # dispatches racing).
+      # Refuse early if the target release OR tag already exists: the version
+      # was just computed from the dropdown, so a collision means the
+      # invariant broke (a stale tag, or a prior run that tagged but failed to
+      # publish, or two dispatches racing). Checking the tag too, not just the
+      # release, matters in practice: a run that fails between `git tag` and
+      # a successful `Publish release` leaves exactly a tag-with-no-release,
+      # which the release-only check cannot see -- confirmed live, twice,
+      # both times reproducing the identical "tag already exists" failure on
+      # the next dispatch of the same version.
       - name: Refuse to republish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,6 +78,13 @@ jobs:
             echo "::error::release $tag already exists; refusing to republish." \
                  "The bump should have produced an unused version -- check for a" \
                  "stale tag or a concurrent release run."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::tag $tag already exists on origin with no matching" \
+                 "release -- likely debris from a run that tagged but failed" \
+                 "before publishing. Delete it (git push origin :refs/tags/$tag)" \
+                 "and re-dispatch, or investigate why it was never cleaned up."
             exit 1
           fi
 
