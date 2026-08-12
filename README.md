@@ -231,21 +231,32 @@ ever shipped and grows ~18 MB per release.
 
 Three workflows. `build.yml` is the shared build — the six-RID matrix, the pack
 and the archive verification — reusable via `workflow_call` and publishing
-nothing. `ci.yml` calls it on every push and PR. `cd.yml` is the only path that
-publishes, and it calls the same build, so a release ships exactly what CI
-validated rather than a second build of it.
+nothing. **Commit validation** (`ci.yml`) calls it on every push and PR.
+**Publish release** (`cd.yml`) is the only path that publishes, and it calls the
+same build, so a release ships exactly what CI validated rather than a second
+build of it.
 
-Releasing is a manual **Run workflow** on `cd`, choosing which component to bump:
-`patch`, `minor` or `major`. It then computes the next version
-(`eng/bump-version.ps1`), commits it, builds *that* commit, amends the refreshed
-digest pin into it, pushes commit and annotated tag together, and creates the
-release from the pushed tag. One `Release <version>` commit carries both the
-version and the pin, and the tag points at it — so the tag and `main` never
-disagree about which digest is pinned. Pull after a release.
+Releasing is a manual **Run workflow** on *Publish release*, choosing which
+component to bump: `patch`, `minor` or `major`. Because the version is *computed*
+from the dropdown rather than supplied, no input can name a version that already
+shipped; a collision therefore means an invariant broke, and the run refuses.
 
-The bump commit is held as a bundle rather than pushed until the archive exists,
-so a failed release leaves `main` untouched instead of advertising a version with
-no asset behind it.
+The order matters. The version is computed without being written
+(`eng/bump-version.ps1 -WhatIf`), then the build writes it into its own checkout
+just before packing (`build.yml`'s `version` input → `eng/set-version.ps1`) — so
+the archive carries its version without anything being committed. Only once the
+archive exists does the release job commit the bump *and* the refreshed digest
+pin as one `Release <version>` commit, push it with an annotated tag, and create
+the release from that pushed tag.
+
+So everything fallible — the six-RID build, the pack, the republish check —
+happens before the first write, and a failure there leaves `main` exactly as it
+was. Only the asset upload sits after the push; if that fails, the commit and tag
+are already correct, so re-running the release job attaches the asset to the
+existing tag without a new version or a new build.
+
+Both the version and the pin live in the tagged commit, so the tag and `main`
+never disagree about which digest is pinned. Pull after a release.
 
 Because the version is *computed* from the dropdown rather than supplied, a
 release run cannot target a version that already shipped; if the tag somehow

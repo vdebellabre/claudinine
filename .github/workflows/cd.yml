@@ -1,4 +1,4 @@
-name: cd
+name: Publish release
 
 # Continuous delivery: the only path that publishes. Manual dispatch, choosing
 # which version component to bump.

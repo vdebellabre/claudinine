@@ -1,4 +1,4 @@
-name: ci
+name: Commit validation
 
 # Continuous integration: build, test and verify the packed archive on every
 # push and PR. Publishes nothing -- releasing is cd.yml, a manual dispatch.
