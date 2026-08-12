@@ -69,6 +69,17 @@ are mirror **bookkeeping** (`MirrorFormat.Line`), not evidence of compaction —
 a `rule`-stamped record means compacted content, and that must never appear in a
 baseline.
 
+**A mirror is not a transcript.** Those bookkeeping lines have to be stripped when
+copying a mirror into the corpus, and not merely for tidiness:
+`TranscriptFile.IsSidechainFile` is true only if EVERY record carries
+`isSidechain: true`, so a single `mirrorOf` header at the top declassifies a
+subagent transcript as a MAIN one — which silently disarms chain-collapse on
+exactly the files it is strongest on. Measured cost of getting this wrong: 6 agent
+baselines scored **0.0%** instead of ~75%, with exit code 0 and no error anywhere.
+`curate.py` strips bookkeeping lines and then asserts that every file under
+`agent/` is still fully sidechain-flagged, aborting rather than shipping a corpus
+that would quietly under-report.
+
 ## Comparing
 
 ```bash

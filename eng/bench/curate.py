@@ -257,6 +257,32 @@ def payload_tokens_estimate(path: Path) -> int:
     return total // 4  # ~4 chars/token
 
 
+def kind_of(src: Path) -> str:
+    """main vs agent, decided by CONTENT not by location.
+
+    Location alone is wrong: a live subagent transcript sits in `<session>/subagents/`,
+    but its mirror sits in the one flat `mirrors/` directory alongside every main
+    session's mirror. Classifying by parent directory therefore mislabels every
+    mirror-sourced subagent file as `main` (measured: 16 of 61), which both corrupts
+    the per-population totals and hides them from the sidechain assertion.
+
+    The product's own discriminator is `TranscriptFile.IsSidechainFile`: a file is a
+    subagent transcript iff EVERY record carries `isSidechain: true`. Use exactly
+    that, so the corpus agrees with what the binary will decide.
+
+    Bookkeeping-only lines are ignored here: they are stripped on the way into the
+    corpus (see write_as_transcript), so they must not influence the verdict.
+    """
+    saw = False
+    for _, rec in iter_records(src):
+        if set(rec.keys()) == {CLN_ENVELOPE_KEY}:
+            continue
+        saw = True
+        if rec.get("isSidechain") is not True:
+            return "main"
+    return "agent" if saw else "main"
+
+
 def write_as_transcript(baseline: Path, dst: Path) -> int:
     """Copy a baseline into the corpus as a plain TRANSCRIPT.
 
@@ -331,7 +357,7 @@ def main() -> int:
     for src in files:
         if src.suffix != ".jsonl" or src.name.endswith(".bak"):
             continue
-        kind = "agent" if src.parent.name == "subagents" else "main"
+        kind = kind_of(src)
         info = classify(src)
         rec = dict(name=src.stem, kind=kind, source=str(src), tool=info["tool"],
                    records=info["records"], app_compacted=info["app_compacted"])
@@ -382,6 +408,11 @@ def main() -> int:
             reasons["unclassified"] += 1
             entries.append(rec)
             continue
+
+        # Classify from the BASELINE actually chosen, not the live file: the two can
+        # disagree (a mirror is the authority on what will be benchmarked), and the
+        # binary will judge the corpus copy, not the source.
+        rec["kind"] = kind = kind_of(baseline)
 
         est = payload_tokens_estimate(baseline)
         rec["payload_tokens_est"] = est
