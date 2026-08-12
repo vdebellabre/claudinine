@@ -3,7 +3,7 @@
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
 		<AssemblyName>claudinine</AssemblyName>
-		<Version>0.1.14</Version>
+		<Version>0.1.15</Version>
 		<!-- No version here on develop: cd.yml writes the real one (see
 		     eng/set-version.ps1) into the runner's checkout just before a
 		     release is built, so `claudinine version` only ever reports a real
