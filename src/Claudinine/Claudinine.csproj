@@ -4,7 +4,7 @@
 		<OutputType>Exe</OutputType>
 		<AssemblyName>claudinine</AssemblyName>
 		<!-- Keep in sync with .claude-plugin/plugin.json -->
-		<Version>0.1.12</Version>
+		<Version>0.1.13</Version>
 		<RootNamespace>Claudinine</RootNamespace>
 
 		<PublishAot>true</PublishAot>
