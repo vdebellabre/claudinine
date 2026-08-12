@@ -43,6 +43,7 @@ import argparse
 import json
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -117,12 +118,21 @@ def measure(path: Path) -> tuple[int, int]:
 
 # ------------------------------------------------------------------- runners
 def run_claudinine(copy: Path, cfg: dict) -> str:
+    """Drive the SessionStart hook against `copy`.
+
+    A subagent transcript is never named by a hook payload: it gets no hook events
+    of its own, and HookRunner.CompactSubagents finds it by walking
+    `<session-dir>/<session-stem>/subagents/agent-*.jsonl` from the MAIN transcript
+    path. So handing an agent file directly as `transcript_path` compacts nothing —
+    it is not where the sweep looks. stage_for_hook() puts agent files in that
+    layout and returns the main path to name; see its docstring.
+    """
     data = copy.parent / "_plugindata"
     data.mkdir(parents=True, exist_ok=True)
     payload = json.dumps({
         "hook_event_name": "SessionStart",
-        "transcript_path": str(copy),
-        "session_id": copy.stem,
+        "transcript_path": str(cfg["hook_path"]),
+        "session_id": Path(cfg["hook_path"]).stem,
         "cwd": str(copy.parent),
     })
     env = dict(os.environ, CLAUDE_PLUGIN_DATA=str(data))
@@ -157,15 +167,55 @@ def run_cozempic(copy: Path, cfg: dict) -> str:
         return f"{type(e).__name__}: {e}"[:200]
 
 
-def strip_siblings(d: Path, keep: Path):
-    """Cozempic writes .bak siblings; they must not count toward its result."""
-    for f in d.iterdir():
-        if f == keep:
-            continue
-        try:
-            shutil.rmtree(f) if f.is_dir() else f.unlink()
-        except Exception:
-            pass
+def stage_for_hook(d: Path, src: Path, kind: str) -> tuple[Path, Path]:
+    """Lay a corpus file out the way the product expects, and say what to name.
+
+    Returns (file_to_measure, path_to_pass_as_transcript_path).
+
+    main:  the copy itself is the session transcript — measure it, name it.
+    agent: HookRunner.CompactSubagents derives the sweep directory from the MAIN
+           transcript path, as `<dir>/<main-stem>/subagents/`. So the agent file is
+           placed there and a stub main transcript is named instead. The stub is
+           deliberately inert (one user record, no tool calls, so no rule fires on
+           it) and is never measured — only the agent file is.
+
+    Getting this wrong is silent: naming an agent file directly as transcript_path
+    exits 0 and changes nothing, which reads as "compacts badly" rather than
+    "was never visited" (measured: 12 agent files reported 0.0%).
+    """
+    if kind == "main":
+        copy = d / src.name
+        shutil.copy2(src, copy)
+        return copy, copy
+
+    main_stem = "benchmain"
+    main_path = d / f"{main_stem}.jsonl"
+    sub = d / main_stem / "subagents"
+    sub.mkdir(parents=True, exist_ok=True)
+    copy = sub / src.name
+    shutil.copy2(src, copy)
+    main_path.write_text(
+        json.dumps({
+            "type": "user",
+            "uuid": "00000000-0000-0000-0000-000000000001",
+            "parentUuid": None,
+            "sessionId": main_stem,
+            "message": {"role": "user", "content": "benchmark stub"},
+        }) + "\n",
+        encoding="utf-8", newline="\n")
+    return copy, main_path
+
+
+def strip_backups(keep: Path):
+    """Cozempic writes .bak siblings next to the file it treats; they must not count
+    toward its result. Only backups are removed — the staging layout around an agent
+    file must survive, and the second (idempotence) pass still needs it."""
+    for f in keep.parent.iterdir():
+        if f != keep and f.is_file() and ".bak" in f.name:
+            try:
+                f.unlink()
+            except Exception:
+                pass
 
 
 # --------------------------------------------------------------------- work
@@ -180,8 +230,15 @@ def one(args) -> dict:
         try:
             shutil.rmtree(d, ignore_errors=True)
             d.mkdir(parents=True, exist_ok=True)
-            copy = d / src.name
-            shutil.copy2(src, copy)
+            # Claudinine is driven through the hook, so an agent file must sit where
+            # the subagent sweep looks. Cozempic takes a path directly, so it needs
+            # no staging.
+            if tool == "cln":
+                copy, hook_path = stage_for_hook(d, src, kind)
+                cfg = {**cfg, "hook_path": hook_path}
+            else:
+                copy = d / src.name
+                shutil.copy2(src, copy)
             t0 = time.time()
             err = runner(copy, cfg)
             el = time.time() - t0
@@ -191,7 +248,7 @@ def one(args) -> dict:
                 first = copy.read_bytes()
                 err = runner(copy, cfg)
                 rec["cln_idempotent"] = (copy.read_bytes() == first)
-            strip_siblings(d, copy)
+            strip_backups(copy)
             b, t = measure(copy)
             rec[f"{tool}_bytes"], rec[f"{tool}_tokens"] = b, t
             rec[f"{tool}_err"], rec[f"{tool}_secs"] = err, round(el, 2)
@@ -245,11 +302,58 @@ def report(results: list[dict], rx: str) -> None:
     band([r for r in results if r["kind"] == "main"], "Main transcripts")
     band([r for r in results if r["kind"] == "agent"], "Subagent transcripts")
 
-    wins = sum(1 for r in results if r["cln_tokens"] <= r["coz_tokens"])
-    print(f"\nper-file token wins: Claudinine {wins} / {len(results)}")
+    # Stratified by TOKEN size, and per-file central tendency.
+    #
+    # Why both: the token-weighted total above answers "across this exact pile of
+    # files, what fraction of all tokens went away", so it is dominated by whichever
+    # files happen to be largest — the top 10 sessions are ~41% of corpus tokens, and
+    # the single largest (11.7%) is saturated at 97.7% vs 95.1%, where no gap is
+    # arithmetically possible. That drags the corpus-wide gap to roughly half the
+    # per-session reality. Session sizes are log-normal, so this is weight
+    # domination, NOT contamination by anomalies: on a linear 1.5xIQR test 22 files
+    # (58% of tokens) look like "outliers", which is only evidence the test is wrong
+    # for the distribution. Trimming is the wrong fix — the low-gap tail IS the
+    # toolUseResult blind spot, i.e. the finding, not noise. Stratifying keeps every
+    # file and still reports what a user should expect on one session.
+    def gap(r):
+        return pct(r["cln_tokens"], r["base_tokens"]) - pct(r["coz_tokens"], r["base_tokens"])
+
+    tok_bands = [("Under 30k tokens", 0, 30_000), ("30k – 100k", 30_000, 100_000),
+                 ("100k – 400k", 100_000, 400_000), ("Over 400k", 400_000, 1 << 62)]
+    print("\n| band | n | baseline | Claudinine | Cozempic | gap |")
+    print("|---|---|---|---|---|---|")
+    band_gaps = []
+    for label, lo, hi in tok_bands:
+        rows = [r for r in results if lo <= r["base_tokens"] < hi]
+        if not rows:
+            continue
+        bt = sum(r["base_tokens"] for r in rows)
+        ct = pct(sum(r["cln_tokens"] for r in rows), bt)
+        zt = pct(sum(r["coz_tokens"] for r in rows), bt)
+        band_gaps.append(ct - zt)
+        print(f"| **{label}** | {len(rows)} | {bt/1e6:.2f} M tok "
+              f"| **{ct:.1f}%** | {zt:.1f}% | +{ct - zt:.1f} |")
+
+    gaps = sorted(gap(r) for r in results)
+    k = int(0.05 * len(gaps))
+    trimmed = gaps[k:len(gaps) - k] or gaps
+    cln_each = sorted(pct(r["cln_tokens"], r["base_tokens"]) for r in results)
+    coz_each = sorted(pct(r["coz_tokens"], r["base_tokens"]) for r in results)
+    print(f"\nstratified (mean of band gaps): +{statistics.mean(band_gaps):.1f}")
+    print(f"median per-file gap:            +{statistics.median(gaps):.1f}")
+    print(f"5%-trimmed mean gap:            +{statistics.mean(trimmed):.1f}")
+    print(f"median per-file: claudinine {statistics.median(cln_each):.1f}%  "
+          f"cozempic {statistics.median(coz_each):.1f}%")
+
+    # Strict: a file both tools leave untouched (single call, below MinCalls) is a
+    # tie, not a win — `<=` counted it as one.
+    wins = sum(1 for r in results if r["cln_tokens"] < r["coz_tokens"])
+    ties = sum(1 for r in results if r["cln_tokens"] == r["coz_tokens"])
+    print(f"\nper-file token wins: Claudinine {wins} / {len(results)}"
+          f"  (ties: {ties})")
     big = [r for r in results if r["base_bytes"] > 1048576]
     if big:
-        bw = sum(1 for r in big if r["cln_tokens"] <= r["coz_tokens"])
+        bw = sum(1 for r in big if r["cln_tokens"] < r["coz_tokens"])
         print(f"  over 1 MB: {bw} / {len(big)}")
     print(f"wall clock: claudinine {sum(r['cln_secs'] for r in results):.0f}s, "
           f"cozempic {sum(r['coz_secs'] for r in results):.0f}s")
