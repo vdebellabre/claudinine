@@ -100,6 +100,29 @@ jobs:
           # exists) is the only credential helper git sees.
           persist-credentials: false
 
+      # Every PR merge into main (the bootstrap workflow-sync PRs, and any
+      # future one) adds a merge commit that develop never gets -- so main's
+      # tip is routinely AHEAD of develop by commits develop doesn't have,
+      # even though develop is always an ancestor of main. Building the
+      # release commit on develop's tip and pushing to main is therefore not
+      # a fast-forward from main's actual current position (confirmed: exit
+      # 128 "Updates were rejected... behind its remote counterpart" on a
+      # real dispatch). Rebasing the checkout onto main's tip first makes the
+      # new commit's parent main's real tip, so the push is a genuine
+      # fast-forward -- develop's file contents, main's history.
+      - name: Rebase checkout onto main's current tip
+        run: |
+          git fetch origin main
+          git checkout -B release-base origin/main
+          # `checkout <ref> -- .` overlays develop's tree onto main's; it does
+          # NOT remove a file that exists on main but not on develop. Verified
+          # empty today (nothing is main-only, since main only ever receives
+          # commits from this job) -- if that ever stops holding, this needs
+          # `git diff --name-only --diff-filter=D origin/main develop | xargs
+          # -r git rm` added alongside it.
+          git checkout develop -- .
+          git status --short
+
       # main is restricted (ruleset: "restrict who can push") to this App --
       # not to github-actions[bot], which cannot be named in that list at all,
       # by GitHub's own design: it is the same identity for every workflow on
