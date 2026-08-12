@@ -53,6 +53,7 @@ if (-not $Repo) {
 # way to the end of the file. `exit 0` after handling the failure is not
 # optional cleanup here, it is the actual fix.
 $latestTag = gh release list --repo $Repo --limit 1 --json tagName --jq '.[0].tagName' 2>&1
+Write-Host "[bump-version] repo=$Repo exit=$LASTEXITCODE raw-output=[$latestTag]"
 if ($LASTEXITCODE -ne 0 -or -not $latestTag) {
     $current = '0.0.0'
 } else {
