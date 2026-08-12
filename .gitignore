@@ -1,4 +1,7 @@
-# .NET build output (release binaries under bin/<rid>/ ARE committed — see plan)
+# .NET build output. The six release binaries are no longer committed: CI's
+# matrix builds them and the release archive carries them. The hand-written
+# routing shims live in eng/shims/, not here.
+bin/
 obj/
 src/**/bin/
 tests/**/bin/

@@ -17,8 +17,10 @@
 # Usage:
 #   eng/pack-plugin.ps1 -BinRoot <dir> [-OutDir <dir>]
 #
-# -BinRoot is a directory holding one subdirectory per RID (the CI artifact
-# download layout, or the repo's own bin/). Defaults to the repo's bin/.
+# -BinRoot is required: a directory holding one subdirectory per RID (the CI
+# artifact download layout). The binaries are not committed, and Native AOT
+# cannot cross-compile, so CI's six-RID matrix is the only place a complete set
+# exists. The shims are read from eng/shims/ regardless.
 
 [CmdletBinding()]
 param(
@@ -30,8 +32,13 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repo = Split-Path -Parent $PSScriptRoot
-if (-not $BinRoot) { $BinRoot = Join-Path $repo 'bin' }
 if (-not $OutDir)  { $OutDir  = Join-Path $repo 'artifacts' }
+# No default for -BinRoot: the six binaries are no longer committed, so there is
+# nowhere in the tree to fall back to. Native AOT cannot cross-compile, so only
+# CI (or a caller that has gathered all six RIDs itself) can pack a full archive.
+if (-not $BinRoot) {
+    throw '-BinRoot is required: pass the directory holding one subdirectory per RID (CI passes the downloaded artifacts).'
+}
 
 # Absolute from here on: the staging copy below reads from $BinRoot while the zip
 # CLI runs with a different cwd, so relative inputs must not be re-resolved.
@@ -65,8 +72,10 @@ try {
     if (Test-Path $commandsSrc) {
         Copy-Item $commandsSrc (Join-Path $stage 'commands') -Recurse
     }
-    Copy-Item (Join-Path $repo 'bin/claudinine') (Join-Path $stage 'bin/claudinine')
-    Copy-Item (Join-Path $repo 'bin/claudinine.cmd') (Join-Path $stage 'bin/claudinine.cmd')
+    # The shims are hand-written source (eng/shims/), not build output; they land
+    # at bin/ in the archive, which is where hooks.json invokes them from.
+    Copy-Item (Join-Path $repo 'eng/shims/claudinine') (Join-Path $stage 'bin/claudinine')
+    Copy-Item (Join-Path $repo 'eng/shims/claudinine.cmd') (Join-Path $stage 'bin/claudinine.cmd')
 
     foreach ($rid in $rids) {
         $exe = if ($rid.StartsWith('win-')) { 'claudinine.exe' } else { 'claudinine' }

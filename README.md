@@ -210,8 +210,10 @@ modified, why, and what the safety guarantees are.
 ## Engineering
 
 C# / .NET 10, Native AOT, zero NuGet dependencies. One small native binary per
-platform (6 targets), committed under `bin/<rid>/` and routed by a dual shim
-(`bin/claudinine` for POSIX shells, `bin/claudinine.cmd` for cmd.exe).
+platform (6 targets), built by CI and shipped in the release archive rather than
+committed. A dual shim routes to the right one at `bin/` inside the archive
+(`claudinine` for POSIX shells, `claudinine.cmd` for cmd.exe); both are
+hand-written source and live in `eng/shims/`.
 
 ## Distribution
 
