@@ -19,7 +19,7 @@ on:
         description: 'SHA-256 of the packed archive.'
         value: ${{ jobs.package.outputs.sha256 }}
       zip:
-        description: 'Archive file name, claudinine-<version>.zip.'
+        description: 'Archive file name, claudinine-<version>.zip (no directory).'
         value: ${{ jobs.package.outputs.zip }}
 
 jobs:
@@ -142,9 +142,11 @@ jobs:
         run: |
           $r = ./eng/pack-plugin.ps1 -BinRoot bins -OutDir artifacts
           if ($r.Bits -ne 'preserved') { throw "executable bits were not stored: $($r.Bits)" }
-          "version=$($r.Version)" >> $env:GITHUB_OUTPUT
-          "sha256=$($r.Sha256)"   >> $env:GITHUB_OUTPUT
-          "zip=$($r.Zip)"         >> $env:GITHUB_OUTPUT
+          # $r.Zip is an absolute path; publish the bare file name so callers can
+          # join it onto wherever they downloaded the artifact.
+          "version=$($r.Version)"                  >> $env:GITHUB_OUTPUT
+          "sha256=$($r.Sha256)"                    >> $env:GITHUB_OUTPUT
+          "zip=$(Split-Path -Leaf $r.Zip)"         >> $env:GITHUB_OUTPUT
           Write-Host "packed $($r.Zip) ($($r.SizeMB) MB) sha256=$($r.Sha256)"
 
       # The zip is the install payload, so verify the bits survived a real
