@@ -258,6 +258,37 @@ internal sealed class TranscriptFile
         if (!tailRewritten && lines[count - 1] != Records[^1].RawLine)
             return Refuse("tail-bytes");
 
+        // Reachability, the one global invariant the per-record checks above
+        // cannot express. The app reconstructs a conversation by walking parentUuid
+        // BACKWARDS from the last record; anything the walk never reaches is
+        // dropped at load, silently and with exit code 0. Verified empirically on
+        // 2.1.227 (throwaway 6-record fixtures): all links null → 1 of 6 records
+        // survived and the app logged warnIfTranscriptUnchained; ONE broken link
+        // mid-file → 3 of 6 survived and NOTHING was logged. The app's own warning
+        // returns on the first record carrying a parentUuid, so it only ever fires
+        // for total chain loss — the partial break, which is the realistic rewrite
+        // bug, gets no signal at all. The damage also scales with position: a break
+        // at record k costs every record before k, so a late break is worse.
+        //
+        // Compared as a DELTA, not an absolute: a compact_boundary is written with
+        // parentUuid null on purpose (physical chain severed, ancestry carried in
+        // logicalParentUuid), and original files legally contain unresolvable refs
+        // — grafts, crash leftovers, fork copies. An absolute "all records reach
+        // the tail" assertion would refuse every compacted transcript. Losing
+        // ground is the failure; inheriting it is not ours to fix (same policy as
+        // SurvivingAncestor).
+        // Compared as SETS of uuids, not hop counts: a pass legitimately shortens
+        // the chain by removing records, which lowers the count without stranding
+        // anything. What must never happen is a record that WAS reachable, still
+        // survives, and is no longer reachable.
+        var reachableBefore = ReachableUuids(Records.Select(r => (r.Uuid, r.ParentUuid)));
+        var reachableAfter = ReachableUuids(expected);
+        foreach (var (uuid, _) in expected)
+        {
+            if (uuid is not null && reachableBefore.Contains(uuid) && !reachableAfter.Contains(uuid))
+                return Refuse($"unreachable:{uuid}");
+        }
+
         // The app appends live during a turn; a record landing between load and
         // swap would be silently discarded by the rename — and mirror-first means
         // a lost record was never mirrored either. Appends only ever grow the
@@ -283,6 +314,41 @@ internal sealed class TranscriptFile
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// The uuids the app's loader would actually reach: start at the last record
+    /// and walk parentUuid upwards. Mirrors the loader's walk rather than testing
+    /// graph connectivity in general — a record whose parent link is valid can
+    /// still be unreachable, and that is precisely the case that costs context at
+    /// load time.
+    ///
+    /// A null parentUuid ends the walk normally (chain root, or a boundary's
+    /// deliberately severed link). An unresolvable parentUuid also ends it: that
+    /// is the break itself, and the records above it are what gets lost.
+    /// </summary>
+    private static HashSet<string> ReachableUuids(IEnumerable<(string? Uuid, string? Parent)> chain)
+    {
+        var list = chain.ToList();
+        var reached = new HashSet<string>(StringComparer.Ordinal);
+        if (list.Count == 0)
+            return reached;
+
+        var parentOf = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var (uuid, parent) in list)
+        {
+            if (uuid is not null)
+                parentOf.TryAdd(uuid, parent);
+        }
+
+        string? cursor = list[^1].Uuid;
+        while (cursor is not null && reached.Add(cursor))
+        {
+            if (!parentOf.TryGetValue(cursor, out string? parent))
+                break; // dangling: the walk stops here, everything above is lost
+            cursor = parent;
+        }
+        return reached;
     }
 
     /// <summary>Fail-closed exit, naming the refused check when CLAUDININE_DEBUG is set.</summary>
