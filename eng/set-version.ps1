@@ -1,15 +1,17 @@
 #!/usr/bin/env pwsh
 # Writes an explicit plugin version into the two files that carry it.
 #
-# The version lives in .claude-plugin/plugin.json (the plugin's identity and
-# update signal, read by pack-plugin.ps1) and in Claudinine.csproj (compiled
-# into the binary, reported by `claudinine version`). They must not drift, so
-# this script is the only place either is rewritten -- bump-version.ps1 computes
-# the next version and delegates here.
+# develop carries no version at all in either file (`version` is optional in
+# plugin.json -- "Minimal required field is `name`" -- and an absent <Version>
+# just falls back to the SDK's own default). Only a release commit on main
+# ever has a real version, written by this script and never by hand. So there
+# is nothing to read or diff here: this always INSERTS the field fresh rather
+# than replacing an existing value.
 #
-# build.yml calls this directly (via its `version` input) to pack a version that
-# is not committed anywhere yet, which is what lets cd.yml build and publish
-# before touching main.
+# build.yml calls this directly (via its `version` input) to pack a version
+# that is not committed anywhere yet, which is what lets cd.yml build and
+# publish before touching main. cd.yml then calls it again to make that same
+# write permanent in the release commit.
 
 [CmdletBinding()]
 param(
@@ -25,49 +27,51 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifestPath = Join-Path $repoRoot '.claude-plugin/plugin.json'
 $csprojPath = Join-Path $repoRoot 'src/Claudinine/Claudinine.csproj'
 
-# The manifest holds the authoritative copy.
-$manifestRaw = Get-Content $manifestPath -Raw
-$manifest = $manifestRaw | ConvertFrom-Json
-$current = $manifest.version
-
-if ($current -notmatch '^\d+\.\d+\.\d+$') {
-    throw "manifest version '$current' is not major.minor.patch"
+# Manifest: insert "version" right after the top-level "name" if absent,
+# overwrite in place if somehow already present (e.g. re-running against a
+# tree that already got the write). A generic '"name"\s*:' match would also
+# hit the nested author.name -- anchored on the top-level key being the first
+# line of the file (as pack-plugin.ps1's own manifest already is), matched
+# via -match on that single line rather than a whole-file regex, so this can
+# never touch the wrong occurrence.
+$manifestLines = Get-Content $manifestPath
+if ($manifestLines[0] -notmatch '^\{$' -or $manifestLines[1] -notmatch '^\s*"name"\s*:\s*"[^"]*"') {
+    throw "$manifestPath does not start with the expected { / `"name`" shape"
 }
-
-# Guard against the two files having drifted before the write: silently
-# overwriting a mismatch would hide the drift in the released binary.
-$csprojRaw = Get-Content $csprojPath -Raw
-if ($csprojRaw -notmatch '<Version>([^<]+)</Version>') {
-    throw "no <Version> element in $csprojPath"
+$existingVersionLine = $manifestLines | Where-Object { $_ -match '^\s*"version"\s*:\s*"[^"]*",?\s*$' } | Select-Object -First 1
+if ($existingVersionLine) {
+    $manifestLines = $manifestLines | ForEach-Object {
+        if ($_ -eq $existingVersionLine) { $_ -replace '"version"\s*:\s*"[^"]*"', "`"version`": `"$Version`"" }
+        else { $_ }
+    }
+} else {
+    $nameLine = $manifestLines[1]
+    $insertAfter = if ($nameLine.TrimEnd().EndsWith(',')) { $nameLine } else { $nameLine.TrimEnd() + ',' }
+    $manifestLines[1] = $insertAfter
+    $manifestLines = @($manifestLines[0], $manifestLines[1], "  `"version`": `"$Version`",") + $manifestLines[2..($manifestLines.Length - 1)]
 }
-$csprojCurrent = $Matches[1]
-if ($csprojCurrent -ne $current) {
-    throw "version drift: manifest says '$current' but csproj says '$csprojCurrent'"
-}
-
-if ($Version -eq $current) {
-    Write-Host "already at $Version"
-    return [pscustomobject]@{ Previous = $current; Version = $Version; Changed = $false }
-}
-
-# Rewrite in place with a targeted replacement rather than re-serializing the
-# JSON, which would reorder keys and reformat the whole manifest.
-$manifestUpdated = $manifestRaw -replace "(`"version`"\s*:\s*`")$([regex]::Escape($current))(`")", "`${1}$Version`${2}"
-if ($manifestUpdated -eq $manifestRaw) {
-    throw "failed to rewrite version in $manifestPath"
-}
+$manifestUpdated = ($manifestLines -join "`n") + "`n"
 Set-Content -Path $manifestPath -Value $manifestUpdated -NoNewline
 
-$csprojUpdated = $csprojRaw -replace "<Version>$([regex]::Escape($current))</Version>", "<Version>$Version</Version>"
+# csproj: same idea, anchored on <AssemblyName> so it lands in the same
+# PropertyGroup rather than appended at file scope.
+$csprojRaw = Get-Content $csprojPath -Raw
+if ($csprojRaw -match '<Version>[^<]*</Version>') {
+    $csprojUpdated = $csprojRaw -replace '<Version>[^<]*</Version>', "<Version>$Version</Version>"
+} else {
+    if ($csprojRaw -notmatch '<AssemblyName>[^<]*</AssemblyName>') {
+        throw "no <AssemblyName> element in $csprojPath to anchor the version insert on"
+    }
+    $csprojUpdated = $csprojRaw -replace '(<AssemblyName>[^<]*</AssemblyName>)', "`$1`n`t`t<Version>$Version</Version>"
+}
 if ($csprojUpdated -eq $csprojRaw) {
-    throw "failed to rewrite version in $csprojPath"
+    throw "failed to write version into $csprojPath"
 }
 Set-Content -Path $csprojPath -Value $csprojUpdated -NoNewline
 
-Write-Host "$current -> $Version"
+Write-Host "-> $Version"
 
 [pscustomobject]@{
-    Previous = $current
-    Version  = $Version
-    Changed  = $true
+    Version = $Version
+    Changed = $true
 }

@@ -1,11 +1,15 @@
 name: Commit validation
 
 # Continuous integration: build, test and verify the packed archive on every
-# push and PR. Publishes nothing -- releasing is cd.yml, a manual dispatch.
+# push and PR against develop, the working branch. Publishes nothing --
+# releasing is cd.yml, a manual dispatch that writes to main. main only ever
+# receives commits from that dispatch (see the ruleset restricting it to the
+# publish app), so it is deliberately not a trigger here.
 on:
   push:
-    branches: [main]
+    branches: [develop]
   pull_request:
+    branches: [develop]
 
 jobs:
   build:
