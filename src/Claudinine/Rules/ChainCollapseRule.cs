@@ -161,11 +161,39 @@ internal sealed class ChainCollapseRule : ICompactionRule
 
         // Tail guard: the file's final record must never be removed or replaced
         // (the app chains its next append off it; TryRewrite would abort the WHOLE
-        // rewrite, discarding every rule's work). An interrupted session can end
-        // exactly at a result record — skip the turn; it collapses on a later
-        // pass, once records follow it.
+        // rewrite, discarding every rule's work).
+        //
+        // Rather than skip the whole turn, drop the tail-touching call from the
+        // batch and collapse the rest: the last pair stays verbatim, the span ends
+        // before it. This is what saves WORKFLOW subagent transcripts, whose single
+        // turn runs to EOF and whose final record IS a tool_result — the agent's
+        // last act is a tool call whose result returns to the orchestrator, so the
+        // turn never closes with an assistant message. Skipping cost 100% of the
+        // yield on those files; excluding one call of 5–29 costs 3–20%.
+        // (A plain Agent-tool transcript ends on assistant/text and never hits this.)
+        //
+        // The excluded pair could in principle be STUBBED in place instead — the
+        // enforced invariant is only that the tail keeps its uuid, and TryRewrite
+        // already rewrites the tail's parentUuid via tailRewritten. It is refused
+        // today by `Replacement is not null` in TryRewrite, which is stricter than
+        // the invariant needs. Deliberately not pursued: it would also have to stub
+        // the pair's tool_use in place (removing it dangles sourceToolAssistantUUID,
+        // which is not an ancestry link and cannot be remapped), and the reachability
+        // guard can no more validate a replaced tail than it can a fork.
         if (spanEnd == records.Count - 1)
-            return;
+        {
+            var tailCall = calls.First(c => c.ResultIndex == spanEnd);
+            calls.Remove(tailCall);
+            // Re-check against the REDUCED count: collapsing a single call pays the
+            // digest header for one [ref] line and can end up net-negative.
+            if (calls.Count < MinCalls)
+                return;
+            // The anchor cannot move: it is the first use in file order and only the
+            // LAST call was dropped (a one-call batch already returned above), so
+            // spanStart stands — and the idempotence check above, which reads the
+            // stub marker off the anchor's result, stays valid for this span.
+            spanEnd = calls.Max(c => c.ResultIndex);
+        }
         var useIndexes = calls.Select(c => c.UseIndex).ToHashSet();
         var resultIndexes = calls.Select(c => c.ResultIndex).ToHashSet();
         var callByResult = calls.ToDictionary(c => c.ResultIndex);

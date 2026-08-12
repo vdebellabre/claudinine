@@ -381,6 +381,64 @@ public sealed class ChainCollapseTests : IDisposable
     }
 
     [Test]
+    public async Task TurnEndingOnToolResultCollapsesAllButTheLastCall()
+    {
+        // A workflow subagent transcript: one turn running to EOF, ending on the
+        // tool_result that returns to the orchestrator — no closing assistant text.
+        // The tail must stay verbatim (the app chains appends off its uuid), so the
+        // last pair is excluded and everything before it collapses.
+        var b = new TranscriptBuilder().UserPrompt("workflow agent task");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.ToolUse("cmd-b", out string idB, out string uuidB);
+        b.ToolResultFor(idB, uuidB, Output + "B");
+        b.ToolUse("cmd-tail", out string idTail, out string uuidTail);
+        b.ToolResultFor(idTail, uuidTail, Output + "TAIL");
+        string path = b.WriteTo(_dir);
+        string[] before = File.ReadAllLines(path);
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        await Assert.That(records.Length < before.Length).IsTrue();
+
+        // The tail is byte-identical, not merely present: TryRewrite would refuse
+        // the whole rewrite otherwise, and every rule's work would be lost.
+        string[] after = File.ReadAllLines(path);
+        await Assert.That(after[^1]).IsEqualTo(before[^1]);
+
+        // The excluded pair survives whole; the earlier ones collapsed.
+        var remainingUses = RemainingUseIds(records);
+        await Assert.That(remainingUses).Contains(idA);      // anchor
+        await Assert.That(remainingUses).DoesNotContain(idB);
+        await Assert.That(remainingUses).Contains(idTail);
+
+        // Only the two collapsed calls are in the digest — the kept pair is not.
+        string carrier = CarrierContent(records, idA);
+        await Assert.That(carrier).StartsWith("[claudinine: this turn originally ran 2 separate tool calls");
+
+        await AssertParentsResolveEarlier(records);
+    }
+
+    [Test]
+    public async Task TurnEndingOnToolResultWithTooFewRemainingCallsIsSkipped()
+    {
+        // Two calls, the last one excluded by the tail guard, leaves one — below
+        // MinCalls, where the digest header costs more than the single [ref] saves.
+        var b = new TranscriptBuilder().UserPrompt("short agent task");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.ToolUse("cmd-tail", out string idTail, out string uuidTail);
+        b.ToolResultFor(idTail, uuidTail, Output + "TAIL");
+        string path = b.WriteTo(_dir);
+        string[] before = File.ReadAllLines(path);
+
+        Compactor.Run(path);
+
+        await Assert.That(File.ReadAllLines(path)).IsEquivalentTo(before);
+    }
+
+    [Test]
     public async Task SourceToolAssistantUuidNeverDanglesAfterCollapse()
     {
         var b = new TranscriptBuilder().UserPrompt("batch");
