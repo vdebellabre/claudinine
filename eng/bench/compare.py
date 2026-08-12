@@ -114,23 +114,57 @@ def payload_text(path: Path) -> str:
     * `summary` — absent from this corpus entirely; compact summaries carry their
       text in `message.content`, already counted below.
 
+    Records before the last `compact_boundary` are excluded, except any the
+    boundary names as preserved. The app reconstructs context by slicing from the
+    last boundary — verified in the bundle:
+
+        function F_z(A){for(let q=A.length-1;q>=0;q--){if(A[q]&&CR(A[q]))return q}return -1}
+        function tN(A){let q=F_z(A);if(q===-1)return A;return A.slice(q)}   // CR = is compact_boundary
+
+    so pre-boundary records are permanently out of context and compacting them is
+    token-free by construction. Counting them was the single worst distortion in
+    the corpus: on d8aa7b17 the boundary sits at record 4060 of 5312, putting 70.1%
+    of the file's API-visible text behind it. Cozempic deletes that region
+    wholesale, which scored it 75.1% against our 50.0% — measuring a whole-file
+    ruler. Live-context: 52.5% for us, 17.4% for cozempic, i.e. the loss was an
+    artifact and the file is a 35-point win.
+
+    `preservedMessages.allUuids` records are added back because they load alongside
+    the summary. Two cautions, both verified on the real 2.1.217 boundary in this
+    corpus: the uuids sit BEFORE the boundary in file order (6 of 8 here, at
+    4043–4050), and the app names uuids it never wrote (2 of 8 absent from the
+    file), so a missing one is normal and must not be treated as an error.
+
     Byte totals still reflect the whole file, which is the right measure for disk
     and mirror cost. Only the token column is API-visible.
     """
-    out = []
+    records = []
     with path.open("r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
             if not line:
                 continue
             try:
-                rec = json.loads(line)
+                records.append(json.loads(line))
             except Exception:
                 # An unparseable line is not an API message; count nothing.
                 continue
-            msg = rec.get("message")
-            if isinstance(msg, dict):
-                out.extend(_blocks(msg.get("content")))
+
+    cut, preserved = 0, set()
+    for i, rec in enumerate(records):
+        if rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
+            cut = i
+            meta = rec.get("compactMetadata") or {}
+            pm = meta.get("preservedMessages") or {}
+            preserved = set(pm.get("allUuids") or [])
+
+    out = []
+    for i, rec in enumerate(records):
+        if i < cut and rec.get("uuid") not in preserved:
+            continue
+        msg = rec.get("message")
+        if isinstance(msg, dict):
+            out.extend(_blocks(msg.get("content")))
     return "\n".join(out)
 
 
