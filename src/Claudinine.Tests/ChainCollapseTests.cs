@@ -336,11 +336,13 @@ public sealed class ChainCollapseTests : IDisposable
     }
 
     [Test]
-    public async Task NewUseWhileBatchPartiallyAnsweredAbortsTurn()
+    public async Task InterleavedBatchCollapses()
     {
-        // USE a, USE b, RES a, USE c, RES b, RES c is a shape we don't understand:
-        // fail-closed, whole turn untouched.
-        var b = new TranscriptBuilder().UserPrompt("pathological");
+        // USE a, USE b, RES a, USE c, RES b, RES c — overlapping batches, the shape a
+        // slow call produces when later ones are issued before it answers. Pairing is
+        // by tool_use_id, so this collapses like any other batch: anchor = first use,
+        // span = first use → last result, every other pair removed whole.
+        var b = new TranscriptBuilder().UserPrompt("interleaved batches");
         b.ToolUse("cmd-a", out string idA, out string uuidA);
         b.ToolUse("cmd-b", out string idB, out string uuidB);
         b.ToolResultFor(idA, uuidA, Output + "A");
@@ -349,11 +351,91 @@ public sealed class ChainCollapseTests : IDisposable
         b.ToolResultFor(idC, uuidC, Output + "C");
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
-        string before = File.ReadAllText(path);
+        int linesBefore = File.ReadAllLines(path).Length;
 
         Compactor.Run(path);
 
-        await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
+        JsonObject[] records = Load(path);
+        await Assert.That(records.Length < linesBefore).IsTrue();
+
+        // Anchor is the FIRST use in file order; the other two pairs are gone whole.
+        var remainingUses = RemainingUseIds(records);
+        await Assert.That(remainingUses).Contains(idA);
+        await Assert.That(remainingUses).DoesNotContain(idB);
+        await Assert.That(remainingUses).DoesNotContain(idC);
+
+        // Pairs are atomic: no result may outlive its removed use, or its
+        // tool_use_id dangles.
+        var remainingResultIds = records.SelectMany(r =>
+            (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>()
+                .Where(x => x["type"]?.GetValue<string>() == "tool_result")
+                .Select(x => x["tool_use_id"]!.GetValue<string>()) ?? []).ToList();
+        await Assert.That(remainingResultIds).DoesNotContain(idB);
+        await Assert.That(remainingResultIds).DoesNotContain(idC);
+
+        // All three calls are accounted for in the digest.
+        string carrier = CarrierContent(records, idA);
+        await Assert.That(carrier).StartsWith("[claudinine: this turn originally ran 3 separate tool calls");
+
+        await AssertParentsResolveEarlier(records);
+    }
+
+    [Test]
+    public async Task TurnEndingOnToolResultCollapsesAllButTheLastCall()
+    {
+        // A workflow subagent transcript: one turn running to EOF, ending on the
+        // tool_result that returns to the orchestrator — no closing assistant text.
+        // The tail must stay verbatim (the app chains appends off its uuid), so the
+        // last pair is excluded and everything before it collapses.
+        var b = new TranscriptBuilder().UserPrompt("workflow agent task");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.ToolUse("cmd-b", out string idB, out string uuidB);
+        b.ToolResultFor(idB, uuidB, Output + "B");
+        b.ToolUse("cmd-tail", out string idTail, out string uuidTail);
+        b.ToolResultFor(idTail, uuidTail, Output + "TAIL");
+        string path = b.WriteTo(_dir);
+        string[] before = File.ReadAllLines(path);
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        await Assert.That(records.Length < before.Length).IsTrue();
+
+        // The tail is byte-identical, not merely present: TryRewrite would refuse
+        // the whole rewrite otherwise, and every rule's work would be lost.
+        string[] after = File.ReadAllLines(path);
+        await Assert.That(after[^1]).IsEqualTo(before[^1]);
+
+        // The excluded pair survives whole; the earlier ones collapsed.
+        var remainingUses = RemainingUseIds(records);
+        await Assert.That(remainingUses).Contains(idA);      // anchor
+        await Assert.That(remainingUses).DoesNotContain(idB);
+        await Assert.That(remainingUses).Contains(idTail);
+
+        // Only the two collapsed calls are in the digest — the kept pair is not.
+        string carrier = CarrierContent(records, idA);
+        await Assert.That(carrier).StartsWith("[claudinine: this turn originally ran 2 separate tool calls");
+
+        await AssertParentsResolveEarlier(records);
+    }
+
+    [Test]
+    public async Task TurnEndingOnToolResultWithTooFewRemainingCallsIsSkipped()
+    {
+        // Two calls, the last one excluded by the tail guard, leaves one — below
+        // MinCalls, where the digest header costs more than the single [ref] saves.
+        var b = new TranscriptBuilder().UserPrompt("short agent task");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.ToolUse("cmd-tail", out string idTail, out string uuidTail);
+        b.ToolResultFor(idTail, uuidTail, Output + "TAIL");
+        string path = b.WriteTo(_dir);
+        string[] before = File.ReadAllLines(path);
+
+        Compactor.Run(path);
+
+        await Assert.That(File.ReadAllLines(path)).IsEquivalentTo(before);
     }
 
     [Test]

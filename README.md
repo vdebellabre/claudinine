@@ -26,10 +26,10 @@ in the way anymore. Your next session starts lean.
 - **Nothing is thrown away.** Full outputs are kept in a side file, and you can
   pull any of them back or undo the whole thing (see [Getting your details back](#getting-your-details-back)).
 
-The bigger the session, the more it helps. Across 76 real sessions, transcripts
-shrank from **144.6 MB to 31.7 MB**, cutting **81% of the tokens**. Small,
-conversation-heavy sessions shrink around 41%; sessions over 1 MB — the ones
-that were actually hurting — shrink around 82%.
+Across 174 real sessions, transcripts shrank from **189 MB to 43 MB** on disk.
+The typical session gives up **about three quarters of the tokens** Claude has
+to read back when it loads that session again; subagent transcripts, which are
+almost pure tool traffic, give up **82%**.
 
 ## One thing to expect
 
@@ -141,33 +141,63 @@ practical difference shows up:
 
 ### Measured side by side
 
-Both tools were run over the same corpus of 76 real sessions (145 MB of
-transcripts, including the 43 subagent transcripts belonging to 18 of them),
-each on its own copy so neither saw the other's output — every one a transcript
-neither tool had ever touched, so both start from the same untouched baseline.
-Cozempic ran its strongest prescription (`treat -rx aggressive`). Token counts
-are BPE counts over the message payload — text, thinking, tool inputs and tool
-results — so the JSON envelope is excluded and both tools are measured with the
-same ruler.
+Both tools ran over the same corpus of **174 real sessions** (189 MB, 97 main
+transcripts and 77 subagent transcripts), each on its own copy so neither saw
+the other's output, every one starting from a baseline neither tool had touched.
+Cozempic ran its strongest prescription (`treat -rx aggressive`). The corpus and
+harness are in the repo (`eng/bench/`), so the numbers below are reproducible.
+
+**What "tokens" means here matters**, because it is where a naive measurement
+goes wrong. The count is BPE over only what Claude actually reads back:
+`message.content` blocks, and only from the last compaction boundary onward. Two
+large parts of a transcript are *not* counted, because the model never sees them:
+
+- **`toolUseResult`** — a top-level field duplicating each tool's output
+  alongside the copy in `message.content`. It feeds the transcript UI. It was
+  **half the payload** on tool-heavy sessions.
+- **Everything before a compaction boundary** — once Claude compacts, the loader
+  reads only from that boundary on. On the one corpus session that had compacted,
+  that was **70% of the file**.
+
+Deleting either shrinks the file on disk without saving Claude a single token.
+Counting them credits a tool for work that has no effect, so both were excluded
+for both tools. Byte columns still cover the whole file, which is the honest
+measure for disk.
 
 | | baseline | Claudinine | Cozempic |
 |---|---|---|---|
-| **All sessions** (n=76) | 144.6 MB / 24.49 M tok | 31.7 MB (78.1%) / **4.65 M tok (81.0%)** | 72.6 MB (49.8%) / 11.43 M tok (53.3%) |
-| **Over 1 MB** (n=40) | 130.5 MB / 22.30 M tok | 27.2 MB (79.1%) / **4.09 M tok (81.7%)** | 65.4 MB (49.9%) / 10.60 M tok (52.5%) |
-| **100 KB – 1 MB** (n=27) | 13.7 MB / 2.16 M tok | 4.2 MB (69.4%) / **0.54 M tok (74.8%)** | 6.8 MB (50.3%) / 0.81 M tok (62.5%) |
-| **Under 100 KB** (n=9) | 0.5 MB / 0.03 M tok | 26.6% / **41.0%** | 21.3% / 30.8% |
+| **All sessions** (n=174) | 189.2 MB / 13.44 M tok | 42.7 MB (77.4%) / **4.18 M tok (68.9%)** | 83.8 MB (55.7%) / 9.89 M tok (26.4%) |
+| **Main transcripts** (n=97) | 167.9 MB / 10.34 M tok | 38.7 MB (77.0%) / **3.63 M tok (64.9%)** | 71.1 MB (57.7%) / 7.88 M tok (23.8%) |
+| **Subagent transcripts** (n=77) | 21.2 MB / 3.10 M tok | 4.0 MB (81.2%) / **0.55 M tok (82.1%)** | 12.7 MB (40.1%) / 2.01 M tok (35.1%) |
 
-Claudinine saves more tokens on 61 of the 76 sessions, and the gap widens with
-size: on sessions over 1 MB it wins 37 of 40. It is also about 20× faster over
-the corpus (7s against 143s), which is what a native binary buys over a Python
-process spawned per session.
+Those totals are dominated by whichever sessions happen to be largest — the ten
+biggest are about 28% of all corpus tokens. For what a single session should
+expect, the per-session view is the useful one, so here it is by size, with every
+file kept:
+
+| session size | n | Claudinine | Cozempic |
+|---|---|---|---|
+| Under 30k tokens | 52 | **67.2%** | 20.5% |
+| 30k – 100k | 86 | **77.8%** | 32.6% |
+| 100k – 400k | 33 | **62.8%** | 22.9% |
+| Over 400k | 3 | **67.0%** | 24.2% |
+
+The median session gives up **74.7%** of its tokens to Claudinine and 23.8% to
+Cozempic. Claudinine saves more on **167 of 174** sessions, with 5 ties and 2
+sessions where Cozempic saves more. It is also about 10× faster over the corpus
+(30s against 300s), which is what a native binary buys over a Python process
+spawned per session.
+
+The two sessions Cozempic wins are worth naming. One is 68% a single 900 KB
+block — a bundled skill the session loaded — which Cozempic truncates and
+Claudinine leaves alone; across the corpus, oversized injected blocks like that
+are under 2% of all payload. The other is a 0.8-point difference. Neither
+reflects a category Claudinine handles badly.
 
 Subagent transcripts compact especially well, since a subagent run is one long
 uninterrupted chain of tool calls — exactly the shape chain-collapse is built
-for. Across the 18 sessions that have them, Claudinine saves 79.1% of tokens
-against Cozempic's 51.7%, winning 17 of the 18. Claudinine finds those files
-itself from the session directory; Cozempic has no session-directory concept,
-so it was pointed at each one explicitly.
+for. Claudinine finds those files itself from the session directory; Cozempic has
+no session-directory concept, so it was pointed at each one explicitly.
 
 Cozempic does things Claudinine deliberately does not: live token monitoring,
 agent-team protection across compaction, and interactive diagnosis. If you want
@@ -187,8 +217,11 @@ move to a sidecar mirror. The rest comes from the aging and trim family
 record-level housekeeping (superseded file edits, stale reminder blocks, queue
 history).
 
-Byte percentages understate the API-token saving by roughly 3.5×, since JSON
-envelope overhead dilutes the bytes but not the tokens.
+Byte and token percentages are not interchangeable, and neither is a proxy for
+the other. A transcript carries a lot of weight Claude never reads — the JSON
+envelope, the duplicated `toolUseResult` field, history behind a compaction
+boundary — so a rule can move bytes without saving tokens, or the reverse.
+Compare like with like: bytes for disk, tokens for what a session costs to load.
 
 ## How it works
 

@@ -14,8 +14,15 @@ publish/
 # assets rather than committing them.
 artifacts/
 
-# Local benchmarking only, never committed
+# Local benchmarking only, never committed. /bench/ holds a curated snapshot of
+# real session transcripts (see eng/bench/README.md) — private conversation data
+# that must never be committed or published. Leading slash so it matches only the
+# repo-root corpus, NOT eng/bench/, which holds the curation tooling.
 tests/POC reference/
+/bench/
 
 # Microsoft.Testing.Platform writes a per-run HTML report here.
 TestResults/
+
+# Python bytecode from eng/bench tooling.
+__pycache__/
