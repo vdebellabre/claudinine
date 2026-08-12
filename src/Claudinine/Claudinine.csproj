@@ -3,8 +3,11 @@
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
 		<AssemblyName>claudinine</AssemblyName>
-		<!-- Keep in sync with .claude-plugin/plugin.json -->
-		<Version>0.1.12</Version>
+		<!-- No version here on develop: cd.yml writes the real one (see
+		     eng/set-version.ps1) into the runner's checkout just before a
+		     release is built, so `claudinine version` only ever reports a real
+		     released number, never a stale in-source one. A build off develop
+		     falls back to the SDK's own default (1.0.0.0). -->
 		<RootNamespace>Claudinine</RootNamespace>
 
 		<PublishAot>true</PublishAot>

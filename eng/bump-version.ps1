@@ -1,10 +1,17 @@
 #!/usr/bin/env pwsh
-# Computes the next plugin version from the current one, and (unless -WhatIf)
-# writes it via set-version.ps1.
+# Computes the next plugin version from the last one actually released, and
+# (unless -WhatIf) writes it via set-version.ps1.
+#
+# develop carries no version in either file it would otherwise be read from
+# (see set-version.ps1) -- the manifest and csproj on develop can never go
+# stale because there is nothing in them to go stale. So "current version" is
+# not a file read; it is whatever GitHub says was tagged last. -Repo defaults
+# to the origin remote's owner/name, overridable for testing against a
+# checkout with no such remote.
 #
 # Called by the release dispatch in cd.yml with the component chosen from the
-# dropdown. Because the new version is COMPUTED from the current one rather than
-# supplied, a release run cannot target a version that already shipped.
+# dropdown. Because the new version is COMPUTED from the last release rather
+# than supplied, a release run cannot target a version that already shipped.
 #
 # cd.yml uses -WhatIf: it needs the number early (to name the tag and to inject
 # into the build) but must not write the bump until the release has published.
@@ -15,6 +22,10 @@ param(
     [ValidateSet('major', 'minor', 'patch')]
     [string]$Component,
 
+    # owner/repo to query for the last release tag. Defaults to the checkout's
+    # own origin remote.
+    [string]$Repo,
+
     # Compute and report the next version without touching either file.
     [switch]$WhatIf
 )
@@ -22,15 +33,26 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$manifestPath = Join-Path $repoRoot '.claude-plugin/plugin.json'
+if (-not $Repo) {
+    $originUrl = git remote get-url origin
+    if ($originUrl -notmatch '[:/]([^/]+)/([^/]+?)(\.git)?$') {
+        throw "could not parse owner/repo from origin remote '$originUrl'"
+    }
+    $Repo = "$($Matches[1])/$($Matches[2])"
+}
 
-# Read the current version from the manifest: it is the authoritative copy.
-$manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-$current = $manifest.version
+# No prior release at all (a brand-new repo) starts at 0.0.0, so a first patch
+# bump produces 0.0.1. gh exits non-zero when there are no releases; that is
+# the one case this treats as "no current version" rather than an error.
+$latestTag = gh release list --repo $Repo --limit 1 --json tagName --jq '.[0].tagName' 2>$null
+if ($LASTEXITCODE -ne 0 -or -not $latestTag) {
+    $current = '0.0.0'
+} else {
+    $current = $latestTag -replace '^v', ''
+}
 
 if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
-    throw "manifest version '$current' is not major.minor.patch"
+    throw "latest release tag '$latestTag' does not parse as vMAJOR.MINOR.PATCH"
 }
 $major = [int]$Matches[1]
 $minor = [int]$Matches[2]
@@ -47,7 +69,7 @@ $next = "$major.$minor.$patch"
 if ($WhatIf) {
     Write-Host "$current -> $next ($Component, not written)"
 } else {
-    # set-version.ps1 owns the write, including the manifest/csproj drift guard.
+    # set-version.ps1 owns the write, into files that hold no version today.
     & (Join-Path $PSScriptRoot 'set-version.ps1') -Version $next | Out-Null
     Write-Host "$current -> $next ($Component)"
 }
