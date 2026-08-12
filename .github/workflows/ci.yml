@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Release: which version component to bump'
+        required: true
+        type: choice
+        options: [patch, minor, major]
 
 jobs:
   publish:
@@ -113,6 +120,14 @@ jobs:
           done
           ls -R bins
 
+      # Release runs derive the new version here, so no dispatch input can name
+      # an existing release: the target version is computed, never supplied.
+      # Ordinary pushes skip this and pack whatever the tree already says.
+      - name: Bump version
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: ./eng/bump-version.ps1 -Component '${{ inputs.bump }}'
+
       - name: Pack
         id: pack
         shell: pwsh
@@ -138,46 +153,54 @@ jobs:
           ./verify/bin/linux-x64/claudinine version
           echo "archive verified"
 
-      # Only tagged releases get published; ordinary pushes stop at verification.
+      # Only a manual dispatch publishes; ordinary pushes stop at verification.
+      #
+      # An existing tag here is not user error -- the version was just computed
+      # from the dropdown, so it cannot name an existing release. It means the
+      # invariant broke (stale tag, a prior run that tagged but failed to
+      # publish, or two dispatches racing). Fail loudly rather than overwrite:
+      # silently re-uploading is what let a published asset drift from the
+      # digest pinned in marketplace.json.
       - name: Publish release
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="v${{ steps.pack.outputs.version }}"
           zip="artifacts/claudinine-${{ steps.pack.outputs.version }}.zip"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::release $tag already exists; refusing to republish." \
+                 "The bump should have produced an unused version -- check for a" \
+                 "stale tag or a concurrent release run."
+            exit 1
+          fi
           printf 'Plugin archive for `archive`-source installs.\n\nsha256: `%s`\n' \
             '${{ steps.pack.outputs.sha256 }}' > notes.md
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "release $tag exists; uploading asset with --clobber"
-            gh release upload "$tag" "$zip" --clobber
-          else
-            gh release create "$tag" "$zip" --title "$tag" --notes-file notes.md
-          fi
+          gh release create "$tag" "$zip" --title "$tag" --notes-file notes.md
           echo "asset URL: $(gh release view "$tag" --json assets --jq '.assets[].url')"
 
-      # Repoints marketplace.json at the asset just published. Gated on the
-      # marketplace already using an archive source: until the desktop app ships
-      # Claude Code 2.1.224+, the entry deliberately stays on the relative-path
-      # source and this step is a no-op.
-      - name: Update marketplace pin
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      # Commits the bump and the digest pin as ONE commit, then tags it, so the
+      # tag and main never disagree about which digest is pinned. The pin is
+      # gated on the marketplace already using an archive source: on a
+      # relative-path source there is nothing to pin.
+      - name: Commit release and tag
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          $version = '${{ steps.pack.outputs.version }}'
           $m = Get-Content .claude-plugin/marketplace.json -Raw | ConvertFrom-Json
           $src = ($m.plugins | Where-Object { $_.name -eq 'claudinine' }).source
           if ($src -isnot [string] -and $src.source -eq 'archive') {
-            ./eng/set-archive-source.ps1 -Sha256 '${{ steps.pack.outputs.sha256 }}' -Version '${{ steps.pack.outputs.version }}'
-            git config user.name  'github-actions[bot]'
-            git config user.email 'github-actions[bot]@users.noreply.github.com'
-            git add .claude-plugin/marketplace.json
-            if (git diff --cached --quiet) {
-              Write-Host 'marketplace pin already current'
-            } else {
-              git commit -m "pin archive ${{ steps.pack.outputs.version }}"
-              git push
-            }
+            ./eng/set-archive-source.ps1 -Sha256 '${{ steps.pack.outputs.sha256 }}' -Version $version
+          } else {
+            Write-Host 'marketplace on relative-path source; skipping digest pin'
           }
-          else {
-            Write-Host 'marketplace still on relative-path source; skipping pin (needs Claude Code 2.1.224+)'
-          }
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add .claude-plugin/plugin.json src/Claudinine/Claudinine.csproj .claude-plugin/marketplace.json
+          if (git diff --cached --quiet) { throw 'release run produced no version change' }
+          git commit -m "Release $version"
+          git tag "v$version"
+          git push origin HEAD:main --follow-tags

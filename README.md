@@ -215,16 +215,31 @@ platform (6 targets), committed under `bin/<rid>/` and routed by a dual shim
 
 ## Distribution
 
-CI builds all six targets on every push to `main` (Native AOT cannot
-cross-compile, so the matrix *is* the release build) and publishes them as one
-zip release asset, `claudinine-<version>.zip`, built by `eng/pack-plugin.ps1`.
-The archive carries only the runtime payload — manifest, hooks, shims, binaries
-— which is ~8.7 MB against a ~250 MB working tree.
+CI builds all six targets (Native AOT cannot cross-compile, so the matrix *is*
+the release build) and packs them into one zip, `claudinine-<version>.zip`, built
+by `eng/pack-plugin.ps1`. The archive carries only the runtime payload — manifest,
+hooks, shims, binaries — which is ~8.7 MB against a ~250 MB working tree.
 
 That asset is what the marketplace serves, via an `archive` source pinned to the
 release URL and its SHA-256 (`eng/set-archive-source.ps1` writes both). Installing
 needs no git clone, which matters because this repo's `.git` carries every binary
 ever shipped and grows ~18 MB per release.
+
+### Releasing
+
+Pushes to `main` build, test and verify the archive, but publish nothing.
+Releasing is a manual **Run workflow** on the `ci` workflow, choosing which
+component to bump: `patch`, `minor` or `major`. CI then computes the next version
+(`eng/bump-version.ps1`), packs, publishes the release, and commits the bump plus
+the refreshed digest pin as a single `Release <version>` commit which it tags —
+so the tag and `main` never disagree about which digest is pinned. Pull after a
+release.
+
+Because the version is *computed* from the dropdown rather than supplied, a
+release run cannot target a version that already shipped; if the tag somehow
+exists, the run fails rather than overwriting the published asset. The zip is not
+byte-reproducible across builds, so re-uploading would silently break the pinned
+digest for anyone mid-install.
 
 ## License
 
