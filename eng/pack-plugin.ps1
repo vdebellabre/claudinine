@@ -48,10 +48,15 @@ $BinRoot = (Resolve-Path $BinRoot).Path
 $rids = @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')
 
 # Version is the plugin's identity and the update signal: the archive file name
-# embeds it, so a pinned URL changes every release.
+# embeds it, so a pinned URL changes every release. develop carries no version
+# at all (see set-version.ps1) -- only a tree cd.yml has already injected a
+# real version into (via build.yml's `version` input) has one. CI packs
+# develop directly with no injection, purely to verify the archive still
+# assembles and extracts; "dev" makes that build's non-release nature visible
+# in its own file name rather than asserting a version CI was never given.
 $manifestPath = Join-Path $repo '.claude-plugin/plugin.json'
-$version = (Get-Content $manifestPath -Raw | ConvertFrom-Json).version
-if (-not $version) { throw "no version in $manifestPath" }
+$manifestVersion = (Get-Content $manifestPath -Raw | ConvertFrom-Json).PSObject.Properties['version']
+$version = if ($manifestVersion) { $manifestVersion.Value } else { 'dev' }
 
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) "claudinine-pack-$([System.Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
