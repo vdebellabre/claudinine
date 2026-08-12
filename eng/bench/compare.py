@@ -86,6 +86,37 @@ def _blocks(content):
 
 
 def payload_text(path: Path) -> str:
+    """Tokens the MODEL sees — `message.content` blocks and nothing else.
+
+    Verified against the CLI bundle (11.8 MB, npm @anthropic-ai/claude-code): the
+    only two record→API converters both build the request from `message.content`
+    alone —
+
+        function a_z(A,...) { ... return {role:"user",      content: A.message.content} }
+        function o_z(A,...) { ... return {role:"assistant", content: A.message.content} }
+
+    Three envelope keys were previously counted here and are NOT API-visible:
+
+    * `toolUseResult` — a top-level sibling of `message.content` holding the same
+      tool output again (plus Edit `structuredPatch`/`originalFile` diff data the
+      inline block omits). Never referenced by either converter; of 39 occurrences
+      in the bundle, 8 are UI rendering and 20 are record construction, and the
+      display path `renderToolResultMessage` appears 35 times. Every record
+      carrying it also carries an inline `tool_result` block, so the API always
+      has its copy. This was NOT a rounding error: the field is ~47% of measured
+      payload on tool-heavy sessions, and cozempic's `tool-use-result-strip`
+      deletes it wholesale — scoring 61.2% on 03ea3e5e while cutting
+      `message.content` by 0.0%. Counting it credited both tools for tokens the
+      model never reads.
+    * top-level `content` — only on `queue-operation` and `system` records, which
+      carry no `message` at all and are written straight to disk (`enqueueWrite`),
+      never converted.
+    * `summary` — absent from this corpus entirely; compact summaries carry their
+      text in `message.content`, already counted below.
+
+    Byte totals still reflect the whole file, which is the right measure for disk
+    and mirror cost. Only the token column is API-visible.
+    """
     out = []
     with path.open("r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -95,17 +126,11 @@ def payload_text(path: Path) -> str:
             try:
                 rec = json.loads(line)
             except Exception:
-                out.append(line)
+                # An unparseable line is not an API message; count nothing.
                 continue
             msg = rec.get("message")
             if isinstance(msg, dict):
                 out.extend(_blocks(msg.get("content")))
-            for k in ("summary", "content", "toolUseResult"):
-                v = rec.get(k)
-                if isinstance(v, str):
-                    out.append(v)
-                elif isinstance(v, (dict, list)):
-                    out.append(json.dumps(v, ensure_ascii=False))
     return "\n".join(out)
 
 
