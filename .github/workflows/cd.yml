@@ -57,19 +57,8 @@ jobs:
           # this token to authenticate at all.
           GH_TOKEN: ${{ github.token }}
         run: |
-          # TEMPORARY: two prior runs failed here with exit 1 and NO error text
-          # in the API log stream (##[error]Process completed with exit code 1
-          # immediately follows the Write-Host output, nothing in between).
-          # $Error[0] surfaces whatever PowerShell actually caught, since the
-          # runner's own log capture is evidently dropping it.
-          try {
-              $r = ./eng/bump-version.ps1 -Component '${{ inputs.bump }}' -WhatIf
-              "version=$($r.Version)" >> $env:GITHUB_OUTPUT
-          } catch {
-              Write-Host "CAUGHT: $($_.Exception.Message)"
-              Write-Host "CAUGHT (full): $($_ | Out-String)"
-              throw
-          }
+          $r = ./eng/bump-version.ps1 -Component '${{ inputs.bump }}' -WhatIf
+          "version=$($r.Version)" >> $env:GITHUB_OUTPUT
 
       # Refuse early if the target release already exists: the version was just
       # computed from the dropdown, so a collision means the invariant broke (a
