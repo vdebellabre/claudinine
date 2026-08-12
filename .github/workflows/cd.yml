@@ -6,6 +6,16 @@ name: cd
 # Because the new version is COMPUTED from the dropdown rather than supplied, a
 # release run cannot target a version that already shipped -- there is no input
 # that could name one.
+#
+# Ordering: compute the version -> build an archive carrying it (UNCOMMITTED) ->
+# commit the bump and pin -> push main and the tag -> publish. Everything
+# fallible happens before the first write, so a build, pack or republish-check
+# failure leaves main exactly as it was -- the version is never committed for a
+# release that did not get that far.
+#
+# Only the asset upload sits after the push, and it is recoverable in place:
+# commit and tag are already correct, so re-running the release job attaches the
+# asset to the existing tag without a new version or a new build.
 on:
   workflow_dispatch:
     inputs:
@@ -16,46 +26,33 @@ on:
         options: [patch, minor, major]
 
 jobs:
-  # The bump is committed AND PUSHED before the build, because build.yml runs
-  # actions/checkout, which fetches the ref from the remote -- it cannot see a
-  # commit that exists only in this runner's filesystem. (Holding the commit as
-  # a bundle and passing it between jobs fails with "upload-pack: not our ref".)
-  #
-  # The cost of pushing first: a build or publish failure leaves main carrying a
-  # bumped version with no release behind it. That is recoverable -- re-dispatch,
-  # and the next bump computes from the manifest as it now stands -- and nothing
-  # consumes the manifest version except the packer, while marketplace.json
-  # still points at the last good release.
-  #
-  # The digest pin is not known yet (it depends on the archive this commit
-  # produces), so the release job commits it on top and tags that commit.
-  bump:
-    name: bump
+  # Computes the target version WITHOUT writing it. The build applies it to its
+  # own checkout (see build.yml's `version` input), which is what keeps main
+  # untouched until the release has published.
+  version:
+    name: version
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
-      version: ${{ steps.bump.outputs.version }}
-      sha: ${{ steps.commit.outputs.sha }}
+      version: ${{ steps.next.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Bump version
-        id: bump
+      - name: Compute next version
+        id: next
         shell: pwsh
         run: |
-          $r = ./eng/bump-version.ps1 -Component '${{ inputs.bump }}'
+          $r = ./eng/bump-version.ps1 -Component '${{ inputs.bump }}' -WhatIf
           "version=$($r.Version)" >> $env:GITHUB_OUTPUT
 
-      # Refuse before touching main if the target release already exists: the
-      # version was just computed from the dropdown, so a collision means the
-      # invariant broke (a stale tag, or a prior run that tagged but failed to
-      # publish, or two dispatches racing).
+      # Refuse early if the target release already exists: the version was just
+      # computed from the dropdown, so a collision means the invariant broke (a
+      # stale tag, or a prior run that tagged but failed to publish, or two
+      # dispatches racing).
       - name: Refuse to republish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v${{ steps.bump.outputs.version }}"
+          tag="v${{ steps.next.outputs.version }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "::error::release $tag already exists; refusing to republish." \
                  "The bump should have produced an unused version -- check for a" \
@@ -63,91 +60,83 @@ jobs:
             exit 1
           fi
 
-      - name: Commit and push bump
-        id: commit
-        run: |
-          git config user.name  'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add .claude-plugin/plugin.json src/Claudinine/Claudinine.csproj
-          git diff --cached --quiet && { echo '::error::bump produced no change'; exit 1; }
-          git commit -m "Bump to ${{ steps.bump.outputs.version }}"
-          git push origin HEAD:main
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-  # Same build CI runs, against the bumped tree.
+  # Same build CI runs, with the computed version written into the runner's tree
+  # just before packing. Nothing is committed to produce this archive.
   build:
-    needs: bump
+    needs: version
     uses: ./.github/workflows/build.yml
     with:
-      ref: ${{ needs.bump.outputs.sha }}
+      version: ${{ needs.version.outputs.version }}
 
   release:
     name: release
-    needs: [bump, build]
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      # Stand on the pushed bump commit, not on whatever main is now: a push that
-      # landed between the bump and here must not be swept into this release.
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.bump.outputs.sha }}
 
       - uses: actions/download-artifact@v8
         with:
           name: claudinine-archive
           path: artifacts
 
-      # The pin lands as its own commit on top of the pushed bump. Both commits
-      # are ancestors of the tag pushed below, so the tag and main never disagree
-      # about which digest is pinned. Gated on the marketplace already using an
-      # archive source: on a relative-path source there is nothing to pin.
-      - name: Pin archive digest
-        shell: pwsh
-        run: |
-          $version = '${{ needs.bump.outputs.version }}'
-          $m = Get-Content .claude-plugin/marketplace.json -Raw | ConvertFrom-Json
-          $src = ($m.plugins | Where-Object { $_.name -eq 'claudinine' }).source
-          if ($src -isnot [string] -and $src.source -eq 'archive') {
-            ./eng/set-archive-source.ps1 -Sha256 '${{ needs.build.outputs.sha256 }}' -Version $version
-            git config user.name  'github-actions[bot]'
-            git config user.email 'github-actions[bot]@users.noreply.github.com'
-            git add .claude-plugin/marketplace.json
-            if (git diff --cached --quiet) {
-              Write-Host 'pin already current'
-            } else {
-              git commit -m "Pin archive $version"
-            }
-          } else {
-            Write-Host 'marketplace on relative-path source; skipping digest pin'
-          }
-
-      # Confirm the payload exists before touching main: everything after this
-      # point is hard to unwind.
+      # Confirm the payload exists before anything irreversible.
       - name: Check archive present
         run: |
           zip="artifacts/${{ needs.build.outputs.zip }}"
           test -f "$zip" || { echo "::error::archive $zip missing"; exit 1; }
 
+      # Record the release in one commit: the version bump the build packed
+      # (uncommitted there, so replayed here) plus the digest of the archive that
+      # is about to be published. Both must be in the TAGGED commit, so this runs
+      # before the tag. The pin is gated on the marketplace already using an
+      # archive source: on a relative-path source there is nothing to pin.
+      - name: Commit bump and pin
+        shell: pwsh
+        run: |
+          $version = '${{ needs.version.outputs.version }}'
+          ./eng/set-version.ps1 -Version $version
+
+          $m = Get-Content .claude-plugin/marketplace.json -Raw | ConvertFrom-Json
+          $src = ($m.plugins | Where-Object { $_.name -eq 'claudinine' }).source
+          if ($src -isnot [string] -and $src.source -eq 'archive') {
+            ./eng/set-archive-source.ps1 -Sha256 '${{ needs.build.outputs.sha256 }}' -Version $version
+          } else {
+            Write-Host 'marketplace on relative-path source; skipping digest pin'
+          }
+
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add .claude-plugin/plugin.json src/Claudinine/Claudinine.csproj .claude-plugin/marketplace.json
+          if (git diff --cached --quiet) { throw 'release produced no change to commit' }
+          git commit -m "Release $version"
+
       # main and the tag go up together by explicit refspec. The tag is
       # annotated because --follow-tags silently skips lightweight tags, which
       # left the tag runner-local while main advanced (verified locally).
+      #
+      # This is the first irreversible step. Everything fallible before it -- the
+      # six-RID build, the pack, the republish check -- has already passed, and
+      # the archive is sitting in the artifact store. If the upload below fails,
+      # the commit and tag are already correct: re-run this job to attach the
+      # asset to the existing tag, without a new version or a new build.
       - name: Push release commit and tag
         run: |
-          version='${{ needs.bump.outputs.version }}'
+          version='${{ needs.version.outputs.version }}'
           git tag -a "v$version" -m "v$version"
           git push origin "HEAD:main" "refs/tags/v$version"
 
       # Create the release FROM the pushed tag: `gh release create --target`
-      # would create the tag server-side itself, and the subsequent tag push is
-      # then rejected as already-existing (verified locally), failing the run
-      # after main had already moved. Pushing first leaves gh one job.
+      # would create the tag server-side itself, and a subsequent tag push is
+      # then rejected as already-existing (verified locally). Pushing first
+      # leaves gh one job, and keeps the tag pointing at the release commit.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version='${{ needs.bump.outputs.version }}'
+          version='${{ needs.version.outputs.version }}'
           tag="v$version"
           zip="artifacts/${{ needs.build.outputs.zip }}"
           printf 'Plugin archive for `archive`-source installs.\n\nsha256: `%s`\n' \

@@ -11,6 +11,16 @@ on:
         description: 'Commit to build. Defaults to the caller''s ref.'
         required: false
         type: string
+      # Lets cd.yml build a version that is not committed anywhere yet: the
+      # archive must carry its own version (the packer reads the manifest for
+      # both the zip name and the manifest inside it), and a reusable workflow
+      # checks out from the REMOTE, so it cannot see an uncommitted bump. With
+      # this input the version is written into the runner's tree just before
+      # packing, so nothing has to be pushed in order to build it.
+      version:
+        description: 'Override the manifest version before packing. Defaults to the version already in the tree.'
+        required: false
+        type: string
     outputs:
       version:
         description: 'Plugin version taken from the manifest at the built ref.'
@@ -135,6 +145,14 @@ jobs:
             cp "$d"/claudinine.exe "bins/$rid/" 2>/dev/null || true
           done
           ls -R bins
+
+      # Uncommitted on purpose -- see the `version` input. cd.yml commits this
+      # same write only after the release has been published.
+      - name: Apply version override
+        if: inputs.version != ''
+        shell: pwsh
+        run: |
+          ./eng/set-version.ps1 -Version '${{ inputs.version }}'
 
       - name: Pack
         id: pack

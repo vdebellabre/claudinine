@@ -1,20 +1,22 @@
 #!/usr/bin/env pwsh
-# Bumps the plugin version in the two files that carry it.
+# Computes the next plugin version from the current one, and (unless -WhatIf)
+# writes it via set-version.ps1.
 #
-# The version lives in .claude-plugin/plugin.json (the plugin's identity and
-# update signal, read by pack-plugin.ps1) and in Claudinine.csproj (compiled
-# into the binary, reported by `claudinine version`). They must not drift, so
-# this script is the only sanctioned way to change either.
+# Called by the release dispatch in cd.yml with the component chosen from the
+# dropdown. Because the new version is COMPUTED from the current one rather than
+# supplied, a release run cannot target a version that already shipped.
 #
-# Called by the release dispatch in ci.yml with the component chosen from the
-# dropdown. Because the new version is COMPUTED from the current one rather
-# than supplied, a release run cannot target a version that already shipped.
+# cd.yml uses -WhatIf: it needs the number early (to name the tag and to inject
+# into the build) but must not write the bump until the release has published.
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
     [ValidateSet('major', 'minor', 'patch')]
-    [string]$Component
+    [string]$Component,
+
+    # Compute and report the next version without touching either file.
+    [switch]$WhatIf
 )
 
 Set-StrictMode -Version Latest
@@ -22,11 +24,9 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifestPath = Join-Path $repoRoot '.claude-plugin/plugin.json'
-$csprojPath = Join-Path $repoRoot 'src/Claudinine/Claudinine.csproj'
 
 # Read the current version from the manifest: it is the authoritative copy.
-$manifestRaw = Get-Content $manifestPath -Raw
-$manifest = $manifestRaw | ConvertFrom-Json
+$manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
 $current = $manifest.version
 
 if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
@@ -44,32 +44,13 @@ switch ($Component) {
 }
 $next = "$major.$minor.$patch"
 
-# Guard against the two files having drifted before the bump: silently
-# overwriting a mismatch would hide the drift in the released binary.
-$csprojRaw = Get-Content $csprojPath -Raw
-if ($csprojRaw -notmatch '<Version>([^<]+)</Version>') {
-    throw "no <Version> element in $csprojPath"
+if ($WhatIf) {
+    Write-Host "$current -> $next ($Component, not written)"
+} else {
+    # set-version.ps1 owns the write, including the manifest/csproj drift guard.
+    & (Join-Path $PSScriptRoot 'set-version.ps1') -Version $next | Out-Null
+    Write-Host "$current -> $next ($Component)"
 }
-$csprojCurrent = $Matches[1]
-if ($csprojCurrent -ne $current) {
-    throw "version drift: manifest says '$current' but csproj says '$csprojCurrent'"
-}
-
-# Rewrite in place with a targeted replacement rather than re-serializing the
-# JSON, which would reorder keys and reformat the whole manifest.
-$manifestUpdated = $manifestRaw -replace "(`"version`"\s*:\s*`")$([regex]::Escape($current))(`")", "`${1}$next`${2}"
-if ($manifestUpdated -eq $manifestRaw) {
-    throw "failed to rewrite version in $manifestPath"
-}
-Set-Content -Path $manifestPath -Value $manifestUpdated -NoNewline
-
-$csprojUpdated = $csprojRaw -replace "<Version>$([regex]::Escape($current))</Version>", "<Version>$next</Version>"
-if ($csprojUpdated -eq $csprojRaw) {
-    throw "failed to rewrite version in $csprojPath"
-}
-Set-Content -Path $csprojPath -Value $csprojUpdated -NoNewline
-
-Write-Host "$current -> $next ($Component)"
 
 [pscustomobject]@{
     Previous = $current
