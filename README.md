@@ -225,15 +225,25 @@ release URL and its SHA-256 (`eng/set-archive-source.ps1` writes both). Installi
 needs no git clone, which matters because this repo's `.git` carries every binary
 ever shipped and grows ~18 MB per release.
 
-### Releasing
+### CI / CD
 
-Pushes to `main` build, test and verify the archive, but publish nothing.
-Releasing is a manual **Run workflow** on the `ci` workflow, choosing which
-component to bump: `patch`, `minor` or `major`. CI then computes the next version
-(`eng/bump-version.ps1`), packs, publishes the release, and commits the bump plus
-the refreshed digest pin as a single `Release <version>` commit which it tags —
-so the tag and `main` never disagree about which digest is pinned. Pull after a
-release.
+Three workflows. `build.yml` is the shared build — the six-RID matrix, the pack
+and the archive verification — reusable via `workflow_call` and publishing
+nothing. `ci.yml` calls it on every push and PR. `cd.yml` is the only path that
+publishes, and it calls the same build, so a release ships exactly what CI
+validated rather than a second build of it.
+
+Releasing is a manual **Run workflow** on `cd`, choosing which component to bump:
+`patch`, `minor` or `major`. It then computes the next version
+(`eng/bump-version.ps1`), commits it, builds *that* commit, amends the refreshed
+digest pin into it, pushes commit and annotated tag together, and creates the
+release from the pushed tag. One `Release <version>` commit carries both the
+version and the pin, and the tag points at it — so the tag and `main` never
+disagree about which digest is pinned. Pull after a release.
+
+The bump commit is held as a bundle rather than pushed until the archive exists,
+so a failed release leaves `main` untouched instead of advertising a version with
+no asset behind it.
 
 Because the version is *computed* from the dropdown rather than supplied, a
 release run cannot target a version that already shipped; if the tag somehow
