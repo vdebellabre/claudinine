@@ -183,6 +183,13 @@ jobs:
       # the commit and tag are already correct: re-run this job to attach the
       # asset to the existing tag, without a new version or a new build.
       - name: Push release commit and tag to main
+        env:
+          # gh auth setup-git (above) configured the credential helper to
+          # delegate to `gh auth git-credential`, but that helper itself reads
+          # GH_TOKEN from ITS OWN step's environment when git invokes it --
+          # env vars do not carry over between steps, so this push failed with
+          # "could not read Username" until the token was repeated here too.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           version='${{ needs.version.outputs.version }}'
           git tag -a "v$version" -m "v$version"
