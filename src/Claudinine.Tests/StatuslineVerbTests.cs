@@ -77,6 +77,63 @@ public sealed class StatuslineVerbTests : IDisposable
         await Assert.That(StatuslineVerb.Measure(path).HasValue).IsFalse();
     }
 
+    /// <summary>
+    /// CLI 2.1.227 fixed "statusline running twice on resume". The watermark is
+    /// written by the SessionStart hook and only READ by the statusline, so the
+    /// invocation count cannot move it — but pin the stronger property anyway:
+    /// re-stamping an unchanged transcript is a no-op, so had the double firing
+    /// reached Write, the reclaim figure would still be identical. (Distinct from
+    /// RewriteReplacesEarlierStamp, which covers re-stamping after the file grew.)
+    /// </summary>
+    [Test]
+    public async Task DoubleInvocationOnResumeChangesNothing()
+    {
+        // The doubled event fires TWICE AT LOAD, before any turn runs — that is
+        // what "running twice on resume" means. Re-stamping the same unchanged
+        // bytes must be a no-op. (A later Write is a different thing entirely: a
+        // second genuine load, which correctly re-baselines to zero — see
+        // ReloadedSessionReportsNothing.)
+        string stem = NewStem();
+        string path = FatTurns().WriteTo(_dir, stem + ".jsonl");
+        Compactor.Run(path);
+
+        // Resume: the app loads the compacted file, then fat turns accrue and are
+        // compacted again — the post-reload reclaim the bar is meant to show.
+        LoadStamp.Write(path);
+        LoadStamp.Write(path); // the doubled firing
+        string stampAfterLoad = File.ReadAllText(
+            Path.Combine(MirrorLocator.MirrorsDirectory(), stem + ".load"));
+
+        var b2 = new TranscriptBuilder();
+        for (int i = 0; i < 500; i++)
+            b2.NextUuid(); // disjoint uuid space
+        for (int i = 0; i < 8; i++)
+        {
+            b2.UserPrompt($"more work ({i})");
+            b2.BashRead($"sed -n '1,100p' src/bar{i}.cs", out _, new string('y', 3000));
+        }
+        b2.AssistantText("done again");
+        string appendix = b2.WriteTo(_dir, "appendix-" + stem + ".jsonl");
+        File.AppendAllText(path, File.ReadAllText(appendix), new UTF8Encoding(false));
+        Compactor.Run(path);
+
+        var m = StatuslineVerb.Measure(path);
+        string? line = StatuslineVerb.Render(new StatuslineInput
+        {
+            TranscriptPath = path,
+            ContextWindow = new ContextWindow { TotalInputTokens = 400_000 },
+        });
+
+        // The doubled stamp is byte-identical to a single one, so the reclaim the
+        // bar reports is the post-reload shrinkage either way.
+        await Assert.That(m.HasValue).IsTrue();
+        await Assert.That(m!.Value.RemovedBytes).IsGreaterThan(0L);
+        await Assert.That(line).IsNotNull();
+        await Assert.That(File.ReadAllText(
+            Path.Combine(MirrorLocator.MirrorsDirectory(), stem + ".load")))
+            .IsEqualTo(stampAfterLoad);
+    }
+
     [Test]
     public async Task NoStampStaysSilent()
     {
