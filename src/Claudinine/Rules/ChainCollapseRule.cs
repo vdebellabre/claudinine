@@ -15,11 +15,14 @@ namespace Claudinine.Rules;
 /// chain forks; one result per batch is a dead-end leaf). Batch calls collapse
 /// like sequential ones; pairs are removed atomically (a kept result whose use
 /// was removed would dangle its tool_use_id and sourceToolAssistantUUID).
+/// Batches may INTERLEAVE (use A, use B, result B, use C, result A…) and still
+/// collapse: pairing is by tool_use_id, and the span — first use → last result —
+/// is a superset of every pair however the calls overlap. Consequence: pairs are
+/// NOT span-local, so nothing downstream may assume two pairs never overlap.
 ///
 /// Fail-closed: any shape this rule does not fully understand (legacy multi-use
-/// records, a new use while a batch is partially answered, orphan results,
-/// protected records — or sidechain records inside a MAIN transcript's span)
-/// skips the whole turn. In a subagent file (every record isSidechain: true,
+/// records, orphan results, protected records — or sidechain records inside a
+/// MAIN transcript's span) skips the whole turn. In a subagent file (every record isSidechain: true,
 /// see TranscriptFile.IsSidechainFile) the sidechain guard is off: the
 /// sidechain IS the conversation there, and these files are exactly the
 /// dense-span shape this rule is strongest on. Digest headers address
@@ -82,11 +85,14 @@ internal sealed class ChainCollapseRule : ICompactionRule
 
         // Pass 1: enumerate the turn's calls; anything unexpected aborts the turn.
         // A parallel batch shows up as consecutive uses accumulating in `pending`,
-        // drained by results in any order; a new use before the batch is fully
-        // answered is a shape we don't know.
+        // drained by results in any order. Batches may also INTERLEAVE — a new use
+        // issued while an earlier one is still unanswered (real specimen: a slow
+        // Bash overlapping later Reads) — which is fine here: `pending` is keyed by
+        // tool_use_id, so pairing never depends on adjacency, and Pass 2 classifies
+        // by record index rather than by batch. The only temporal requirement is
+        // that the turn be SETTLED, enforced after the loop by `pending.Count > 0`.
         var calls = new List<Call>();
         var pending = new List<(int Index, string Id, string Tool, string Arg)>();
-        bool draining = false;
 
         for (int i = start; i < end; i++)
         {
@@ -106,8 +112,6 @@ internal sealed class ChainCollapseRule : ICompactionRule
                     return; // legacy multi-use record: not a chain, don't touch
                 if (uses.Count == 1)
                 {
-                    if (draining)
-                        return; // new use while the batch is partially answered
                     var u = uses[0];
                     if (u["id"].GetString() is not string id || id.Length == 0)
                         return;
@@ -130,7 +134,6 @@ internal sealed class ChainCollapseRule : ICompactionRule
                     return; // ref addressing needs the uuid
                 var p = pending[match];
                 pending.RemoveAt(match);
-                draining = pending.Count > 0;
                 bool isError = r["is_error"] is JsonValue ev && ev.TryGetValue(out bool e) && e;
                 calls.Add(new Call(p.Index, i, p.Id, p.Tool, p.Arg,
                     RuleHelpers.ResultText(r), isError, RuleHelpers.MediaKinds(r)));
