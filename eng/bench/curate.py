@@ -257,6 +257,40 @@ def payload_tokens_estimate(path: Path) -> int:
     return total // 4  # ~4 chars/token
 
 
+def write_as_transcript(baseline: Path, dst: Path) -> int:
+    """Copy a baseline into the corpus as a plain TRANSCRIPT.
+
+    A mirror is not a transcript: it carries claudinine bookkeeping lines (the
+    `mirrorOf` header, `mergedFromFork` separators) that no real session file has.
+    They must be stripped, and not merely for tidiness — `TranscriptFile
+    .IsSidechainFile` is true only if EVERY record carries `isSidechain: true`, so
+    one header line at the top declassifies a subagent transcript as a MAIN one.
+    That silently disarms chain-collapse on exactly the files it is strongest on
+    (measured: 6 agent baselines scored 0.0% with the header, ~75% without).
+
+    Returns the number of records written.
+    """
+    kept = 0
+    with dst.open("w", encoding="utf-8", newline="\n") as out:
+        with baseline.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    rec = json.loads(stripped)
+                except Exception:
+                    out.write(stripped + "\n")  # torn line: preserve verbatim
+                    kept += 1
+                    continue
+                # Bookkeeping-only lines carry nothing but the envelope.
+                if isinstance(rec, dict) and set(rec.keys()) == {CLN_ENVELOPE_KEY}:
+                    continue
+                out.write(stripped + "\n")
+                kept += 1
+    return kept
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as fh:
@@ -384,9 +418,18 @@ def main() -> int:
         (out / sub).mkdir(parents=True, exist_ok=True)
     for e in keep:
         dst = out / e["kind"] / f"{e['name']}.jsonl"
-        shutil.copy2(e["baseline"], dst)
+        e["corpus_records"] = write_as_transcript(Path(e["baseline"]), dst)
         e["corpus_path"] = str(dst.relative_to(out))
+        e["corpus_bytes"] = dst.stat().st_size
         e["sha256"] = sha256(dst)
+        # A subagent transcript must stay classifiable as one, or chain-collapse
+        # silently disarms on it. Fail loudly rather than ship a bad corpus.
+        if e["kind"] == "agent":
+            non_sc = sum(1 for _, r in iter_records(dst) if r.get("isSidechain") is not True)
+            if non_sc:
+                raise SystemExit(
+                    f"{dst}: {non_sc} record(s) lack isSidechain:true — the file "
+                    f"would be classified MAIN and benchmark ~0%. Aborting.")
 
     manifest = dict(
         created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
