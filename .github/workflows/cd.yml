@@ -3,14 +3,23 @@ name: Publish release
 # Continuous delivery: the only path that publishes. Manual dispatch, choosing
 # which version component to bump.
 #
+# Branch model: develop is where all development happens; main is CD's output
+# only, and a ruleset restricts pushes to main to the publish GitHub App (see
+# PUBLISH_APP_ID / PUBLISH_APP_PEM). Nothing else -- not even repo admins by
+# default -- can commit to main. This exists so main can be pinned as the
+# marketplace's ref while still being the branch CD writes its own release
+# commit to: main never carries hand-written commits, so there is no tree it
+# needs to reconcile with.
+#
 # Because the new version is COMPUTED from the dropdown rather than supplied, a
 # release run cannot target a version that already shipped -- there is no input
 # that could name one.
 #
-# Ordering: compute the version -> build an archive carrying it (UNCOMMITTED) ->
-# commit the bump and pin -> push main and the tag -> publish. Everything
-# fallible happens before the first write, so a build, pack or republish-check
-# failure leaves main exactly as it was -- the version is never committed for a
+# Ordering: checkout develop -> compute the version -> build an archive
+# carrying it (UNCOMMITTED) -> commit the bump and pin on top of develop's tree
+# -> push that commit and its tag to main -> publish. Everything fallible
+# happens before the first write, so a build, pack or republish-check failure
+# leaves main exactly as it was -- the release commit is never pushed for a
 # release that did not get that far.
 #
 # Only the asset upload sits after the push, and it is recoverable in place:
@@ -36,6 +45,8 @@ jobs:
       version: ${{ steps.next.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: develop
 
       - name: Compute next version
         id: next
@@ -66,16 +77,47 @@ jobs:
     needs: version
     uses: ./.github/workflows/build.yml
     with:
+      ref: develop
       version: ${{ needs.version.outputs.version }}
 
   release:
     name: release
     needs: [version, build]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: develop
+          fetch-depth: 0
+          # checkout persists GITHUB_TOKEN as the remote credential by default,
+          # which would shadow the App token this job actually needs to push
+          # with. Disabled so `gh auth setup-git` (below, once the App token
+          # exists) is the only credential helper git sees.
+          persist-credentials: false
+
+      # main is restricted (ruleset: "restrict who can push") to this App --
+      # not to github-actions[bot], which cannot be named in that list at all,
+      # by GitHub's own design: it is the same identity for every workflow on
+      # every branch, so naming it would let any workflow on any branch push to
+      # main. The App's identity is specific to this installation, so it can be
+      # named without opening that hole.
+      - name: Mint publish-app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.PUBLISH_APP_ID }}
+          private-key: ${{ secrets.PUBLISH_APP_PEM }}
+          owner: ${{ github.repository_owner }}
+          repositories: claudinine
+
+      # Points git's credential helper at `gh`, which reads GH_TOKEN -- the
+      # documented way to authenticate a plain `git push` with a minted App
+      # token (actions/create-github-app-token's own README). Simpler and less
+      # error-prone than hand-building an Authorization header.
+      - name: Point git at the app token
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
 
       - uses: actions/download-artifact@v8
         with:
@@ -113,6 +155,11 @@ jobs:
           if (git diff --cached --quiet) { throw 'release produced no change to commit' }
           git commit -m "Release $version"
 
+      # develop's tip plus this commit becomes main's tip -- not a merge, a
+      # fast-forward-shaped push of a single new commit onto a branch that only
+      # this App can write to. main never carries hand-written commits, so
+      # there is never a tree on main that this push needs to reconcile with.
+      #
       # main and the tag go up together by explicit refspec. The tag is
       # annotated because --follow-tags silently skips lightweight tags, which
       # left the tag runner-local while main advanced (verified locally).
@@ -122,7 +169,7 @@ jobs:
       # the archive is sitting in the artifact store. If the upload below fails,
       # the commit and tag are already correct: re-run this job to attach the
       # asset to the existing tag, without a new version or a new build.
-      - name: Push release commit and tag
+      - name: Push release commit and tag to main
         run: |
           version='${{ needs.version.outputs.version }}'
           git tag -a "v$version" -m "v$version"
@@ -132,9 +179,13 @@ jobs:
       # would create the tag server-side itself, and a subsequent tag push is
       # then rejected as already-existing (verified locally). Pushing first
       # leaves gh one job, and keeps the tag pointing at the release commit.
+      #
+      # Uses the same App token, not github.token: the release/tag object this
+      # creates belongs to the same identity that pushed main, and the App's
+      # `contents: write` permission covers it -- no extra scope needed.
       - name: Publish release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           version='${{ needs.version.outputs.version }}'
           tag="v$version"
