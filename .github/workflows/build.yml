@@ -1,0 +1,172 @@
+name: build
+
+# Reusable build: the six-RID matrix plus the packed archive, shared by ci.yml
+# (push / PR) and cd.yml (release dispatch) so the release ships exactly what CI
+# validated, from one definition. Publishes nothing and knows nothing about
+# releases -- cd.yml consumes the outputs below.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Commit to build. Defaults to the caller''s ref.'
+        required: false
+        type: string
+    outputs:
+      version:
+        description: 'Plugin version taken from the manifest at the built ref.'
+        value: ${{ jobs.package.outputs.version }}
+      sha256:
+        description: 'SHA-256 of the packed archive.'
+        value: ${{ jobs.package.outputs.sha256 }}
+      zip:
+        description: 'Archive file name, claudinine-<version>.zip.'
+        value: ${{ jobs.package.outputs.zip }}
+
+jobs:
+  publish:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64,     os: windows-latest }
+          - { rid: win-arm64,   os: windows-11-arm }
+          - { rid: linux-x64,   os: ubuntu-latest }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm }
+          # macos-13 was retired (a job targeting it queues forever);
+          # macos-15-intel is GitHub's last Intel image, kept until ~2027.
+          - { rid: osx-x64,     os: macos-15-intel }
+          - { rid: osx-arm64,   os: macos-latest }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      # src/global.json is the single source of truth for the SDK: it pins
+      # 10.0.302 with rollForward latestMinor, so the build takes the newest 10.x
+      # present and can never silently move to 11.x. setup-dotnet installs that
+      # exact build; the runner images also carry newer 10.x SDKs, which the
+      # roll-forward then picks up (verified on all six legs: pinning 10.0.100
+      # resolved to 10.0.302).
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: src/global.json
+
+      # Every dotnet command runs from src/: global.json lives there (SDK + the
+      # Microsoft.Testing.Platform runner opt-in) and is discovered by walking up
+      # from the working directory, not from the project file.
+      - name: Test
+        working-directory: src
+        run: dotnet test Claudinine.Tests/Claudinine.Tests.csproj
+
+      # Native AOT cannot cross-compile across OSes: this matrix IS the
+      # release build. Publishing on every push is the early warning for
+      # any trim/AOT-unfriendly change.
+      # Target the csproj, not the directory: the directory resolves to
+      # Claudinine.slnx, which also carries the test project. That project is an
+      # exe (Microsoft.Testing.Platform) and a non-self-contained exe cannot
+      # reference this self-contained one — NETSDK1151.
+      # -o is relative to working-directory, so ../ keeps the binaries at the repo
+      # root where the smoke tests and upload-artifact below expect them.
+      - name: Publish (Native AOT)
+        working-directory: src
+        run: dotnet publish Claudinine/Claudinine.csproj -c Release -r ${{ matrix.rid }} -o ../publish/${{ matrix.rid }}
+
+      - name: Smoke test
+        if: ${{ !startsWith(matrix.rid, 'win-') }}
+        run: |
+          ./publish/${{ matrix.rid }}/claudinine version
+          echo '{"hook_event_name":"SessionStart","transcript_path":"/nonexistent"}' | ./publish/${{ matrix.rid }}/claudinine hook
+
+      - name: Smoke test (Windows)
+        if: ${{ startsWith(matrix.rid, 'win-') }}
+        shell: pwsh
+        run: |
+          ./publish/${{ matrix.rid }}/claudinine.exe version
+          '{"hook_event_name":"SessionStart","transcript_path":"C:\\nonexistent"}' | ./publish/${{ matrix.rid }}/claudinine.exe hook
+
+      # Ship the binary only. `claudinine*` also matched the stripped symbol
+      # files (claudinine.dbg / .pdb), which are bigger than the binary and are
+      # never committed to bin/<rid>/.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: claudinine-${{ matrix.rid }}
+          path: |
+            publish/${{ matrix.rid }}/claudinine
+            publish/${{ matrix.rid }}/claudinine.exe
+          if-no-files-found: error
+
+  # Packages the six binaries as one zip for `archive`-source distribution, so
+  # installing the plugin does not require cloning this repo (whose .git carries
+  # every binary ever shipped).
+  #
+  # Runs on Linux for the `zip` CLI: it stores Unix permission bits, which
+  # Compress-Archive does not, and the shim plus the five POSIX binaries must
+  # extract executable.
+  package:
+    name: package
+    needs: publish
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+      zip: ${{ steps.pack.outputs.zip }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dl
+          pattern: claudinine-*
+          merge-multiple: false
+
+      # download-artifact names each directory claudinine-<rid>; pack-plugin
+      # expects <rid> directly under -BinRoot.
+      - name: Reshape artifact layout
+        run: |
+          mkdir -p bins
+          for d in dl/claudinine-*/; do
+            rid="$(basename "$d" | sed 's/^claudinine-//')"
+            mkdir -p "bins/$rid"
+            cp "$d"/claudinine "bins/$rid/" 2>/dev/null || true
+            cp "$d"/claudinine.exe "bins/$rid/" 2>/dev/null || true
+          done
+          ls -R bins
+
+      - name: Pack
+        id: pack
+        shell: pwsh
+        run: |
+          $r = ./eng/pack-plugin.ps1 -BinRoot bins -OutDir artifacts
+          if ($r.Bits -ne 'preserved') { throw "executable bits were not stored: $($r.Bits)" }
+          "version=$($r.Version)" >> $env:GITHUB_OUTPUT
+          "sha256=$($r.Sha256)"   >> $env:GITHUB_OUTPUT
+          "zip=$($r.Zip)"         >> $env:GITHUB_OUTPUT
+          Write-Host "packed $($r.Zip) ($($r.SizeMB) MB) sha256=$($r.Sha256)"
+
+      # The zip is the install payload, so verify the bits survived a real
+      # round-trip rather than trusting the packer.
+      - name: Verify archive
+        run: |
+          cd artifacts
+          unzip -q -o "claudinine-${{ steps.pack.outputs.version }}.zip" -d verify
+          test -x verify/bin/claudinine || { echo "shim not executable after extract"; exit 1; }
+          for rid in linux-x64 linux-arm64 osx-x64 osx-arm64; do
+            test -x "verify/bin/$rid/claudinine" || { echo "$rid binary not executable"; exit 1; }
+          done
+          test -f verify/.claude-plugin/plugin.json || { echo "manifest not at archive root"; exit 1; }
+          ./verify/bin/linux-x64/claudinine version
+          echo "archive verified"
+
+      # The packed zip is what cd.yml publishes: hand it over as an artifact so
+      # the release ships these exact bytes. The zip is not byte-reproducible
+      # across builds, so re-packing in the release job would produce a
+      # different digest than the one CI verified.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: claudinine-archive
+          path: artifacts/${{ steps.pack.outputs.zip }}
+          if-no-files-found: error
