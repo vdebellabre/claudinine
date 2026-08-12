@@ -1,0 +1,329 @@
+"""Head-to-head: Claudinine vs cozempic over the curated corpus.
+
+Run `eng/bench/curate.py` first to snapshot `bench/corpus/`; this measures that
+fixed snapshot so successive runs are comparable. See eng/bench/README.md.
+
+METHOD
+------
+Each transcript is copied TWICE, once per tool, into separate work dirs, so
+neither tool ever sees the other's output. Baseline, Claudinine result and
+cozempic result are then measured with the SAME ruler:
+
+  bytes  — file size on disk
+  tokens — cl100k_base BPE over the *payload text* of each record: text and
+           thinking blocks, tool_result content, tool_use input. The JSON
+           envelope (uuid, timestamp, parentUuid…) is EXCLUDED, because that is
+           not what the model is billed for. Byte percentages understate the
+           token saving by roughly 3.5x through envelope dilution, which is why
+           the token column is the honest one for a context claim.
+
+Claudinine is driven through its SessionStart hook — its only whole-file entry
+point, and the one a benchmark can invoke deterministically. Each file also gets
+a SECOND pass whose output must be byte-identical, so a non-idempotent rewrite
+fails loudly here instead of silently inflating the score. Cozempic runs
+`treat -rx <prescription> --execute`; its `.bak` siblings are removed before
+measuring so its own backup never counts toward its result.
+
+FAIRNESS NOTES
+--------------
+* Claudinine finds subagent files itself from the session directory; cozempic has
+  no session-directory concept, so agent transcripts are handed to it explicitly.
+  Both therefore see every file.
+* Wall-clock is reported but is not a like-for-like comparison: Claudinine is one
+  native process per file, cozempic pays Python interpreter startup per file.
+
+USAGE
+    uv run --with tiktoken python eng/bench/compare.py
+    uv run --with tiktoken python eng/bench/compare.py --rx standard --jobs 4
+    uv run --with tiktoken python eng/bench/compare.py --only main
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
+import tiktoken
+
+ENC = tiktoken.get_encoding("cl100k_base")
+
+REPO = Path(__file__).resolve().parents[2]
+DEFAULT_CORPUS = REPO / "bench" / "corpus"
+DEFAULT_WORK = REPO / "bench" / "work"
+DEFAULT_OUT = REPO / "bench" / "results.json"
+DEFAULT_CLN = REPO / "publish" / "win-x64" / "claudinine.exe"
+DEFAULT_COZ = Path.home() / "source" / "cozempic-quiet"
+
+
+# ---------------------------------------------------------------- measurement
+def _blocks(content):
+    if isinstance(content, str):
+        yield content
+        return
+    if not isinstance(content, list):
+        return
+    for b in content:
+        if not isinstance(b, dict):
+            if isinstance(b, str):
+                yield b
+            continue
+        t = b.get("type")
+        if t == "text" and isinstance(b.get("text"), str):
+            yield b["text"]
+        elif t == "thinking" and isinstance(b.get("thinking"), str):
+            yield b["thinking"]
+        elif t == "tool_use":
+            yield json.dumps(b.get("input", ""), ensure_ascii=False)
+        elif t == "tool_result":
+            yield from _blocks(b.get("content"))
+
+
+def payload_text(path: Path) -> str:
+    out = []
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                out.append(line)
+                continue
+            msg = rec.get("message")
+            if isinstance(msg, dict):
+                out.extend(_blocks(msg.get("content")))
+            for k in ("summary", "content", "toolUseResult"):
+                v = rec.get(k)
+                if isinstance(v, str):
+                    out.append(v)
+                elif isinstance(v, (dict, list)):
+                    out.append(json.dumps(v, ensure_ascii=False))
+    return "\n".join(out)
+
+
+def measure(path: Path) -> tuple[int, int]:
+    if not path.exists():
+        return (0, 0)
+    return (path.stat().st_size,
+            len(ENC.encode(payload_text(path), disallowed_special=())))
+
+
+# ------------------------------------------------------------------- runners
+def run_claudinine(copy: Path, cfg: dict) -> str:
+    data = copy.parent / "_plugindata"
+    data.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({
+        "hook_event_name": "SessionStart",
+        "transcript_path": str(copy),
+        "session_id": copy.stem,
+        "cwd": str(copy.parent),
+    })
+    env = dict(os.environ, CLAUDE_PLUGIN_DATA=str(data))
+    try:
+        p = subprocess.run([cfg["cln"], "hook"], input=payload, text=True,
+                           capture_output=True, timeout=600, env=env,
+                           encoding="utf-8", errors="replace")
+        return "" if p.returncode == 0 else f"rc={p.returncode} {(p.stderr or '')[:200]}"
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"[:200]
+
+
+def run_cozempic(copy: Path, cfg: dict) -> str:
+    env = dict(os.environ,
+               COZEMPIC_NO_AUTO_INIT="1", COZEMPIC_NO_GLOBAL_INIT="1",
+               COZEMPIC_NO_AUTO_UPDATE="1", PYTHONIOENCODING="utf-8")
+    try:
+        p = subprocess.run(
+            ["uv", "run", "--quiet", "--project", cfg["coz"],
+             "python", "-m", "cozempic", "treat", str(copy.resolve()),
+             "-rx", cfg["rx"], "--execute"],
+            capture_output=True, text=True, timeout=1800, env=env,
+            cwd=cfg["coz"], encoding="utf-8", errors="replace")
+        if p.returncode != 0:
+            return f"rc={p.returncode} {((p.stderr or '') + (p.stdout or ''))[:300]}"
+        return ""
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"[:200]
+
+
+def strip_siblings(d: Path, keep: Path):
+    """Cozempic writes .bak siblings; they must not count toward its result."""
+    for f in d.iterdir():
+        if f == keep:
+            continue
+        try:
+            shutil.rmtree(f) if f.is_dir() else f.unlink()
+        except Exception:
+            pass
+
+
+# --------------------------------------------------------------------- work
+def one(args) -> dict:
+    src, kind, workroot, cfg = Path(args[0]), args[1], Path(args[2]), args[3]
+    rec: dict = {"name": src.stem, "kind": kind}
+    base_b, base_t = measure(src)
+    rec.update(base_bytes=base_b, base_tokens=base_t)
+
+    for tool, runner in (("cln", run_claudinine), ("coz", run_cozempic)):
+        d = workroot / f"{src.stem[:40]}_{tool}"
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+            d.mkdir(parents=True, exist_ok=True)
+            copy = d / src.name
+            shutil.copy2(src, copy)
+            t0 = time.time()
+            err = runner(copy, cfg)
+            el = time.time() - t0
+            if tool == "cln" and not err:
+                # Second pass must be a no-op: a rewrite that keeps shrinking on
+                # re-run is a bug, and would flatter the score.
+                first = copy.read_bytes()
+                err = runner(copy, cfg)
+                rec["cln_idempotent"] = (copy.read_bytes() == first)
+            strip_siblings(d, copy)
+            b, t = measure(copy)
+            rec[f"{tool}_bytes"], rec[f"{tool}_tokens"] = b, t
+            rec[f"{tool}_err"], rec[f"{tool}_secs"] = err, round(el, 2)
+        except Exception as e:
+            # Count a harness failure as ZERO saving rather than dropping the row,
+            # so a crash can never look like a win.
+            rec[f"{tool}_bytes"], rec[f"{tool}_tokens"] = base_b, base_t
+            rec[f"{tool}_err"] = f"harness: {type(e).__name__}: {e}"[:200]
+            rec[f"{tool}_secs"] = 0.0
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+    return rec
+
+
+def pct(after: int, before: int) -> float:
+    return 100.0 * (1 - after / before) if before else 0.0
+
+
+def report(results: list[dict], rx: str) -> None:
+    def band(rows, label):
+        if not rows:
+            return
+        bb = sum(r["base_bytes"] for r in rows)
+        bt = sum(r["base_tokens"] for r in rows)
+        cb = sum(r["cln_bytes"] for r in rows)
+        ct = sum(r["cln_tokens"] for r in rows)
+        zb = sum(r["coz_bytes"] for r in rows)
+        zt = sum(r["coz_tokens"] for r in rows)
+        print(f"| **{label}** (n={len(rows)}) "
+              f"| {bb/1048576:.1f} MB / {bt/1e6:.2f} M tok "
+              f"| {cb/1048576:.1f} MB ({pct(cb,bb):.1f}%) / **{ct/1e6:.2f} M tok "
+              f"({pct(ct,bt):.1f}%)** "
+              f"| {zb/1048576:.1f} MB ({pct(zb,bb):.1f}%) / {zt/1e6:.2f} M tok "
+              f"({pct(zt,bt):.1f}%) |")
+
+    errs = [r for r in results if r.get("cln_err") or r.get("coz_err")]
+    noni = [r for r in results if r.get("cln_idempotent") is False]
+    print(f"\nerrors: {len(errs)}   non-idempotent (claudinine): {len(noni)}")
+    for r in errs[:10]:
+        print(f"  {r['name'][:8]} cln={r.get('cln_err','')[:60]} coz={r.get('coz_err','')[:60]}")
+    for r in noni[:10]:
+        print(f"  NON-IDEMPOTENT {r['name'][:8]}")
+
+    print(f"\ncozempic prescription: {rx}\n")
+    print("| | baseline | Claudinine | Cozempic |")
+    print("|---|---|---|---|")
+    band(results, "All sessions")
+    band([r for r in results if r["base_bytes"] > 1048576], "Over 1 MB")
+    band([r for r in results if 102400 <= r["base_bytes"] <= 1048576], "100 KB – 1 MB")
+    band([r for r in results if r["base_bytes"] < 102400], "Under 100 KB")
+    band([r for r in results if r["kind"] == "main"], "Main transcripts")
+    band([r for r in results if r["kind"] == "agent"], "Subagent transcripts")
+
+    wins = sum(1 for r in results if r["cln_tokens"] <= r["coz_tokens"])
+    print(f"\nper-file token wins: Claudinine {wins} / {len(results)}")
+    big = [r for r in results if r["base_bytes"] > 1048576]
+    if big:
+        bw = sum(1 for r in big if r["cln_tokens"] <= r["coz_tokens"])
+        print(f"  over 1 MB: {bw} / {len(big)}")
+    print(f"wall clock: claudinine {sum(r['cln_secs'] for r in results):.0f}s, "
+          f"cozempic {sum(r['coz_secs'] for r in results):.0f}s")
+
+    losses = sorted((r for r in results if r["coz_tokens"] < r["cln_tokens"]),
+                    key=lambda r: -r["base_tokens"])
+    print(f"\nfiles where cozempic saves more: {len(losses)}")
+    if losses:
+        print(f"  {'name':38} {'base_tok':>9} {'cln%':>7} {'coz%':>7} {'gap':>6}")
+        for r in losses:
+            print(f"  {r['name'][:36]:38} {r['base_tokens']:9d} "
+                  f"{pct(r['cln_tokens'],r['base_tokens']):6.1f}% "
+                  f"{pct(r['coz_tokens'],r['base_tokens']):6.1f}% "
+                  f"{pct(r['cln_tokens'],r['base_tokens'])-pct(r['coz_tokens'],r['base_tokens']):+6.1f}")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--corpus", default=str(DEFAULT_CORPUS))
+    ap.add_argument("--work", default=str(DEFAULT_WORK))
+    ap.add_argument("--out", default=str(DEFAULT_OUT))
+    ap.add_argument("--claudinine", default=str(DEFAULT_CLN))
+    ap.add_argument("--cozempic", default=str(DEFAULT_COZ))
+    ap.add_argument("--rx", default="aggressive",
+                    help="cozempic prescription (default: its strongest)")
+    ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 4) - 2))
+    ap.add_argument("--only", choices=["main", "agent"], help="limit to one population")
+    ap.add_argument("--report-only", action="store_true",
+                    help="re-print the report from an existing results file")
+    args = ap.parse_args()
+
+    out = Path(args.out)
+    if args.report_only:
+        report(json.loads(out.read_text(encoding="utf-8")), args.rx)
+        return 0
+
+    corpus = Path(args.corpus)
+    manifest = corpus / "manifest.json"
+    if not manifest.is_file():
+        print(f"no corpus at {corpus} — run eng/bench/curate.py first", file=sys.stderr)
+        return 1
+    if not Path(args.claudinine).is_file():
+        print(f"no claudinine binary at {args.claudinine} "
+              f"— run eng/publish-win.ps1", file=sys.stderr)
+        return 1
+
+    man = json.loads(manifest.read_text(encoding="utf-8"))
+    kept = [e for e in man["entries"] if e["decision"] == "keep"]
+    jobs = [(str(corpus / e["corpus_path"]), e["kind"]) for e in kept
+            if (args.only is None or e["kind"] == args.only)]
+    print(f"corpus snapshot {man['created']}: {len(jobs)} files "
+          f"({args.only or 'main+agent'})")
+
+    cfg = {"cln": args.claudinine, "coz": args.cozempic, "rx": args.rx}
+    work = Path(args.work)
+    work.mkdir(parents=True, exist_ok=True)
+    results: list[dict] = []
+    with ProcessPoolExecutor(max_workers=args.jobs) as ex:
+        payload = [(f, k, str(work), cfg) for f, k in jobs]
+        for i, r in enumerate(ex.map(one, payload), 1):
+            results.append(r)
+            print(f"[{i}/{len(jobs)}] {r['name'][:30]:32} "
+                  f"base={r['base_bytes']/1048576:7.2f}MB "
+                  f"cln={pct(r['cln_tokens'],r['base_tokens']):5.1f}% "
+                  f"coz={pct(r['coz_tokens'],r['base_tokens']):5.1f}%"
+                  f"{'  CLN-ERR ' + r.get('cln_err','')[:40] if r.get('cln_err') else ''}"
+                  f"{'  COZ-ERR ' + r.get('coz_err','')[:40] if r.get('coz_err') else ''}",
+                  flush=True)
+    out.write_text(json.dumps(results, indent=1), encoding="utf-8")
+    print(f"\nwrote {out}")
+    report(results, args.rx)
+    shutil.rmtree(work, ignore_errors=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
