@@ -1,0 +1,82 @@
+# Profiling notes
+
+Findings from profiling the compaction pass. The harness that produces them is
+`src/Claudinine.Benchmarks` (see its README for how to run it); this file is the
+running record of what the profiles actually said.
+
+Speed only. The effectiveness numbers (token reduction) come from `compare.py`
+and are a different measurement — never quote a byte figure from a profiling run
+as a context saving.
+
+## 2026-08-13 — first CPU profile
+
+VS Performance Profiler, CPU Usage, `run --warmup -n 20` (~44 s of measured CPU,
+174 files, 189 MB corpus). Steady-state pass: 2704 ms, median 3.7 ms/file, p95
+81 ms, max 232 ms (the 14.9 MB session), 69.9 MB/s.
+
+Ranked by **self** CPU:
+
+| self | frame |
+|---:|---|
+| 13.7% | `JsonValueOfElement.TryGetValue<T>` |
+| 11.8% | `JsonDocument.Parse` |
+| 7.9% | `String.SplitInternal` |
+| 7.8% | `JsonObject.InitializeDictionary` |
+| 3.0% | `Utf16Utility.GetPointerToFirstInvalidChar` |
+
+### It is not the parser
+
+The obvious reading is "JSON deserialization is the bottleneck". That is not
+quite what the profile says, and the distinction changes what is worth fixing.
+
+`System.Text.Json.Nodes` materializes **lazily**. A `JsonValue` holds a
+`JsonElement` (raw UTF-8 bytes) until someone asks for its value, and
+`TryGetValue<string>` is where those bytes are decoded into a `string`. That
+decode is **not cached**. Measured directly:
+
+```
+ReferenceEquals across two reads of the same JsonValue: False
+20k reads of one 20 KB value: 61 ms, 764 MB allocated
+```
+
+Every read re-decodes and allocates a fresh string.
+`Utf16Utility.GetPointerToFirstInvalidChar` in the profile is the UTF-16
+validation of exactly those repeated decodes.
+
+So `TryGetValue` outranking `Parse` is a statement about **access patterns**, not
+about the JSON stack: 16 rules each walk every record, across ~94 `.GetString()`
+call sites, so the same fields are decoded many times per pass.
+
+**Implication:** swapping JSON libraries would buy little. Caching decoded text
+per record for the life of a pass — or hoisting repeated `GetString()` reads into
+locals inside a rule — targets the actual cost. The chokepoints are
+`RuleHelpers.TextOf` and `RuleHelpers.ResultText` (5 call sites between them).
+
+`JsonObject.InitializeDictionary` is the sibling cost: every `node["key"]` lookup
+on a not-yet-materialized object builds the whole property dictionary first.
+
+### Not bottlenecks, despite looking like candidates
+
+- **`DocumentDedupRule` hashing** (8.0% total, 2.6% self). SHA-256 over ≥1 KB
+  blocks is visible but modest; most of that total is the `TextOf` decode feeding
+  the hash, not the hash itself — same root cause as above.
+- **`Minify`'s exception-driven control flow.** `tool-result-age` throws ~50
+  `JsonException`/pass detecting non-JSON tool results
+  (`ToolResultAgeRule.Minify`, via `catch (JsonException)` on the common path).
+  Worth replacing with a `Utf8JsonReader` probe, but at ~50 per pass it is a
+  rounding error next to the decode traffic. Fix the decodes first.
+
+### Per-rule ranking
+
+From `bench --filter *RuleBenchmarks*` on the median main transcript — cold-start
+job, so treat the absolute numbers as indicative and the ordering as the signal:
+
+`chain-collapse` dominates at ~22 ms, roughly 4x the next rule, and is also the
+largest allocator (~1.4 MB). Everything else lands between 0.4 and 5.4 ms.
+
+### Caveat
+
+BenchmarkDotNet and the profiler both measure JIT-compiled managed code. The
+shipped binary is Native AOT with `OptimizationPreference=Size`, so absolute
+numbers differ from production. Use these for relative comparisons and for
+finding hot paths.

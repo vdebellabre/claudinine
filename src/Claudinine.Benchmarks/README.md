@@ -80,46 +80,8 @@ Extra arguments pass straight through to BenchmarkDotNet (`--filter`, `--job`,
 - **`RuleBenchmarks`** — one case per rule in `RuleCatalog.All`. The ranking that
   tells you where to optimize.
 
-## Reading a CPU profile of this code
-
-The first profile (2026-08-13, `run --warmup -n 20`) ranked by **self** CPU:
-
-| self | frame |
-|---:|---|
-| 13.7% | `JsonValueOfElement.TryGetValue<T>` |
-| 11.8% | `JsonDocument.Parse` |
-| 7.9% | `String.SplitInternal` |
-| 7.8% | `JsonObject.InitializeDictionary` |
-| 3.0% | `Utf16Utility.GetPointerToFirstInvalidChar` |
-
-It is tempting to read that as "parsing is the bottleneck". It is not, quite —
-and the distinction changes what is worth fixing.
-
-`System.Text.Json.Nodes` materializes **lazily**. A `JsonValue` holds a
-`JsonElement` (UTF-8 bytes) until someone asks for its value, and
-`TryGetValue<string>` is where those bytes get decoded into a `string`. That
-decode is **not cached**: measured on a 20 KB value, two consecutive reads return
-reference-distinct strings, and 20k reads allocate 764 MB. `GetPointerToFirstInvalidChar`
-sitting in the profile is the UTF-16 validation of exactly those decodes.
-
-So `TryGetValue` outranking `Parse` is a statement about **access patterns**, not
-about the parser: 16 rules each walk every record, and there are ~94 `.GetString()`
-call sites, so the same fields get re-decoded many times per pass. The cheap win
-is caching decoded text per record for the duration of a pass (or hoisting
-repeated `GetString()` reads into locals within a rule), not swapping out the
-JSON stack.
-
-`JsonObject.InitializeDictionary` is the sibling cost: every `node["key"]` lookup
-on a not-yet-materialized object builds the whole property dictionary first.
-
-Two things that are NOT bottlenecks despite looking like candidates:
-
-- **`DocumentDedupRule` hashing.** SHA-256 over ≥1 KB blocks is visible but
-  modest; its 8% total is mostly the `TextOf` decode feeding it, not the hash.
-- **The exception counter.** `tool-result-age` throws ~50 `JsonException`/pass
-  from `Minify`'s non-JSON detection, which BenchmarkDotNet's `Exceptions`
-  diagnostic surfaces. Worth fixing with a `Utf8JsonReader` probe, but at ~50 per
-  pass it is a rounding error next to the decode traffic — fix the decodes first.
+Profiling findings are recorded in `eng/bench/profiling-notes.md`, next to the
+rest of the benchmark tooling — not here.
 
 ## Things that are load-bearing, and were learned the hard way
 
