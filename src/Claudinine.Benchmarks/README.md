@@ -21,7 +21,7 @@ attributable to a rule.
 ### Under the Visual Studio profiler
 
 1. Set **Claudinine.Benchmarks** as the startup project.
-2. Set its launch arguments to `run --warmup` (add `-n 3` for a longer sample).
+2. Set its launch arguments to **`run --warmup -n 20`** (see below on why `-n`).
 3. **Debug > Performance Profiler** (`Alt+F2`), tick **CPU Usage**, then Start.
 4. Build configuration must be **Release** — the project defaults to it, so
    `dotnet run` without `-c` is already correct here, but the VS configuration
@@ -30,6 +30,23 @@ attributable to a rule.
 `--warmup` runs one unmeasured pass first so first-call JIT compilation is not
 attributed to whichever rule happened to execute first. Use it whenever the
 profile is what you care about.
+
+### Why `-n 20` for a CPU profile
+
+One pass over the whole corpus is only ~2.7 s of CPU, so a whole profiling run
+finishes in well under 10 s — expected, but **too thin to profile**. A ~1 kHz
+sampling profiler collects a few thousand samples from that, and since
+`chain-collapse` alone takes roughly half of them, every cheap rule lands inside
+the noise band and their relative ranking is not trustworthy.
+
+`-n 20` gives ~44 s of measured CPU (~44k samples), enough that the small rules
+are statistically solid. The corpus is read into memory once before the measured
+region, so extra iterations are pure compute and add no disk time to the profile.
+The CLI prints a reminder when it is run at the `-n 1` default.
+
+Note that `pass time` and the per-file stats describe the **last** iteration —
+the warmed, steady-state one. `wall clock` covers all iterations, so at `-n 20`
+the two legitimately differ by ~20x.
 
 Options: `-n/--iterations N` (repeat the corpus), `--limit N` (only the N
 smallest files — a fast edit/profile loop), `--only main|agent`, `-v/--verbose`

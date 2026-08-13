@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Claudinine.Benchmarks": {
+      "commandName": "Project",
+      "commandLineArgs": "run --warmup -n 10"
+    }
+  }
+}

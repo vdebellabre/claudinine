@@ -49,6 +49,18 @@ internal static class RunVerb
 
         Console.WriteLine($"Compacting {files.Count} transcript(s), {options.Iterations} iteration(s)"
             + (options.WarmUp ? ", after a warm-up pass" : "") + ".");
+
+        // One pass over the corpus is only ~3 s of CPU. A ~1 kHz sampling
+        // profiler gets a few thousand samples for that, and since one rule
+        // takes roughly half of them the cheap rules land inside the noise
+        // band — their ranking would not be trustworthy. Say so rather than
+        // letting a thin profile look authoritative.
+        if (options.Iterations == 1)
+        {
+            Console.WriteLine(
+                "note: a single pass is ~3 s of CPU — thin for a sampling profiler."
+                + " Use -n 20 for a CPU profile.");
+        }
         Console.WriteLine();
 
         // Read every file up front. Disk time is not what we are profiling, and
@@ -147,13 +159,22 @@ internal static class RunVerb
             + (failed.Count > 0 ? $"  ({failed.Count} FAILED TO PARSE)" : ""));
         Console.WriteLine($"iterations       : {options.Iterations}");
         Console.WriteLine($"corpus size      : {Corpus.Human(totalBytes)}");
-        Console.WriteLine($"wall clock       : {wall.TotalSeconds:F2} s");
-        Console.WriteLine($"compaction time  : {totalMs:F0} ms (last iteration, sum of per-file)");
+        Console.WriteLine($"wall clock       : {wall.TotalSeconds:F2} s (all {options.Iterations} iteration(s))");
+
+        // Every stat below this line describes the LAST iteration only. With
+        // --warmup that is a fully warmed steady-state pass, which is the number
+        // worth quoting; folding in the earlier (colder) iterations would only
+        // blur it. Said explicitly because wall clock above covers all of them,
+        // so at -n 5 the two figures differ ~5x and would otherwise read as a bug.
+        Console.WriteLine($"pass time        : {totalMs:F0} ms  <- last iteration, the steady-state number");
+        if (options.Iterations > 1)
+            Console.WriteLine($"       mean/iter : {wall.TotalMilliseconds / options.Iterations:F0} ms (incl. cold first pass)");
 
         if (ok.Count > 0)
         {
             var sorted = ok.OrderBy(r => r.Elapsed).ToList();
-            Console.WriteLine($"per file  mean   : {totalMs / ok.Count:F1} ms");
+            Console.WriteLine("per file (last iteration):");
+            Console.WriteLine($"          mean   : {totalMs / ok.Count:F1} ms");
             Console.WriteLine($"          median : {sorted[sorted.Count / 2].Elapsed.TotalMilliseconds:F1} ms");
             Console.WriteLine($"          p95    : {sorted[(int)(sorted.Count * 0.95)].Elapsed.TotalMilliseconds:F1} ms");
             Console.WriteLine($"          max    : {sorted[^1].Elapsed.TotalMilliseconds:F1} ms"
