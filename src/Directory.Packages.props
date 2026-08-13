@@ -8,6 +8,6 @@
 			<PrivateAssets>all</PrivateAssets>
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageVersion>
-		<PackageVersion Include="TUnit" Version="1.63.25" />
+		<PackageVersion Include="TUnit" Version="1.65.0" />
 	</ItemGroup>
 </Project>

@@ -1,5 +1,7 @@
 <Solution>
   <Folder Name="/github/">
+    <File Path="../.github/workflows/build.yml" />
+    <File Path="../.github/workflows/cd.yml" />
     <File Path="../.github/workflows/ci.yml" />
   </Folder>
   <Folder Name="/solution/">
