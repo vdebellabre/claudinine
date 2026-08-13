@@ -107,3 +107,38 @@ numerous that the weak-table lookup+insert cancels everything the payload memo
 saves. Don't "fix" this by routing all `GetString` traffic through the memo
 again — the split (plain `GetString` for small fields, `GetStringMemo` for
 payloads) is load-bearing for the win.
+
+## 2026-08-14 — rewrite-path re-parse, split traffic, dedup hashing
+
+Post-memo profile (Report20260814-0021.diagsession): `TryGetValue` self fell
+13.7% → 8.0%; new ceiling is `JsonDocument.Parse` 12.4%, `SplitInternal` 8.9%,
+`InitializeDictionary` 8.8%. Three interventions, each interleaved-A/B'd with
+byte-identical output:
+
+1. **`TryRewrite` re-validation no longer re-parses untouched lines** (~9%).
+   The old flow joined the output into one giant string, split it back, and
+   `TryParse`d EVERY line — but an untouched line is byte-identical to its
+   load-time `RawLine`, whose parse (`rec.Node`) we already hold; re-parsing it
+   proved nothing and roughly doubled parse volume. Serialized lines (the only
+   round-trip risk) are still independently re-parsed, every semantic check
+   (chain, dangling-*, reachability delta, tail) is preserved, and the
+   join-then-split count check survives as an embedded-newline guard on
+   serialized lines. The compute half is now `TryComputeRewrite`, which the
+   bench harness calls directly (the hand-rolled copy in `Harness` is gone —
+   it can no longer drift). Production writes stream the line list to the temp
+   file; the giant joined string no longer exists.
+2. **Split-once `PreviewRenderer`, gated `TrimOversized`** (folded into the
+   same measurement). RenderPreview split the same result text up to 4 times
+   per preview; TrimOversized split every oversized payload just to find most
+   never exceed the line cap (now an allocation-free `Count('\n')` gate).
+3. **`DocumentDedupRule` buckets by text length before hashing** (~4%). Equal
+   text implies equal length, so only length-colliding blocks get SHA-256'd;
+   the length-unique majority skips hashing entirely. File order (first
+   occurrence wins) is preserved by bucket insertion order.
+
+Net effect this round: median pass 1936 → 1853 ms in the final A/B (and the
+memo round before it: 2187 → 1919), per-file median 3.9 → 2.4 ms, per-file
+mean ~10.4 ms unprofiled. Remaining ceiling is the load parse itself plus
+`InitializeDictionary` — further real gains mean the JsonElement read-layer
+refactor (read via pooled `JsonDocument`, build `JsonObject` only on rewrite),
+or attacking `chain-collapse` rule internals (~4x the next rule).

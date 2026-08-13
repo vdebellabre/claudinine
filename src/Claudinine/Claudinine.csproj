@@ -13,7 +13,7 @@
 		<PublishAot>true</PublishAot>
 		<InvariantGlobalization>true</InvariantGlobalization>
 		<StripSymbols>true</StripSymbols>
-		<OptimizationPreference>Size</OptimizationPreference>
+		<OptimizationPreference>Speed</OptimizationPreference>
 		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
 	</PropertyGroup>
 

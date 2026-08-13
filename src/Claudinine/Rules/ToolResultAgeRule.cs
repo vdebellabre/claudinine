@@ -145,9 +145,12 @@ internal sealed class ToolResultAgeRule : ICompactionRule
     /// </summary>
     internal static string TrimOversized(string content)
     {
-        string[] lines = content.Split('\n');
-        if (lines.Length > TrimMaxLines)
+        // Allocation-free newline count gates the Split: most oversized payloads
+        // (minified JSON, long single lines) never exceed the line cap, and the
+        // byte trim below doesn't need lines at all.
+        if (content.AsSpan().Count('\n') >= TrimMaxLines)
         {
+            string[] lines = content.Split('\n');
             int keep = TrimMaxLines / 2 - 1; // + 1 marker line = 99 ≤ cap
             return string.Join('\n', lines[..keep])
                 + $"\n... [{lines.Length - 2 * keep} lines trimmed by claudinine] ...\n"

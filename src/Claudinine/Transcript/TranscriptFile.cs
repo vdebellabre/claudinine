@@ -142,12 +142,52 @@ internal sealed class TranscriptFile
         if (!HasChanges)
             return true;
 
+        var lines = TryComputeRewrite();
+        if (lines is null)
+            return false;
+
+        // The app appends live during a turn; a record landing between load and
+        // swap would be silently discarded by the rename — and mirror-first means
+        // a lost record was never mirrored either. Appends only ever grow the
+        // file, so a length re-check right before the swap shrinks the race
+        // window to ~zero without locking. Hooks fire at quiet points; a length
+        // change here means this pass raced something — leave the file alone.
+        try
+        {
+            if (new FileInfo(Path).Length != LoadedLength)
+                return Refuse("file-changed");
+        }
+        catch
+        {
+            return Refuse("file-changed");
+        }
+
+        try
+        {
+            Jsonl.ReplaceAtomically(Path, lines, EndsWithNewline);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The compute half of <see cref="TryRewrite"/>: serialize the pending
+    /// rewrite and validate it, no filesystem involved. Returns the output lines,
+    /// or null when a check refused. Split out so the benchmark harness exercises
+    /// the REAL serialize+validate path instead of a copy that could drift.
+    /// Callers must have checked <see cref="HasChanges"/> first.
+    /// </summary>
+    internal List<string>? TryComputeRewrite()
+    {
         // Tail-uuid invariant: the app chains the next append off the in-memory
         // tail uuid — the final record must survive with its uuid. Rules may not
         // remove or replace it; the rewrite layer itself may still rechain its
         // parentUuid when the records just before it were removed.
         if (Records[^1].Removed || Records[^1].Replacement is not null)
-            return Refuse("tail-touched");
+            return RefuseCompute("tail-touched");
 
         var byUuid = new Dictionary<string, TranscriptRecord>();
         foreach (var r in Records)
@@ -173,8 +213,10 @@ internal sealed class TranscriptFile
             return uuid;
         }
 
-        // Build the output, computing the expected chain as we go.
-        var outLines = new List<string>();
+        // Build the output, computing the expected chain as we go. Untouched
+        // records contribute their RawLine verbatim (the same string instance the
+        // load split produced); only serialized lines carry round-trip risk.
+        var kept = new List<(TranscriptRecord Rec, string Line, bool Serialized)>();
         var expected = new List<(string? Uuid, string? Parent)>();
         bool tailRewritten = false;
         foreach (var rec in Records)
@@ -215,48 +257,60 @@ internal sealed class TranscriptFile
             {
                 line = rec.RawLine;
             }
-            outLines.Add(line);
+            kept.Add((rec, line, node is not null));
             expected.Add((rec.Uuid, newParent));
         }
 
-        if (outLines.Count == 0)
-            return Refuse("empty"); // never empty a transcript
+        if (kept.Count == 0)
+            return RefuseCompute("empty"); // never empty a transcript
 
-        var sb = new StringBuilder();
-        for (int i = 0; i < outLines.Count; i++)
+        // Re-validation. Serialized lines are independently re-parsed — that is
+        // the round-trip proof for everything a rule or the rechain touched. An
+        // untouched line IS the load-time bytes, whose parse already exists in
+        // rec.Node; re-parsing it proved nothing and doubled the pass's parse
+        // cost on large files (eng/bench/profiling-notes.md), so those are
+        // checked through the parse we have. The old join-then-split count check
+        // survives as the embedded-newline guard: a raw '\n' inside a serialized
+        // line is the only way the on-disk line count could diverge from
+        // kept.Count (untouched lines came FROM a '\n' split and cannot carry one).
+        for (int i = 0; i < kept.Count; i++)
         {
-            sb.Append(outLines[i]);
-            if (i < outLines.Count - 1 || EndsWithNewline) sb.Append('\n');
-        }
-        string rewritten = sb.ToString();
+            var (rec, line, serialized) = kept[i];
+            JsonObject nodeToCheck;
+            string? parentToCheck;
+            if (serialized)
+            {
+                if (line.Contains('\n'))
+                    return RefuseCompute("embedded-newline");
+                var reparsed = TranscriptRecord.TryParse(line);
+                if (reparsed is null)
+                    return RefuseCompute("reparse");
+                if (reparsed.Uuid != expected[i].Uuid || reparsed.ParentUuid != expected[i].Parent)
+                    return RefuseCompute("chain-mismatch");
+                nodeToCheck = reparsed.Node;
+                parentToCheck = reparsed.ParentUuid;
+            }
+            else
+            {
+                nodeToCheck = rec.Node;
+                parentToCheck = rec.ParentUuid;
+            }
 
-        // Independent re-validation of the full result.
-        string[] lines = rewritten.Split('\n');
-        int count = EndsWithNewline ? lines.Length - 1 : lines.Length;
-        if (count != expected.Count)
-            return Refuse("count-mismatch");
-        for (int i = 0; i < count; i++)
-        {
-            var reparsed = TranscriptRecord.TryParse(lines[i]);
-            if (reparsed is null)
-                return Refuse("reparse");
-            if (reparsed.Uuid != expected[i].Uuid || reparsed.ParentUuid != expected[i].Parent)
-                return Refuse("chain-mismatch");
             // Nothing may still point at a removed record.
-            if (reparsed.ParentUuid is not null && removedUuids.Contains(reparsed.ParentUuid))
-                return Refuse("dangling-parent");
-            if (reparsed.Node["leafUuid"] is JsonValue rlv
+            if (parentToCheck is not null && removedUuids.Contains(parentToCheck))
+                return RefuseCompute("dangling-parent");
+            if (nodeToCheck["leafUuid"] is JsonValue rlv
                 && rlv.TryGetValue(out string? rleaf) && removedUuids.Contains(rleaf))
             {
-                return Refuse("dangling-leaf");
+                return RefuseCompute("dangling-leaf");
             }
             // A result carrier pointing at a removed tool_use record means a rule
             // broke pair atomicity. Unlike parentUuid/leafUuid this is not an
             // ancestry link — remapping has no meaning, so fail the rewrite.
-            if (reparsed.Node["sourceToolAssistantUUID"] is JsonValue rsv
+            if (nodeToCheck["sourceToolAssistantUUID"] is JsonValue rsv
                 && rsv.TryGetValue(out string? rsrc) && removedUuids.Contains(rsrc))
             {
-                return Refuse("dangling-source");
+                return RefuseCompute("dangling-source");
             }
         }
         // The tail keeps its identity (uuid checked above via expected[^1]); it is
@@ -266,9 +320,9 @@ internal sealed class TranscriptFile
         // whose anchor was removed — same over-strictness bug as the old
         // second-to-last-record collapse abort).
         if (expected[^1].Uuid != Records[^1].Uuid)
-            return Refuse("tail-uuid");
-        if (!tailRewritten && lines[count - 1] != Records[^1].RawLine)
-            return Refuse("tail-bytes");
+            return RefuseCompute("tail-uuid");
+        if (!tailRewritten && !ReferenceEquals(kept[^1].Line, Records[^1].RawLine))
+            return RefuseCompute("tail-bytes");
 
         // Reachability, the one global invariant the per-record checks above
         // cannot express. The app reconstructs a conversation by walking parentUuid
@@ -298,34 +352,10 @@ internal sealed class TranscriptFile
         foreach (var (uuid, _) in expected)
         {
             if (uuid is not null && reachableBefore.Contains(uuid) && !reachableAfter.Contains(uuid))
-                return Refuse($"unreachable:{uuid}");
+                return RefuseCompute($"unreachable:{uuid}");
         }
 
-        // The app appends live during a turn; a record landing between load and
-        // swap would be silently discarded by the rename — and mirror-first means
-        // a lost record was never mirrored either. Appends only ever grow the
-        // file, so a length re-check right before the swap shrinks the race
-        // window to ~zero without locking. Hooks fire at quiet points; a length
-        // change here means this pass raced something — leave the file alone.
-        try
-        {
-            if (new FileInfo(Path).Length != LoadedLength)
-                return Refuse("file-changed");
-        }
-        catch
-        {
-            return Refuse("file-changed");
-        }
-
-        try
-        {
-            Jsonl.ReplaceAtomically(Path, rewritten);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
+        return kept.Select(k => k.Line).ToList();
     }
 
     /// <summary>
@@ -368,5 +398,12 @@ internal sealed class TranscriptFile
     {
         Dbg.Log($"rewrite refused: {reason}");
         return false;
+    }
+
+    /// <summary><see cref="Refuse"/> for the compute half's null-on-refusal shape.</summary>
+    private static List<string>? RefuseCompute(string reason)
+    {
+        Refuse(reason);
+        return null;
     }
 }

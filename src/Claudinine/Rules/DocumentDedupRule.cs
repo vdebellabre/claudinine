@@ -18,8 +18,11 @@ internal sealed class DocumentDedupRule : ICompactionRule
 
     public void Apply(TranscriptFile transcript)
     {
-        // Pass 1: hash every big-enough block, in file order.
-        var occurrences = new Dictionary<string, List<(TranscriptRecord Rec, int BlockIndex)>>();
+        // Pass 1a: bucket every big-enough block by TEXT LENGTH, in file order.
+        // Equal text implies equal length, so only blocks sharing a length can be
+        // duplicates — hashing length-unique blocks (the vast majority) is wasted
+        // SHA-256 over megabytes.
+        var byLength = new Dictionary<int, List<(TranscriptRecord Rec, int BlockIndex, string Text)>>();
         foreach (var rec in transcript.Records)
         {
             if (rec.IsProtected())
@@ -31,6 +34,21 @@ internal sealed class DocumentDedupRule : ICompactionRule
                 string text = RuleHelpers.TextOf(block);
                 if (RuleHelpers.Utf8Len(text) < MinBlockBytes)
                     continue;
+                if (!byLength.TryGetValue(text.Length, out var bucket))
+                    byLength[text.Length] = bucket = [];
+                bucket.Add((rec, bi, text));
+            }
+        }
+
+        // Pass 1b: hash only within length collisions. File order is preserved:
+        // buckets keep insertion order, so "first occurrence" stays the earliest.
+        var occurrences = new Dictionary<string, List<(TranscriptRecord Rec, int BlockIndex)>>();
+        foreach (var bucket in byLength.Values)
+        {
+            if (bucket.Count <= 1)
+                continue;
+            foreach ((var rec, int bi, string text) in bucket)
+            {
                 string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
                 if (!occurrences.TryGetValue(hash, out var list))
                     occurrences[hash] = list = [];
