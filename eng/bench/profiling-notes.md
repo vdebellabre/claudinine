@@ -142,3 +142,32 @@ mean ~10.4 ms unprofiled. Remaining ceiling is the load parse itself plus
 `InitializeDictionary` — further real gains mean the JsonElement read-layer
 refactor (read via pooled `JsonDocument`, build `JsonObject` only on rewrite),
 or attacking `chain-collapse` rule internals (~4x the next rule).
+
+## 2026-08-14 — the pass is GC-bound: server GC
+
+With `TranscriptRecord.TryParse` the top total-CPU frame (26%, mostly
+`JsonDocument.Parse`), the obvious move was parallelizing the load parse —
+lines parse independently. **It made things WORSE** (interleaved A/B: 2014 →
+2069 ms median), and the 14.9 MB file didn't move at all. The tell: under
+server GC the same parallel build jumped to 1512 ms, and the SEQUENTIAL build
+beat it at 1276 ms. Conclusion: the pass is GC-bound, not CPU-bound — parsing
+allocates a JsonNode graph per record, and workstation GC's small gen0 budget
+collects constantly under that allocation rate; adding threads only added
+allocation contention. Parallel parse is reverted; do not re-attempt it
+without re-checking the GC picture first.
+
+`<ServerGarbageCollection>true</ServerGarbageCollection>` is now set on the
+shipped binary AND the benchmark project (numbers measured under different
+collectors are not comparable). Interleaved A/B, byte-identical output:
+
+| | workstation GC | server GC |
+|---|---:|---:|
+| median pass | 1813 ms | **1376 ms (-24%)** |
+| per-file mean | 10.2 ms | **7.8 ms** |
+| per-file p95 / max | 61 / 192 ms | 36 / 113 ms |
+| peak working set (bench, 189 MB corpus in memory) | ~592 MB | ~699 MB |
+
+The memory cost is transient working set in a process that lives well under a
+second; on production single files (≤15 MB) the absolute delta is a fraction
+of the bench's. Cumulative since the 2026-08-13 baseline: pass ~2187 → ~1376
+ms on the same machine, per-file mean into single digits.

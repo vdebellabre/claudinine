@@ -15,6 +15,13 @@
 		<StripSymbols>true</StripSymbols>
 		<OptimizationPreference>Speed</OptimizationPreference>
 		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+		<!-- The pass is GC-bound, not CPU-bound: parsing a transcript allocates a
+		     JsonNode graph per record, and workstation GC's small gen0 budget
+		     collects constantly under that rate — server GC cut the corpus pass by
+		     ~37% measured (eng/bench/profiling-notes.md). The cost is a larger
+		     transient working set; fine for a process that lives well under a
+		     second and exits. -->
+		<ServerGarbageCollection>true</ServerGarbageCollection>
 	</PropertyGroup>
 
 	<ItemGroup>

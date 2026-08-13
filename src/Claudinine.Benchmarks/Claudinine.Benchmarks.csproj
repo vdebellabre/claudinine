@@ -22,6 +22,10 @@
 		     instead, by shelling out to the published executable. -->
 		<PublishAot>false</PublishAot>
 
+		<!-- Match the shipped binary's GC mode (see Claudinine.csproj) — numbers
+		     measured under a different collector are not comparable. -->
+		<ServerGarbageCollection>true</ServerGarbageCollection>
+
 		<!-- AnalysisMode=all fights the benchmark idiom on several rules:
 		       CA1515  BenchmarkDotNet discovers public types by reflection
 		       CA1822  [Benchmark] methods stay instance members by design
