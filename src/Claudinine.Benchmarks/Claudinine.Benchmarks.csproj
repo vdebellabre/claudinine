@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<!-- No AssemblyName rename. BenchmarkDotNet's toolchain locates the
+		     project by assuming the output executable is named after the
+		     .csproj; renaming it to claudinine-bench made every benchmark fail
+		     with "Unable to find ... Most probably the name of output exe is
+		     different than the name of the .(c/f)sproj". -->
+		<RootNamespace>Claudinine.Benchmarks</RootNamespace>
+		<IsPackable>false</IsPackable>
+
+		<!-- BenchmarkDotNet requires Release to produce meaningful numbers, and
+		     refuses to run under a debugger-attached Debug build. Default to
+		     Release so `dotnet run` in this project is never accidentally
+		     measuring unoptimized code. -->
+		<Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+
+		<!-- Deliberately NOT AOT. BenchmarkDotNet needs to emit and JIT a
+		     generated runner assembly per benchmark, which PublishAot forbids.
+		     The AOT binary's real-world cost is what the `profile` verb measures
+		     instead, by shelling out to the published executable. -->
+		<PublishAot>false</PublishAot>
+
+		<!-- AnalysisMode=all fights the benchmark idiom on several rules:
+		       CA1515  BenchmarkDotNet discovers public types by reflection
+		       CA1822  [Benchmark] methods stay instance members by design
+		       CA1024  [GlobalSetup]/property-shaped helpers read better as methods
+		       CA1812  benchmark classes are instantiated reflectively, not by us
+		       CA5394  non-cryptographic Random is fine for synthetic sampling
+		       IDE0058 fluent BenchmarkDotNet config builders discard return values
+		       CA1303  this is a developer console tool; its output is never
+		               localized, and a resource table for a results header
+		               would be pure ceremony
+		     Warnings-as-errors stays on for everything else. -->
+		<NoWarn>$(NoWarn);CA1515;CA1822;CA1024;CA1812;CA5394;IDE0058;CA1303</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\Claudinine\Claudinine.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="BenchmarkDotNet" />
+	</ItemGroup>
+
+</Project>

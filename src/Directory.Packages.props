@@ -4,6 +4,7 @@
 		<CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
 	</PropertyGroup>
 	<ItemGroup>
+		<PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
 		<PackageVersion Include="Roslynator.Analyzers" Version="4.16.0">
 			<PrivateAssets>all</PrivateAssets>
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

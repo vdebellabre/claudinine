@@ -44,6 +44,18 @@ internal sealed class TranscriptFile
         {
             return null;
         }
+        return TryParseText(text, path, loadedLength);
+    }
+
+    /// <summary>
+    /// The parse half of <see cref="TryLoad"/>, split out so it can be driven
+    /// from an in-memory string. Extracted for the benchmark harness, which must
+    /// re-parse the same text once per iteration without paying (or measuring)
+    /// disk reads — and must exercise the REAL parse, not a copy of it that
+    /// could drift out of agreement with production.
+    /// </summary>
+    internal static TranscriptFile? TryParseText(string text, string path, long loadedLength)
+    {
         if (text.Length == 0)
             return null;
 
