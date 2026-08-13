@@ -2,12 +2,41 @@ using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Running;
 using Claudinine.Benchmarks;
 
-return args switch
+int exitCode = args switch
 {
     ["run", .. var runArgs] => RunVerb.Run(runArgs),
     ["bench", .. var benchArgs] => Bench(benchArgs),
     _ => Usage(),
 };
+
+WaitForKeyIfInteractive();
+return exitCode;
+
+/// <summary>
+/// Hold the console open so a profiler launch (VS starts the process in its own
+/// window and closes it on exit) does not flash the summary away unread.
+///
+/// Guarded three ways, because an unconditional ReadKey would be worse than no
+/// ReadKey at all: with stdin redirected — a pipe, a CI step, `| head` — the
+/// call throws InvalidOperationException, and without a console at all it would
+/// block forever. Only an interactive session waits.
+/// </summary>
+static void WaitForKeyIfInteractive()
+{
+    if (Console.IsInputRedirected || Console.IsOutputRedirected)
+        return;
+    try
+    {
+        Console.WriteLine();
+        Console.Write("Press any key to close...");
+        Console.ReadKey(intercept: true);
+        Console.WriteLine();
+    }
+    catch (InvalidOperationException)
+    {
+        // No console attached to read from; nothing to wait for.
+    }
+}
 
 static int Bench(string[] args)
 {

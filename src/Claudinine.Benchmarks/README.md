@@ -31,6 +31,11 @@ attributable to a rule.
 attributed to whichever rule happened to execute first. Use it whenever the
 profile is what you care about.
 
+When run in a real console the summary ends with "Press any key to close…", so a
+profiler-launched window does not vanish before you have read it. The wait is
+skipped automatically when stdin or stdout is redirected, so pipes and scripts
+never hang on it.
+
 ### Why `-n 20` for a CPU profile
 
 One pass over the whole corpus is only ~2.7 s of CPU, so a whole profiling run
@@ -74,6 +79,47 @@ Extra arguments pass straight through to BenchmarkDotNet (`--filter`, `--job`,
   Answers "what does a pass cost, and how does it scale with session size".
 - **`RuleBenchmarks`** — one case per rule in `RuleCatalog.All`. The ranking that
   tells you where to optimize.
+
+## Reading a CPU profile of this code
+
+The first profile (2026-08-13, `run --warmup -n 20`) ranked by **self** CPU:
+
+| self | frame |
+|---:|---|
+| 13.7% | `JsonValueOfElement.TryGetValue<T>` |
+| 11.8% | `JsonDocument.Parse` |
+| 7.9% | `String.SplitInternal` |
+| 7.8% | `JsonObject.InitializeDictionary` |
+| 3.0% | `Utf16Utility.GetPointerToFirstInvalidChar` |
+
+It is tempting to read that as "parsing is the bottleneck". It is not, quite —
+and the distinction changes what is worth fixing.
+
+`System.Text.Json.Nodes` materializes **lazily**. A `JsonValue` holds a
+`JsonElement` (UTF-8 bytes) until someone asks for its value, and
+`TryGetValue<string>` is where those bytes get decoded into a `string`. That
+decode is **not cached**: measured on a 20 KB value, two consecutive reads return
+reference-distinct strings, and 20k reads allocate 764 MB. `GetPointerToFirstInvalidChar`
+sitting in the profile is the UTF-16 validation of exactly those decodes.
+
+So `TryGetValue` outranking `Parse` is a statement about **access patterns**, not
+about the parser: 16 rules each walk every record, and there are ~94 `.GetString()`
+call sites, so the same fields get re-decoded many times per pass. The cheap win
+is caching decoded text per record for the duration of a pass (or hoisting
+repeated `GetString()` reads into locals within a rule), not swapping out the
+JSON stack.
+
+`JsonObject.InitializeDictionary` is the sibling cost: every `node["key"]` lookup
+on a not-yet-materialized object builds the whole property dictionary first.
+
+Two things that are NOT bottlenecks despite looking like candidates:
+
+- **`DocumentDedupRule` hashing.** SHA-256 over ≥1 KB blocks is visible but
+  modest; its 8% total is mostly the `TextOf` decode feeding it, not the hash.
+- **The exception counter.** `tool-result-age` throws ~50 `JsonException`/pass
+  from `Minify`'s non-JSON detection, which BenchmarkDotNet's `Exceptions`
+  diagnostic surfaces. Worth fixing with a `Utf8JsonReader` probe, but at ~50 per
+  pass it is a rounding error next to the decode traffic — fix the decodes first.
 
 ## Things that are load-bearing, and were learned the hard way
 
