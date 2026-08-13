@@ -58,7 +58,7 @@ internal sealed class AnchorInputStubRule : ICompactionRule
                 .OfType<JsonObject>()
                 .Where(b => b["type"].GetString() == "tool_result"))
             {
-                if (block["content"] is not JsonValue v || !v.TryGetValue(out string? content)
+                if (block["content"].GetStringMemo() is not string content
                     || !content.StartsWith(CarrierPrefix, StringComparison.Ordinal))
                 {
                     continue; // not a collapse carrier

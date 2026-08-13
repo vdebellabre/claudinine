@@ -52,8 +52,7 @@ internal sealed class DocumentDedupRule : ICompactionRule
                 string? field = block["type"].GetString() switch
                 {
                     "text" => "text",
-                    "tool_result" when block["content"] is JsonValue cv
-                        && cv.TryGetValue<string>(out _) => "content",
+                    "tool_result" when block["content"].GetStringMemo() is not null => "content",
                     _ => null,
                 };
                 if (field is null)

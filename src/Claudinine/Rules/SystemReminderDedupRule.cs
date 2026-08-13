@@ -31,8 +31,7 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
             // deduped text back as a STRING — cozempic coerced these to block
             // lists, silently breaking the "real user message has string content"
             // invariant that turn detection relies on.
-            if ((node["message"] as JsonObject)?["content"] is JsonValue sv
-                && sv.TryGetValue(out string? promptText))
+            if ((node["message"] as JsonObject)?["content"].GetStringMemo() is string promptText)
             {
                 if (DedupIn(promptText, seen) is string dedupedPrompt)
                 {
@@ -56,9 +55,7 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
 
                 // text blocks carry "text"; tool_result only qualifies with string content.
                 bool isText = btype == "text";
-                string? text = isText
-                    ? (b["text"] as JsonValue).GetString()
-                    : b["content"] as JsonValue is JsonValue cv && cv.TryGetValue(out string? cs) ? cs : null;
+                string? text = isText ? b["text"].GetStringMemo() : b["content"].GetStringMemo();
                 if (string.IsNullOrEmpty(text))
                     continue;
 

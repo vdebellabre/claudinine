@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Encodings.Web;
 
 namespace Claudinine.Transcript;
@@ -22,4 +23,29 @@ internal static class Json
     /// </summary>
     public static string? GetString(this JsonNode? node) =>
         node is JsonValue v && v.TryGetValue(out string? s) ? s : null;
+
+    /// <summary>
+    /// <see cref="GetString"/> memoized per node, for PAYLOAD fields (block
+    /// text/content): an element-backed JsonValue re-decodes its UTF-8 bytes on
+    /// EVERY read (13.7% of pass CPU, eng/bench/profiling-notes.md), and 16 rules
+    /// re-read the same payloads. Small-field reads (type, ids) stay on the plain
+    /// helper — at their call volume the table overhead cancels the decode saving.
+    /// Reference-keyed caching is sound because a JsonValue's value never changes
+    /// — rules replace nodes, never mutate them — and weak keys let each file's
+    /// tree collect with its pass.
+    /// </summary>
+    public static string? GetStringMemo(this JsonNode? node)
+    {
+        if (node is not JsonValue v)
+            return null;
+        if (DecodedStrings.TryGetValue(v, out string? cached))
+            return cached;
+        if (!v.TryGetValue(out string? s))
+            return null;
+        // AddOrUpdate, not Add: parallel test classes may race on a shared fixture.
+        DecodedStrings.AddOrUpdate(v, s);
+        return s;
+    }
+
+    private static readonly ConditionalWeakTable<JsonNode, string> DecodedStrings = new();
 }

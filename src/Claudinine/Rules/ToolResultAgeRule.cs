@@ -51,7 +51,7 @@ internal sealed class ToolResultAgeRule : ICompactionRule
                 if (block is not JsonObject b || b["type"].GetString() != "tool_result")
                     continue;
 
-                if (b["content"] is JsonValue cv && cv.TryGetValue(out string? content))
+                if (b["content"].GetStringMemo() is string content)
                 {
                     if (Rewrite(content, age.IsOld(pos), b, records, pos) is string newContent)
                         RuleHelpers.CloneBlockAt(ref clone, node, bi)["content"] = newContent;
@@ -63,7 +63,7 @@ internal sealed class ToolResultAgeRule : ICompactionRule
                     {
                         if (parts[ti] is not JsonObject ib
                             || ib["type"].GetString() != "text"
-                            || ib["text"].GetString() is not string text)
+                            || ib["text"].GetStringMemo() is not string text)
                         {
                             continue;
                         }

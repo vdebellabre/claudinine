@@ -79,4 +79,31 @@ largest allocator (~1.4 MB). Everything else lands between 0.4 and 5.4 ms.
 BenchmarkDotNet and the profiler both measure JIT-compiled managed code. The
 shipped binary is Native AOT with `OptimizationPreference=Size`, so absolute
 numbers differ from production. Use these for relative comparisons and for
-finding hot paths.
+finding hot paths. The 2704 ms pass time above was also measured UNDER the
+profiler; standalone runs of the same build land around 2060–2215 ms — never
+compare a profiled number against an unprofiled one.
+
+## 2026-08-14 — decode memoization
+
+Intervention for the `TryGetValue` finding: `Json.GetStringMemo`, a per-node
+memo of decoded strings (`ConditionalWeakTable` keyed by node reference — sound
+because rules replace nodes, never mutate them; weak keys let each file's tree
+collect with its pass). Used at payload call sites only (block text/content:
+`TextOf`, `ResultText`, and the rules' inline content reads). Plus two free
+fixes: `IsUserPrompt` / `IsRealUserMessage` decoded the ENTIRE user prompt just
+to test "is it a string" — now a `GetValueKind()` check, no decode.
+
+Measured by interleaved A/B (same machine, alternating exes, `run --warmup
+-n 3`, median of 3 steady-state numbers), byte-identical output on both sides:
+
+| variant | median pass |
+|---|---:|
+| baseline | 2187 ms |
+| memo on EVERY `GetString` | parity (2152 ms vs 2158 — a wash) |
+| memo on payload reads only | **1919 ms (~12% faster)** |
+
+The wash is the finding worth keeping: small-field reads (`type`, ids) are so
+numerous that the weak-table lookup+insert cancels everything the payload memo
+saves. Don't "fix" this by routing all `GetString` traffic through the memo
+again — the split (plain `GetString` for small fields, `GetStringMemo` for
+payloads) is load-bearing for the win.

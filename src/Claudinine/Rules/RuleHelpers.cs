@@ -53,13 +53,11 @@ internal static class RuleHelpers
         if (result is JsonArray list)
         {
             return string.Join(" ", list.OfType<JsonObject>()
-                .Select(sub => sub["text"])
-                .OfType<JsonValue>()
-                .Select(v => v.TryGetValue(out string? s) ? s : null)
+                .Select(sub => sub["text"].GetStringMemo())
                 .Where(s => s is not null));
         }
 
-        return result is JsonValue value && value.TryGetValue(out string? text) ? text : "";
+        return result.GetStringMemo() ?? "";
     }
 
     private static JsonNode? FirstNonEmpty(params JsonNode?[] candidates)
@@ -67,7 +65,7 @@ internal static class RuleHelpers
         foreach (var c in candidates)
         {
             if (c is JsonArray) return c;
-            if (c is JsonValue v && v.TryGetValue(out string? s) && s.Length > 0) return c;
+            if (c.GetStringMemo() is { Length: > 0 }) return c;
         }
         return null;
     }
@@ -76,12 +74,12 @@ internal static class RuleHelpers
     public static string ResultText(JsonObject block)
     {
         var c = block["content"];
-        if (c is JsonValue v && v.TryGetValue(out string? s))
+        if (c.GetStringMemo() is string s)
             return s;
         if (c is JsonArray parts)
         {
             return string.Concat(parts.OfType<JsonObject>()
-                .Select(p => p["text"].GetString() ?? ""));
+                .Select(p => p["text"].GetStringMemo() ?? ""));
         }
 
         return "";
@@ -182,11 +180,10 @@ internal static class RuleHelpers
             return "";
         foreach (string key in (string[])["command", "file_path", "path", "pattern", "url", "query", "prompt"])
         {
-            if (input[key] is JsonValue v && v.TryGetValue(out string? s) && s.Length > 0)
+            if (input[key].GetString() is { Length: > 0 } s)
                 return s.ReplaceLineEndings(" ");
         }
-        return input.Select(kv => kv.Value).OfType<JsonValue>()
-            .Select(v => v.TryGetValue(out string? s) ? s : null)
+        return input.Select(kv => kv.Value.GetString())
             .FirstOrDefault(s => !string.IsNullOrEmpty(s))?.ReplaceLineEndings(" ") ?? "";
     }
 
@@ -201,8 +198,10 @@ internal static class RuleHelpers
     {
         if (record["type"].GetString() != "user")
             return false;
+        // Kind check, not TryGetValue<string>: that would decode the entire
+        // prompt just to test its type.
         var content = (record["message"] as JsonObject)?["content"];
-        if (content is JsonValue v && v.TryGetValue<string>(out _))
+        if (content is JsonValue v && v.GetValueKind() == JsonValueKind.String)
             return true;
         if (content is JsonArray list)
         {

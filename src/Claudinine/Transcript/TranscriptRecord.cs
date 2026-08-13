@@ -111,7 +111,9 @@ internal sealed class TranscriptRecord
         && !IsTruthy(Node["isCompactSummary"])
         && Node["message"] is JsonObject m
         && m["content"] is JsonValue v
-        && v.TryGetValue<string>(out _);
+        // Kind check, not TryGetValue<string>: that would decode the entire
+        // prompt just to test its type.
+        && v.GetValueKind() == JsonValueKind.String;
 
     private static bool IsTruthy(JsonNode? n) =>
         n is JsonValue v && v.TryGetValue(out bool b) && b;

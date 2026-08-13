@@ -37,7 +37,7 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
             {
                 // Carrier content is a plain string by construction (ChainCollapseRule
                 // sets it directly); anything else is not ours.
-                if (block["content"] is not JsonValue v || !v.TryGetValue(out string? content)
+                if (block["content"].GetStringMemo() is not string content
                     || !content.StartsWith(HeaderPrefix, StringComparison.Ordinal)
                     || !content.Contains(FullMarker, StringComparison.Ordinal))
                 {

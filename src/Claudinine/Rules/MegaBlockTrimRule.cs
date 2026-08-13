@@ -41,13 +41,11 @@ internal sealed class MegaBlockTrimRule : ICompactionRule
                 string? field = btype switch
                 {
                     "text" => "text",
-                    "tool_result" when b["content"] is JsonValue cv
-                        && cv.TryGetValue<string>(out _) => "content",
+                    "tool_result" when b["content"].GetStringMemo() is not null => "content",
                     _ => null,
                 };
-                if (field is null)
+                if (field is null || b[field].GetStringMemo() is not string text)
                     continue;
-                string text = b[field]!.GetValue<string>();
                 if (RuleHelpers.Utf8Len(text) <= MaxBlockBytes)
                     continue;
                 // Fixpoint guard: never re-trim our own output (see TrimSentinel).

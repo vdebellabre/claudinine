@@ -226,7 +226,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                     foreach (var tb in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
                         .Where(x => x["type"].GetString() == "text"))
                     {
-                        string t = tb["text"].GetString()?.Trim() ?? "";
+                        string t = tb["text"].GetStringMemo()?.Trim() ?? "";
                         if (t.Length > 0)
                             digest.Append("    (note) ").Append(t.Replace("\n", "\n    ")).Append('\n');
                     }
