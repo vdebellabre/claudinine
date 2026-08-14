@@ -12,7 +12,9 @@ namespace Claudinine.Tests;
 public sealed class SubagentTranscriptTests : IDisposable
 {
     private readonly string _dir;
-    private static readonly string Output = "tool output " + new string('o', 400);
+    // Corpus-sized: see ChainCollapseTests.Output — the economics gate makes the
+    // fixture payload size load-bearing (412b was below the header break-even).
+    private static readonly string Output = "tool output " + new string('o', 2000);
 
     public SubagentTranscriptTests()
     {

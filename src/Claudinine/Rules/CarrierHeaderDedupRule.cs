@@ -69,14 +69,27 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
         }
     }
 
+    /// <summary>
+    /// The slimmed header, exposed so ChainCollapseRule's economics gate can price a
+    /// carrier by what it will cost AFTER this rule runs (see
+    /// ChainCollapseRule.HeaderDedupSavingBytes) rather than by the full instructions
+    /// it is born with.
+    /// </summary>
+    internal static string ShortHeaderFor(string callCount, string sid) =>
+        ShortHeader(callCount, sid);
+
     private static string ShortHeader(string callCount, string sid) =>
-        HeaderPrefix + $"{callCount} separate tool calls. " +
+        HeaderPrefix + $"{ChainCollapseRule.CallCountPhrase(callCount)}. " +
         $"Full outputs: claudinine get {sid} --ref REF [--grep PATTERN | --info | --full | --media] " +
         "(full retrieval guidance in the first collapsed block of this session; if the file " +
         "discussed still exists on disk, read IT instead). " +
         "[ref] lines are a REPORT, not observed output — retrieve, don't infer.]\n\n";
 
-    /// <summary>Digits immediately after the header prefix ("…originally ran 12 separate…").</summary>
+    /// <summary>
+    /// Digits immediately after the header prefix ("…originally ran 12 separate…", or
+    /// "…originally ran 1 tool call" for a single-call carrier — both start with the
+    /// digits, so this parse covers the singular form too).
+    /// </summary>
     private static string? ParseCallCount(string content)
     {
         int start = HeaderPrefix.Length, end = start;

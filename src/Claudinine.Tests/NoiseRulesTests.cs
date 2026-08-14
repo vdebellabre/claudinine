@@ -106,9 +106,19 @@ public sealed class NoiseRulesTests : IDisposable
         string OldOutput(string tag) => string.Join("\n",
             Enumerable.Range(1, 300).Select(i => $"{tag} line {i} " + new string('x', 40)));
         var b = new TranscriptBuilder().UserPrompt("start");
+        // Each fat call is FOLLOWED by an unanswered tool_use in the same turn, which
+        // trips chain-collapse's in-flight guard and makes the turn structurally
+        // uncollapsible — so the age tiers are what act on these results, which is what
+        // this test is about. Without it chain-collapse legitimately claims the turn
+        // first (its economics gate admits single-call turns when the result is fat),
+        // and no payload can satisfy both rules: the age trim only fires when it
+        // SHRINKS the content (ToolResultAgeRule.Rewrite's length check), which needs a
+        // wide payload, and any payload wide enough to trim is also worth collapsing.
         b.BashRead("sed -n '1,5p' unique-old.txt", out string oldId, OldOutput("old"));
+        b.ToolUse("in-flight probe", out _, out _);
         AgeBy(b, AgeIndex.MidAgeTurns + 5); // now mid-age
         b.BashRead("sed -n '1,5p' unique-mid.txt", out string midId, OldOutput("mid"));
+        b.ToolUse("in-flight probe", out _, out _);
         AgeBy(b, AgeIndex.OldAgeTurns - AgeIndex.MidAgeTurns); // first is now old
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
@@ -186,10 +196,15 @@ public sealed class NoiseRulesTests : IDisposable
         string Output(string tag) => string.Join("\n",
             Enumerable.Range(1, 300).Select(i => $"{tag} line {i} " + new string('x', 40)));
         var b = new TranscriptBuilder().UserPrompt("start");
+        // Trailing unanswered call per turn, for the same reason as
+        // OldToolResultsBecomeStubsMidAgeGetTrimmed: it trips chain-collapse's in-flight
+        // guard so the age tiers are what rewrite these MCP array blocks.
         b.McpToolCall("mcp__grafana__query", out string oldId,
             Output("old"), "old meta " + new string('m', 200), "tiny meta");
+        b.ToolUse("in-flight probe", out _, out _);
         AgeBy(b, AgeIndex.MidAgeTurns + 5);
         b.McpToolCall("mcp__grafana__query", out string midId, Output("mid"));
+        b.ToolUse("in-flight probe", out _, out _);
         AgeBy(b, AgeIndex.OldAgeTurns - AgeIndex.MidAgeTurns);
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
@@ -218,9 +233,13 @@ public sealed class NoiseRulesTests : IDisposable
         // Age rule and image-strip rewrite the SAME record in one pass (the second
         // rule must clone the first's replacement, not the original): the big text
         // block gets the age stub, the image gets the retrieval stub.
-        string bigText = string.Join("\n", Enumerable.Range(1, 200).Select(i => $"page line {i}"));
+        // Text above the age floor (100 chars) but the whole result — text PLUS the
+        // base64 image, which the economics gate now prices — under chain-collapse's
+        // break-even, so this single-call turn reaches the age and image rules instead
+        // of being collapsed into a digest first.
+        string bigText = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"page line {i}"));
         var b = new TranscriptBuilder().UserPrompt("look");
-        b.ScreenshotToolCall(out string id, data: new byte[4096], text: bigText);
+        b.ScreenshotToolCall(out string id, data: new byte[64], text: bigText);
         AgeBy(b, AgeIndex.OldAgeTurns + 5);
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
@@ -236,7 +255,12 @@ public sealed class NoiseRulesTests : IDisposable
     [Test]
     public async Task RecentToolResultsUntouched()
     {
-        string bigOutput = string.Join("\n", Enumerable.Range(1, 300).Select(i => $"line {i}"));
+        // Deliberately SMALL: this test is about the age tiers leaving a fresh result
+        // alone, and a single fat call would now be collapsed by chain-collapse's
+        // economics gate (correctly — one large result pays for its own digest),
+        // which would mask what this asserts. Kept under the digest break-even so the
+        // only rule that could touch it is an age rule.
+        string bigOutput = string.Join("\n", Enumerable.Range(1, 12).Select(i => $"line {i}"));
         var b = new TranscriptBuilder().UserPrompt("start");
         b.BashRead("sed -n '1,5p' fresh.txt", out _, bigOutput);
         b.AssistantText("done");

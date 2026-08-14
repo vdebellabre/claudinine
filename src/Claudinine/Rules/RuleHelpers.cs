@@ -230,6 +230,17 @@ internal static class RuleHelpers
         content.StartsWith("[claudinine", StringComparison.Ordinal);
 
     /// <summary>
+    /// True if this tool_result content is a chain-collapse digest carrier. Content
+    /// test rather than envelope test on purpose: the `claudinine.rule` stamp names
+    /// the rule that wrote a record LAST, so a carrier later retrimmed by another
+    /// rule no longer reports "chain-collapse" and a stamp check misses it. Matching
+    /// the header prefix is stable under any number of subsequent rewrites, and the
+    /// prefix is shared with the emitter so the two cannot drift.
+    /// </summary>
+    public static bool IsCarrier(string content) =>
+        content.StartsWith(ChainCollapseRule.CarrierPrefix, StringComparison.Ordinal);
+
+    /// <summary>
     /// Media types of the non-text blocks (base64 images, documents) inside a
     /// tool_result's content array, e.g. "image/png" or "image/png x2". Text
     /// extraction is blind to these blocks, so without this summary a screenshot
@@ -246,6 +257,31 @@ internal static class RuleHelpers
             .ToList();
         return string.Join("+", kinds.GroupBy(k => k)
             .Select(g => g.Count() > 1 ? $"{g.Key} x{g.Count()}" : g.Key));
+    }
+
+    /// <summary>
+    /// Bytes of base64 media payload inside a tool_result's content array.
+    /// <see cref="ResultText"/> is blind to image/document blocks — it extracts only
+    /// text sub-blocks — so any rule sizing a result by its text alone scores a
+    /// screenshot as WEIGHTLESS. That is exactly backwards: a base64 PNG is the
+    /// heaviest thing a tool can return, and collapsing it is the biggest win
+    /// available. Chain-collapse's economics gate adds this to the text length so a
+    /// media-only result is priced by what it actually costs the context.
+    /// </summary>
+    public static int MediaBytes(JsonView toolResultBlock)
+    {
+        var parts = toolResultBlock["content"];
+        if (!parts.IsArray)
+            return 0;
+        int total = 0;
+        foreach (var p in parts.Items)
+        {
+            if (!p.IsObject || p["type"].AsString() is not ("image" or "document"))
+                continue;
+            if (p["source"]["data"].AsStringMemo() is { Length: > 0 } data)
+                total += data.Length; // base64 is ASCII: chars == bytes
+        }
+        return total;
     }
 
     /// <summary>

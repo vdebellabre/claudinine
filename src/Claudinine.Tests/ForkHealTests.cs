@@ -9,7 +9,10 @@ namespace Claudinine.Tests;
 public sealed class ForkHealTests : IDisposable
 {
     private readonly string _dir;
-    private static readonly string LongOutput = new('x', 500);
+    // These tests need the parent to actually CARRY digests, so the fixture payload
+    // has to clear chain-collapse's economics gate (digest must beat the bytes it
+    // replaces). 500b did not; see ChainCollapseTests.Output for the corpus sizing.
+    private static readonly string LongOutput = new('x', 2000);
 
     public ForkHealTests()
     {

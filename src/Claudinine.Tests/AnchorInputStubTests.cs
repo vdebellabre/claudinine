@@ -3,7 +3,9 @@ namespace Claudinine.Tests;
 public sealed class AnchorInputStubTests : IDisposable
 {
     private readonly string _dir;
-    private static readonly string Output = "tool output " + new string('o', 400);
+    // Corpus-sized: see ChainCollapseTests.Output — the economics gate makes the
+    // fixture payload size load-bearing (412b was below the header break-even).
+    private static readonly string Output = "tool output " + new string('o', 2000);
     private static readonly string BigCommand = "python - <<'EOF'\n" + new string('x', 600) + "\nEOF";
 
     public AnchorInputStubTests()
@@ -96,10 +98,11 @@ public sealed class AnchorInputStubTests : IDisposable
     [Test]
     public async Task NonAnchorInputsAreNeverTouched()
     {
-        // A single-call turn does not collapse: its use keeps the full input even
-        // though it is large.
+        // Anchor-input stubbing targets the ANCHOR only. A turn that does not collapse
+        // at all must keep every input verbatim — here the payload is too small to pay
+        // for a digest, so chain-collapse declines and the large input survives.
         var b = new TranscriptBuilder().UserPrompt("single");
-        b.ToolCall("Bash", new JsonObject { ["command"] = BigCommand }, Output);
+        b.ToolCall("Bash", new JsonObject { ["command"] = BigCommand }, "tiny");
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
 
