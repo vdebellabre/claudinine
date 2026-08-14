@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<!-- Named so Claudinine's InternalsVisibleTo covers this harness. NOT part
+		     of the solution — build it standalone, or the assembly name would
+		     collide with the real benchmarks project. -->
+		<AssemblyName>Claudinine.Benchmarks</AssemblyName>
+		<RootNamespace>PassBench</RootNamespace>
+
+		<PublishAot>true</PublishAot>
+		<StripSymbols>true</StripSymbols>
+		<!-- Match the shipped binary exactly; a config drift here silently changes
+		     what the AOT leg measures. -->
+		<OptimizationPreference>Size</OptimizationPreference>
+		<InvariantGlobalization>true</InvariantGlobalization>
+		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+		<ServerGarbageCollection>false</ServerGarbageCollection>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\..\src\Claudinine\Claudinine.csproj" />
+	</ItemGroup>
+
+</Project>

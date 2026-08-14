@@ -1134,3 +1134,72 @@ the machine's full ISA, and the profile's UTF helpers are SIMD-sensitive) — a
 compat decision (raises the CPU floor on six RIDs) for a bounded few percent.
 Parked. Optimization budget stays on allocation reduction: memo storage,
 exception probe, read-layer refactor.
+
+## 2026-08-14 — the 13x multiplier that wasn't: hook budget fully measured
+
+The reconciliation entry above claimed the pass costs "~29 ms in production
+conditions" against 2.2 ms JIT-warm — a ~13x environment multiplier attributed
+to fresh-heap growth, page faults and missing PGO. Challenged, measured, and
+**wrong**. Two new harnesses settle it.
+
+**`eng/bench/passbench/`** times ONLY parse + rules + compute-rewrite, same
+span as `profile`, but buildable as JIT or Native AOT (assembly named
+`Claudinine.Benchmarks` so InternalsVisibleTo covers it; keep it OUT of the
+solution). Same code, same file, same GC (workstation), medians of 5 fresh
+processes × 40 in-process iterations, on the 450 KB size-median transcript:
+
+| | JIT warm | AOT warm | AOT iter 1 (fresh process) | JIT iter 1 |
+|---|---:|---:|---:|---:|
+| 222 KB (p25) | 2.6 | 1.1 | 2.6 | 52 |
+| **450 KB (median)** | **9.5** | **3.0** | **5.6** | 75 |
+| 1.1 MB (p75) | 14.5 | 6.9 | 9.7 | 81 |
+| 2.9 MB (p90) | 48.3 | 23.2 | 29.3 | 118 |
+
+- **AOT-Size is 2-3x FASTER than fully-warmed JIT** on this workload — there
+  is no codegen penalty to explain away, and the PGO rejection above gets a
+  fourth reason: AOT already beats dynamic-PGO JIT here.
+- **The fresh-process penalty is ~1.8x** (5.6 vs 3.0 ms), not 10x. The earlier
+  "~10x multiplier" inference compared the size-median file's AOT time against
+  the TIME-median of the whole corpus — mostly much smaller files. Population
+  mismatch, not physics. (JIT iter 1 at 52-118 ms is first-compile cost — the
+  reason `profile` always warms.)
+
+Second harness: fire the shipped binary by hand (same protocol as `aot`) on
+the 450 KB file, with the scan state and mirror state controlled:
+
+| variant | median |
+|---|---:|
+| spawn floor (`version`), same session | 10.9 ms |
+| A: cold, fresh copy (scan pending, no mirror) | 51.8 ms |
+| B: cold, copy pre-read by another process (scan eaten) | 30.1 ms |
+| C: steady (2nd invocation, file at rest) | 20.2 ms |
+| D: steady, file rewritten with identical bytes (scan pending) | 39.5 ms |
+
+Which decomposes A **exactly**, replacing the previous entry's estimated rows:
+
+| component | ms | how |
+|---|---:|---|
+| process spawn | 10.9 | `version` |
+| filter-driver rescan of the modified transcript | 20.9 | A − B (D − C agrees: 19.3) |
+| the pass itself (AOT, fresh process) | 5.6 | passbench iter 1 |
+| mirror append + rewrite + fsyncs + stamp + dirs | ~14 | B − spawn − pass |
+| **total** | **51.6** | vs 51.8 measured |
+
+Two corrections to carry forward:
+
+1. The scan tax on the binary's real access pattern is **~20 ms**, not the
+   ~14 ms the Python probe suggested (cross-process first-open, and the hook
+   opens the file more than once). The hook I/O machinery is ~14 ms, not ~5 —
+   the two fsyncs were probed accurately but stamp/dir/extra-open costs on a
+   filter-taxed machine were not.
+2. **Variant D is production steady state on this machine.** The app appends
+   to the transcript before every prompt, so the real per-prompt hook cost
+   here is ~39 ms (~20 on a machine without the endpoint agent), and
+   `aot --steady`'s ~20 ms understates it by the full rescan, not by 14.
+
+Net upshot, unchanged in direction but now correctly attributed: on this
+machine roughly **32 of the median file's 52 cold milliseconds are
+environment** (spawn + scan), ~14 are durable-write machinery the mirror-first
+design pays on purpose, and ~6 are the pass. The pass is small, fast, and
+2-3x better compiled than the JIT that profiles it — optimization effort goes
+to allocations because that is what remains ours.
