@@ -1203,3 +1203,64 @@ environment** (spawn + scan), ~14 are durable-write machinery the mirror-first
 design pays on purpose, and ~6 are the pass. The pass is small, fast, and
 2-3x better compiled than the JIT that profiles it — optimization effort goes
 to allocations because that is what remains ours.
+
+## 2026-08-14 — hook I/O by stage: the steady path re-parses the whole mirror
+
+Question behind it: can the ~14 ms of "durable-write machinery" be reduced, or
+is it as good as it gets? Answered with a stage-timed `Compactor.Run` (scratch
+AOT harness, same InternalsVisibleTo trick as passbench: stopwatch around
+TryLoad / TryAppendMissing / rules / TryRewrite, fresh process per run, cells
+prepared like `aot` does). Medians of 7, **scan tax neutralized** by pre-reading
+every file before each invocation (see the trap below):
+
+| stage | 450 KB cold | 450 KB steady | 2.9 MB cold | 2.9 MB steady | 15.6 MB cold | 15.6 MB steady |
+|---|---:|---:|---:|---:|---:|---:|
+| load | 2.6 | 1.0 | 12.5 | 5.3 | 78.2 | 13.4 |
+| **mirror** | 7.4 | **2.6** | 20.0 | **13.9** | 88.0 | **64.7** |
+| rules | 2.3 | 0.5 | 9.1 | 2.5 | 86.4 | 10.2 |
+| rewrite | 4.0 | 0.0 | 17.4 | 0.0 | 30.1 | 0.0 |
+
+The write-side primitives are already right: durable write + fsync + atomic
+rename is the correct shape, the two fsyncs cost ~2-3 ms each and are the
+mirror-first design, and buffered streams would change nothing — writes are
+throughput-bound only on huge files. **The optimizable cost is elsewhere: on
+the steady path, `MirrorFile.TryAppendMissing` reads and `JsonNode.Parse`s the
+ENTIRE mirror on every invocation to rebuild the seen-set — and appends
+nothing.** The mirror is the uncompacted full history, i.e. the largest file
+the hook touches. It is the biggest steady stage at every size and 73% of the
+structural per-prompt cost on the 15.6 MB session (~65 ms every prompt).
+
+Two-tier fix, not yet applied:
+
+1. **Cheap:** identity extraction does not need a JsonNode graph — a
+   `Utf8JsonReader` scan for `uuid` (hash fallback for uuid-less lines) kills
+   most of the parse cost. Same trick the load-path refactor wants.
+2. **Structural:** the mirror is append-only and its tail is already
+   documented as "the progress marker" — persist/derive a high-water mark
+   (tail uuid + line count), verify it by reading only the mirror's last line,
+   and skip the seen-set rebuild entirely when it matches; full re-read stays
+   as the fail-closed fallback on any mismatch. Steady mirror cost becomes
+   O(tail), independent of session size.
+
+Also visible in the cold column: mirror (88 ms) and rules (86 ms) are
+sequential but independent — mirror-first requires durability before the
+REWRITE, not before the rules run. Overlapping them saves ~min(mirror, rules):
+nothing at the median, ~85 ms on the biggest cold pass. Worth doing only if
+the tail sessions matter.
+
+Not optimizable, for completeness: the transcript read itself, the two fsyncs
+(durability is the point), and the environment (spawn + scan).
+
+### Measurement trap: freshly built binaries pay read-scans the shipped one doesn't
+
+First stagebench run (scans NOT neutralized) showed steady load=22.8 /
+mirror=22.6 on the 450 KB file — irreconcilable with the real binary's
+variant C (20.2 ms TOTAL including spawn). The scratch exe, built minutes
+earlier in the temp dir, paid ~20 ms filter-driver scans on files that the
+long-trusted `bench/bin/claudinine.exe` reads for free; same code, same file
+state, different binary reputation. Mechanism not attributed further (endpoint
+agent internals), but the consequence is recordable: **absolute I/O timings
+from a just-built harness are inflated on this machine — neutralize by
+pre-reading the touched files, or compare stages relatively.** The
+scan-neutralized stagebench steady totals (~4 ms + spawn at the median) DO
+reconcile with variant C.
