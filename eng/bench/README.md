@@ -119,7 +119,26 @@ Two guards worth knowing about:
   crash can never be mistaken for a win. Errors are printed above the table.
 
 Wall-clock is reported but is not like-for-like: Claudinine is one native process
-per file, cozempic pays Python startup per file.
+per file, cozempic pays Python startup per file. It is also **not a latency
+measurement** — files run in parallel under a `ProcessPoolExecutor`, so per-file
+times carry contention. Use `steady.py` for anything you intend to quote as hook
+latency; the two disagree by ~40 ms on the cold median for exactly this reason.
+
+## The other tools here
+
+`curate.py` and `compare.py` are the two you need to reproduce the published
+table. The rest answer narrower questions and are each documented in their own
+module docstring:
+
+| tool | question it answers |
+|---|---|
+| `steady.py` | What does a user wait for **per prompt**? Serial, one process per invocation, startup included — the source for every latency number in the docs. Reports steady-state and cold columns side by side. |
+| `census.py` | What is a transcript actually **made of**? Content census over the baseline corpus using compare.py's ruler, so its percentages are directly comparable to the head-to-head. |
+| `mincalls.py` | Is `ChainCollapseRule.MinCalls` set right? Prices every collapse both ways from the corpus and reports the threshold study behind the shipped gate. |
+| `passbench/` | How much of an invocation is the **pass** versus process startup and I/O? Times parse + rules + compute-rewrite only, runnable as JIT or Native AOT to separate codegen effects. |
+
+Findings from all of them land in `profiling-notes.md`, which is the running
+record; this file documents the harness, not the results.
 
 ## Manifest
 

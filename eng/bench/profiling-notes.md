@@ -110,7 +110,9 @@ payloads) is load-bearing for the win.
 
 ## 2026-08-14 — rewrite-path re-parse, split traffic, dedup hashing
 
-Post-memo profile (Report20260814-0021.diagsession): `TryGetValue` self fell
+Post-memo profile (VS CPU Usage, `profile --full`; the recording itself has
+since been deleted — re-record with the steps in the benchmarks README if these
+need re-checking): `TryGetValue` self fell
 13.7% → 8.0%; new ceiling is `JsonDocument.Parse` 12.4%, `SplitInternal` 8.9%,
 `InitializeDictionary` 8.8%. Three interventions, each interleaved-A/B'd with
 byte-identical output:
