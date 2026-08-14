@@ -647,3 +647,62 @@ Newest-first picked `src/Claudinine/bin/Release/net10.0/win-x64/native/claudinin
 left behind by a command-line publish. The verb was silently benchmarking a binary
 that was deliberately not shipped. `FindAotBinary` now skips any directory named
 `native`.
+
+## 2026-08-14 — can process startup be reduced? No: it is not ours
+
+Steady state is ~17 ms/invocation and `claudinine version` is ~12 ms of that, so
+startup looked like the obvious remaining target. It is not — the cost does not
+belong to the binary.
+
+Measured with a dedicated spawn harness (`Process.Start` + drain + `WaitForExit`,
+80 iterations, medians), against a Native AOT executable whose entire body is
+`return 0`, published with the same properties as the real one:
+
+| target | min | median | p90 |
+|---|---:|---:|---:|
+| empty AOT exe (`return 0`) | 10.4 | 11.3 | 12.0 ms |
+| `claudinine.exe version` | 9.6 | **10.9** | 11.9 ms |
+
+**The real binary is not slower than a do-nothing AOT binary of the same shape.**
+Cross-checked from PowerShell, where `cmd /c rem` — an unrelated process — costs
+11.3 ms median. So ~11 ms is the Windows process-creation floor on this machine and
+our managed startup is ~0 on top of it. There is nothing in `Program.cs` to trim:
+the entry point is a `switch` over `args` with no DI, config, or logging init, and
+`Dbg.Enabled` is a single `GetEnvironmentVariable`.
+
+Not a first-touch antivirus scan either. Defender real-time protection is enabled
+(`DisableRealtimeMonitoring: False`), but freshly-copied never-before-executed
+binaries spawn at the same speed as warm ones (11.5 / 11.3 / 11.3 ms), so the cost
+is the steady per-spawn path, not image scanning.
+
+### What this rules out
+
+Ideas that cannot help, so they should not be tried:
+
+- **Smaller binary.** The 816 KB empty exe and the 3.06 MB real one spawn at the
+  same speed. Confirms the trimming-switch conclusion from a second direction:
+  those 250 KB were never going to buy latency.
+- **Trimming managed startup.** Already ~0.
+- **`OptimizationPreference` / GC flags.** Startup was equal across every variant
+  measured earlier.
+
+### What could actually help, none of it in this project
+
+The only real lever is **spawning fewer processes**, which is the app's call, not
+the plugin's: hooks are invoked one process per event by design. A persistent
+daemon that hooks talk to over a pipe would amortize the 11 ms, but that trades a
+stateless, crash-safe design for a resident process, and the mirror-first invariant
+is much easier to reason about when every invocation is independent. Not worth it
+for 11 ms.
+
+Environment-side, a Defender exclusion for the plugin binary might shave part of the
+floor, but it needs admin rights, cannot be shipped, and would be measuring the
+user's machine rather than the code.
+
+### Where the remaining time actually is
+
+Steady state ~17 ms = ~11 ms OS floor + ~6 ms of pass. The pass half is nearly
+floor-bound already. The cold pass (~59 ms median, ~84 ms mean) is where the ~48 ms
+of real work lives, and that is where the `TryGetValue` decode traffic from the
+first profile pays off. **Optimization effort belongs in the cold pass, not in
+startup.**
