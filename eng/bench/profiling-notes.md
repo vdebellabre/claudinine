@@ -533,3 +533,65 @@ Method lesson, twice over now: when testing whether a property matters, remove i
 from the project file — do not just omit it from the command line, where the
 project's own value still applies. Both invalid results in these notes came from
 exactly that.
+
+## 2026-08-14 — framework trimming feature switches: investigated, none adopted
+
+Went through every switch on
+<https://learn.microsoft.com/en-us/dotnet/core/deploying/trimming/trimming-options#trim-framework-library-features>.
+**Conclusion: nothing to add.** Do not re-investigate without new information —
+the reason is not "probably fine", it is measured.
+
+### Most are already set by PublishAot
+
+Dumped from the generated runtimeconfig of the current build. Already `false` (or
+already optimized) without any csproj entry:
+
+`EventSourceSupport`, `Http3Support`, `MetadataUpdaterSupport`,
+`AutoreleasePoolSupport`, `EnableUnsafeBinaryFormatterSerialization`,
+`EnableUnsafeUTF7Encoding`, `CustomResourceTypesSupport`,
+`BuiltInComInteropSupport`, `StartupHookSupport`, `EnableCppCLIHostActivation`,
+and `UseSizeOptimizedLinq` (already on). Adding any of these is a literal no-op.
+
+Not applicable: `UseNativeHttpHandler` (Android/iOS only),
+`XmlResolverIsNetworkingEnabledByDefault` (no `System.Xml` usage in the project),
+`DebuggerSupport` (symbol removal already covered by `TrimmerRemoveSymbols`),
+`StackTraceLineNumberSupport` (.NET 11+, and it *adds* size).
+
+`MetricsSupport=false` was built anyway to check: **byte-identical** output, since
+nothing references `System.Diagnostics.Metrics`.
+
+### Only two switches change anything, and both are size-only
+
+No measurable runtime difference — agent tier, 3 interleaved rounds, medians
+47.3-49.0 ms across every variant including the combined one:
+
+| variant | size | delta |
+|---|---:|---:|
+| current | 3,058,176 | — |
+| `StackTraceSupport=false` | 2,802,176 | −250 KB |
+| `UseSystemResourceKeys=true` | 3,033,600 | −24 KB |
+| both | 2,763,776 | −288 KB |
+
+**`UseSystemResourceKeys=true` — rejected.** It strips framework exception
+messages. Measured on an AOT probe:
+
+    Could not find a part of the path 'Z:\missing.txt'.  ->  IO_PathNotFound_Path, Z:\missing.txt
+    'n' is an invalid start of a property name...        ->  ExpectedStartOfPropertyNotFound, n
+    Index was outside the bounds of the array.           ->  Arg_IndexOutOfRangeException
+
+The code surfaces `e.Message` in 9 user-facing places (`restore failed writing the
+transcript:`, `clone failed:`, `get failed:`, several `Dbg.Log` calls), so a bug
+report would arrive as an opaque resource ID. 24 KB is not worth that.
+
+**`StackTraceSupport=false` — rejected.** It preserves `e.Message` and only
+degrades frame names to raw addresses (`at claudinine!<BaseAddress>+0x3c3b`), and
+nothing in the codebase reads `.StackTrace` or `Exception.ToString()`, so it looks
+free. It is not: `Compactor.cs` has `catch when (!Dbg.Enabled)` specifically so a
+misbehaving rule **crashes** under `CLAUDININE_DEBUG=1` rather than being
+swallowed. In that path the runtime-printed stack trace is the whole diagnostic for
+finding which rule broke. Trading that for 250 KB in a plugin-cache binary is not
+worth it.
+
+General rule this establishes: these switches trade binary size for diagnosability
+and buy **no throughput** on this workload. Size is not a constraint here, so the
+default answer is no.
