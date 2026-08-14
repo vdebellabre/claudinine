@@ -895,3 +895,59 @@ need ETW on a clean Windows box (`perfview /threadTime` with the `PROC_THREAD` a
 `LOADER` providers) to separate loader time from callback dispatch. That is a
 Windows-internals question, not a Claudinine one, and it does not change the
 actionable split: ~10 ms belongs to the platform, ~1 ms to this code.
+
+## 2026-08-14 — startup is not just "not ours", it is architecturally unreachable
+
+Closes the question for good. The earlier daemon remark ("a persistent daemon that
+hooks talk to over a pipe would amortize the 11 ms") overstated what a daemon could
+buy, and correcting that removes the last apparent lever.
+
+### A daemon cannot recover the floor
+
+`hooks/hooks.json` registers `type: "command"` hooks — the only hook mechanism
+Claude Code offers. It spawns **one process per event, unconditionally**. A resident
+daemon would still need a spawned client per event to reach it over the pipe, and
+that client pays the same ~10 ms Windows process-creation floor as `claudinine.exe`
+does today (the CI baseline proved the floor is indifferent to what the process
+contains — an empty AOT exe costs 10.16 ms).
+
+So a daemon's maximum theoretical saving is the **pass** portion of a steady-state
+invocation (~6 ms), not the ~11 ms floor. The floor is charged to the client spawn
+either way. On top of the design costs already recorded (resident process, losing
+the stateless crash-safe model, mirror-first invariant harder to reason about),
+the payoff ceiling is ~6 ms per prompt. **Excluded by design decision** — do not
+re-propose it.
+
+### Hidden cost the harness does not see
+
+Claude Code runs the hook command string through a shell, so production likely pays
+a shell spawn on top of the claudinine spawn per event. The `aot` harness does a
+direct `Process.Start` of the binary and never measures this. Not instrumented, and
+not actionable from this codebase regardless — the shell is upstream's choice.
+
+### The complete lever list, none worth pulling
+
+1. **Upstream: persistent/socket hooks in Claude Code.** The only true fix, and the
+   only party that can remove the per-event spawn. Feature-request territory; the
+   2026-08-10 upstream survey found zero Anthropic replies on that class of issue.
+2. **Register fewer events.** Dropping `UserPromptSubmit` removes the per-prompt
+   spawn entirely, but trades away per-prompt compaction freshness — the product's
+   point — to save ~17 ms per prompt. Bad trade.
+3. **OS choice.** Linux floor is 1.7–2.5 ms. A fact, not a lever.
+
+Binary-side levers were all measured dead earlier in these notes: size, trimming
+switches, `OptimizationPreference`, GC flags — zero effect on startup; the delta
+over an empty AOT exe is ~1–3.4 ms on every RID and that delta is the entire budget
+this code could ever recover.
+
+### Perspective on "startup dominates"
+
+True but with a tiny denominator: ~11 ms of a ~17 ms steady invocation, inside a
+prompt turn that costs seconds of model latency — under half a percent of what the
+user actually waits for. And the macOS floor is probably pessimistic: the 20.9 ms
+osx-arm64 number is GitHub's virtualized runner; bare Apple Silicon spawns in a few
+ms, so real macOS users likely sit closer to Linux than to Windows.
+
+**Verdict: startup optimization is closed.** The hook-command architecture
+guarantees one process spawn per event no matter what is built on this side.
+Remaining optimization budget belongs to the cold pass (~48 ms of real work).
