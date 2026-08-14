@@ -484,3 +484,52 @@ both sides rather than an open question:
 If the goal is user-visible hook latency, workstation wins. Note that flipping it
 makes the `run` verb's numbers ~30% worse, so re-baseline the notes above if it
 changes; `bench`/`run` remain useful for relative comparisons either way.
+
+## 2026-08-14 (applied) — workstation GC shipped, explicit Size restored
+
+`ServerGarbageCollection=false` is now in the csproj, with the rationale and the
+"do not restore this from a `run` number" warning inline. Verified on the actual
+shipped binary against a server-GC control built from identical code, agent tier
+medians: workstation 46.6 / 47.2 / 46.6 ms vs server 56.3 / 56.7 / 54.8 ms. The
+~8 ms / ~15% win reproduces with no overlap.
+
+New full-corpus baseline (`aot --event UserPromptSubmit`, 174 files / 189.2 MB):
+mean 83.6 ms, median 58.9 ms, p95 186.1 ms, floor 41.8 ms. Solution builds with
+0 warnings; 275/275 tests pass.
+
+### Correction: the ILCompiler default is NOT `Size`
+
+The entry above ("`Balanced` does not exist — the default IS `Size`") is **wrong**.
+That test was invalid: the csproj still contained `OptimizationPreference=Size` at
+the time, so the "no explicit setting" build inherited it and the comparison was
+Size against Size.
+
+Re-measured with the property genuinely absent from the csproj — three distinct
+binaries:
+
+| setting | size |
+|---|---:|
+| explicit `Size` | 3,058,176 bytes |
+| **default (property absent)** | **3,589,632 bytes** |
+| explicit `Speed` | 3,786,240 bytes |
+
+So there are three real options, and the default is its own middle ground. The
+original "none = balanced" reading was correct.
+
+Timing all three (workstation GC, agent tier, 3 interleaved rounds) — medians in ms:
+
+| round | Size | default | Speed |
+|---|---:|---:|---:|
+| 1 | 48.1 | 48.0 | 48.7 |
+| 2 | 47.8 | 48.4 | 47.7 |
+| 3 | 48.7 | 48.5 | 47.2 |
+
+All three are within noise. The choice is therefore purely about binary size, and
+`OptimizationPreference=Size` is set explicitly: **531 KB smaller than the default,
+728 KB smaller than `Speed`, for no measurable time cost.** Leaving the property
+absent silently ships the larger middle binary.
+
+Method lesson, twice over now: when testing whether a property matters, remove it
+from the project file — do not just omit it from the command line, where the
+project's own value still applies. Both invalid results in these notes came from
+exactly that.
