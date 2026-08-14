@@ -5,12 +5,23 @@ saves. The effectiveness number (token reduction) is a different tool entirely:
 `eng/bench/compare.py`. Do not conflate the two, and do not quote a byte
 percentage from here as a context saving.
 
-Three entry points, for three different questions.
+Three entry points, for three different questions. `profile` and `aot` both
+require a mode, and the two modes share one vocabulary:
 
-## `run` — full-corpus pass, the profiler target
+- **`--full`** — uncompacted input. The workload of a fresh or resumed session;
+  the worst case, and where the compaction work actually lives.
+- **`--steady`** — input settled by one untimed pass first. The workload of
+  prompt N once 1..N-1 are compacted; the common case, several times faster.
+
+The mode is required rather than defaulted because the numbers differ
+several-fold and quoting one for the other is the recurring trap in
+`eng/bench/profiling-notes.md`. (Entries there predating the rename say
+`run --warmup` — that is today's `profile --full --warmup`.)
+
+## `profile` — full-corpus pass in-process, the profiler target
 
 ```bash
-dotnet run -c Release --project src/Claudinine.Benchmarks -- run --warmup
+dotnet run -c Release --project src/Claudinine.Benchmarks -- profile --full --warmup
 ```
 
 Compacts all 174 corpus transcripts in ONE process: no child processes, no
@@ -18,10 +29,19 @@ generated runner assembly, no JIT-warmup orchestration. That is what makes it
 usable under a sampling profiler — every sample lands in our own call tree,
 attributable to a rule.
 
+`profile --steady` settles each file in memory first (parse, apply rules, take
+the rewritten text), then measures passes over that settled text — useful for
+profiling what a per-prompt invocation actually does. The settling pass warms
+the JIT as a side effect, so `--warmup` is only meaningful with `--full`. The
+report replaces the byte-saving line with an `at rest` count: if files are
+still shrinking during timed passes, the steady premise broke and the report
+says so.
+
 ### Under the Visual Studio profiler
 
 1. Set **Claudinine.Benchmarks** as the startup project.
-2. Set its launch arguments to **`run --warmup -n 20`** (see below on why `-n`).
+2. Set its launch arguments to **`profile --full --warmup -n 20`** (see below on
+   why `-n`).
 3. **Debug > Performance Profiler** (`Alt+F2`), tick **CPU Usage**, then Start.
 4. Build configuration must be **Release** — the project defaults to it, so
    `dotnet run` without `-c` is already correct here, but the VS configuration
@@ -50,8 +70,9 @@ region, so extra iterations are pure compute and add no disk time to the profile
 The CLI prints a reminder when it is run at the `-n 1` default.
 
 Note that `pass time` and the per-file stats describe the **last** iteration —
-the warmed, steady-state one. `wall clock` covers all iterations, so at `-n 20`
-the two legitimately differ by ~20x.
+the fully warmed one ("steady" is reserved for the input mode, a different
+axis). `wall clock` covers all iterations, so at `-n 20` the two legitimately
+differ by ~20x.
 
 Options: `-n/--iterations N` (repeat the corpus), `--limit N` (only the N
 smallest files — a fast edit/profile loop), `--only main|agent`, `-v/--verbose`
@@ -63,14 +84,19 @@ files, so a regression shows up as a shifted tail rather than a moved average.
 ## `aot` — wall clock of the shipped binary
 
 ```bash
-dotnet run -c Release --project src/Claudinine.Benchmarks -- aot
+dotnet run -c Release --project src/Claudinine.Benchmarks -- aot --full
 ```
 
-The only measurement here that sees what a user actually waits for. `run` and
-`bench` both time JIT-compiled code in a warm, long-lived process; production
-spawns the Native AOT binary once per hook event, feeds it a JSON payload on
-stdin, and it exits. This verb reproduces that: one subprocess per invocation,
-process startup included.
+The only measurement here that sees what a user actually waits for. `profile`
+and `bench` both time JIT-compiled code in a warm, long-lived process;
+production spawns the Native AOT binary once per hook event, feeds it a JSON
+payload on stdin, and it exits. This verb reproduces that: one subprocess per
+invocation, process startup included.
+
+`aot --full` gives every invocation a pristine, uncompacted copy. `aot --steady
+[N]` warms each copy once untimed, then times N passes (default 3) over the
+settled file and reports the median — the same method as `eng/bench/steady.py`,
+and the two agree to ~0.1 ms.
 
 It times two events, because they do different amounts of work —
 `UserPromptSubmit` (the per-prompt critical path, session file only) and
@@ -156,7 +182,7 @@ switched between the two would be worse than no number at all.
 `OptimizationPreference=Size`; BenchmarkDotNet measures JIT-compiled managed
 code and cannot host an AOT build (it must emit and compile a runner assembly).
 Use these numbers for *relative* comparisons — which rule dominates, did this
-change help — and `run` under a profiler for the shape of the real thing.
+change help — and `profile` under a profiler for the shape of the real thing.
 
 ## Corpus
 

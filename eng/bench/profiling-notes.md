@@ -951,3 +951,29 @@ ms, so real macOS users likely sit closer to Linux than to Windows.
 **Verdict: startup optimization is closed.** The hook-command architecture
 guarantees one process spawn per event no matter what is built on this side.
 Remaining optimization budget belongs to the cold pass (~48 ms of real work).
+
+## 2026-08-14 — harness verbs reworked: `profile`/`aot` × `--full`/`--steady`
+
+The CLI grew organically and its vocabulary had become a trap: `run --warmup`
+sounded like a warm/steady measurement but always fed pristine, uncompacted
+text (cold *workload*, warm *JIT* — two different axes), while `aot` defaulted
+silently to the cold pass. Reworked so the input-state axis is explicit and
+shared by both verbs:
+
+- `run` is renamed **`profile`** (it is the profiler target, not "the" run).
+- Both `profile` and `aot` now REQUIRE a mode: **`--full`** (uncompacted input,
+  the fresh/resumed-session worst case) or **`--steady`** (input settled by one
+  untimed pass, the per-prompt common case). No default is guessed — the
+  numbers differ several-fold and misquoting them is the recurring mistake this
+  file documents.
+- `profile --steady` is NEW: settles each file in memory (parse → rules →
+  `TryComputeRewrite` text) before the measured passes, and reports an
+  `at rest` count instead of a byte saving, same premise guard as `aot
+  --steady` / steady.py. Settling doubles as the JIT warm-up, so `--warmup`
+  only matters with `--full`.
+
+Reading older entries: `run --warmup [-n N]` = today's `profile --full
+--warmup [-n N]`; bare `aot` = today's `aot --full`; `aot --steady` unchanged.
+VS launch profile updated to `profile --full --warmup -n 20`. Smoke-tested all
+four verb×mode combinations (steady premise held 10/10 in-process, 3/3
+subprocess); 275/275 tests pass.

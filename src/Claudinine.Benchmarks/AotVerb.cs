@@ -9,10 +9,16 @@ namespace Claudinine.Benchmarks;
 /// payload on stdin, one process per event.
 ///
 /// This is the only measurement here that sees what a user actually waits for.
-/// `run` and the BenchmarkDotNet suite both measure JIT-compiled code in a warm,
-/// long-lived process; production is a cold AOT process that starts, compacts one
-/// file, and exits. Startup is therefore not overhead to be excluded — for a small
-/// transcript it IS the measurement.
+/// `profile` and the BenchmarkDotNet suite both measure JIT-compiled code in a
+/// warm, long-lived process; production is a cold AOT process that starts,
+/// compacts one file, and exits. Startup is therefore not overhead to be
+/// excluded — for a small transcript it IS the measurement.
+///
+/// Two modes, sharing their vocabulary with `profile`, and REQUIRED for the same
+/// reason there: --full gives every invocation a pristine, uncompacted copy (the
+/// fresh/resumed-session worst case), --steady warms each copy once untimed and
+/// times passes over the settled file (the per-prompt common case). The numbers
+/// differ several-fold; a bare `aot` refuses to guess which one you meant.
 ///
 /// Three invariants, each of which produced a wrong number before it was fixed:
 ///
@@ -30,8 +36,8 @@ internal static class AotVerb
     /// <summary>Hook events worth timing separately, and why they differ.</summary>
     private static readonly (string Event, string What)[] Events =
     [
-        ("UserPromptSubmit", "steady state: the per-prompt critical path, session file only"),
-        ("SessionStart", "cold open: adds the subagent sweep, mirror GC and session-dir GC"),
+        ("UserPromptSubmit", "the per-prompt critical path, session file only"),
+        ("SessionStart", "adds the subagent sweep, mirror GC and session-dir GC"),
     ];
 
     public static int Run(string[] args)
@@ -41,12 +47,16 @@ internal static class AotVerb
         int limit = int.MaxValue, iterations = 1;
         string? evt = null;
         bool verbose = false, keepWorkspace = false;
-        int steadyRepeat = 0; // 0 = cold mode (pristine input per invocation)
+        bool fullMode = false;
+        int steadyRepeat = 0;
 
         for (int i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
+                case "--full":
+                    fullMode = true;
+                    break;
                 case "--exe" when i + 1 < args.Length:
                     exe = args[++i];
                     break;
@@ -82,6 +92,21 @@ internal static class AotVerb
                     Console.Error.WriteLine($"unknown option: {args[i]}");
                     return 1;
             }
+        }
+
+        if (fullMode && steadyRepeat > 0)
+        {
+            Console.Error.WriteLine("--full and --steady are mutually exclusive");
+            return 1;
+        }
+        if (!fullMode && steadyRepeat == 0)
+        {
+            Console.Error.WriteLine(
+                "aot needs a mode: --full (pristine, uncompacted copy per invocation,"
+                + " fresh/resumed-session workload) or --steady [N] (file settled first,"
+                + " per-prompt workload). The numbers differ several-fold, so no default"
+                + " is guessed.");
+            return 1;
         }
 
         exe ??= FindAotBinary();
@@ -141,8 +166,8 @@ internal static class AotVerb
             foreach ((string name, string what) in events)
             {
                 string mode = steadyRepeat > 0
-                    ? $"STEADY STATE — file already compacted, median of {steadyRepeat} pass(es)"
-                    : what;
+                    ? $"STEADY — file already compacted, median of {steadyRepeat} pass(es); {what}"
+                    : $"FULL — pristine, uncompacted copy per invocation; {what}";
                 Console.WriteLine($"=== {name} — {mode}");
                 var results = new List<Invocation>();
                 if (steadyRepeat > 0)
@@ -183,9 +208,9 @@ internal static class AotVerb
     /// passes over that settled file and returns the median.
     ///
     /// This is the same method as eng/bench/steady.py, and it answers a different
-    /// question from the default cold mode — see the note in Report(). The cold
-    /// number is the worst case (a fresh session or a resumed one); this is the
-    /// common case. Both are real; quoting one for the other is the trap.
+    /// question from --full — see the note in Report(). The full number is the
+    /// worst case (a fresh session or a resumed one); this is the common case.
+    /// Both are real; quoting one for the other is the trap.
     /// </summary>
     private static Invocation TimeSteady(
         string exe, FileInfo source, string hookEvent, string workspace, int repeat)
@@ -354,7 +379,7 @@ internal static class AotVerb
         {
             Console.WriteLine();
             Console.WriteLine("  This is the COMMON case: prompt N with 1..N-1 already compacted.");
-            Console.WriteLine("  Run without --steady for the COLD case (fresh/resumed session,");
+            Console.WriteLine("  Run with --full for the worst case (fresh/resumed session,");
             Console.WriteLine("  untouched transcript) — several times larger. Both are real.");
         }
     }

@@ -4,7 +4,7 @@ using Claudinine.Benchmarks;
 
 int exitCode = args switch
 {
-    ["run", .. var runArgs] => RunVerb.Run(runArgs),
+    ["profile", .. var profileArgs] => ProfileVerb.Run(profileArgs),
     ["aot", .. var aotArgs] => AotVerb.Run(aotArgs),
     ["bench", .. var benchArgs] => Bench(benchArgs),
     _ => Usage(),
@@ -53,38 +53,41 @@ static int Usage()
 {
     Console.Error.WriteLine(
         """
-        usage: Claudinine.Benchmarks <run|aot|bench> [options]
+        usage: Claudinine.Benchmarks <profile|aot|bench> --full|--steady [options]
 
-          run     Compact the whole corpus once, in-process. This is the
-                  profiler target — launch it under the Visual Studio
-                  Performance Profiler to get a per-rule call tree.
+        `profile` and `aot` both REQUIRE a mode, because the two workloads differ
+        several-fold and quoting one for the other is the recurring trap:
+
+          --full     uncompacted input: the fresh/resumed-session workload,
+                     the worst case.
+          --steady   input settled by one untimed pass first: the per-prompt
+                     workload, the common case.
+
+          profile  Compact the whole corpus in-process (JIT, one long-lived
+                   process). This is the profiler target — launch it under the
+                   Visual Studio Performance Profiler for a per-rule call tree.
 
                     --iterations, -n N   repeat the corpus N times (default 1)
                     --limit N            only the N smallest files
                     --only main|agent    restrict to one corpus half
                     --warmup             unmeasured JIT-warming pass first
+                                         (--steady's settling pass already
+                                         warms, so only useful with --full)
                     --verbose, -v        per-file timing lines
 
-          aot     Wall-clock the SHIPPED Native AOT binary, invoked as a
-                  subprocess with a hook payload on stdin — one process per
-                  event, exactly as the app runs it. Includes process startup,
-                  which `run` and `bench` (warm, in-process, JIT) both exclude.
-                  Operates on a throwaway copy; never touches bench/corpus.
-
-                  By default this is the COLD pass: every invocation gets a
-                  pristine, uncompacted transcript. That is the worst case — a
-                  fresh or resumed session. Use --steady for the common case.
+          aot      Wall-clock the SHIPPED Native AOT binary, invoked as a
+                   subprocess with a hook payload on stdin — one process per
+                   event, exactly as the app runs it. Includes process startup,
+                   which `profile` and `bench` (warm, in-process, JIT) both
+                   exclude. Operates on a throwaway copy; never touches
+                   bench/corpus. --steady here matches eng/bench/steady.py.
 
                     --exe PATH           binary to time (default: newest AOT
                                          publish found under bench/bin, publish/
                                          or src/.../bin/Release)
                     --event NAME         only UserPromptSubmit, or SessionStart
-                    --steady [N]         steady state instead of cold: warm each
-                                         file once (untimed), then time N passes
-                                         over the settled file (default 3).
-                                         Matches eng/bench/steady.py. Several
-                                         times faster than cold — not the same
-                                         number, do not compare the two.
+                    --steady [N]         optional pass count per file (default 3;
+                                         the median is reported)
                     --iterations, -n N   repeat the corpus N times (default 1)
                     --limit N            only the N smallest files
                     --only main|agent    restrict to one corpus half

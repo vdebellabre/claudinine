@@ -3,8 +3,8 @@ using Claudinine.Transcript;
 namespace Claudinine.Benchmarks;
 
 /// <summary>
-/// The measurement core shared by the BenchmarkDotNet suite and the `run` verb,
-/// so both exercise the same code path and their numbers stay comparable.
+/// The measurement core shared by the BenchmarkDotNet suite and the `profile`
+/// verb, so both exercise the same code path and their numbers stay comparable.
 /// </summary>
 internal static class Harness
 {
@@ -24,7 +24,7 @@ internal static class Harness
     /// calling the real thing means it cannot drift). The file half — length
     /// re-check and atomic swap — stays out: the corpus is the fixed, private,
     /// hard-to-rebuild baseline the effectiveness numbers depend on, so no
-    /// benchmark may write to it; the run verb copies to a scratch dir when it
+    /// benchmark may write to it; the aot verb copies to a scratch dir when it
     /// wants the real thing.
     ///
     /// Returns the resulting line count, purely so callers have a value the JIT
