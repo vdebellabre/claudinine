@@ -18,22 +18,43 @@ internal sealed class DocumentDedupRule : ICompactionRule
 
     public void Apply(TranscriptFile transcript)
     {
-        // Pass 1: hash every big-enough block, in file order.
-        var occurrences = new Dictionary<string, List<(TranscriptRecord Rec, int BlockIndex)>>();
+        // Pass 1a: bucket every big-enough block by TEXT LENGTH, in file order.
+        // Equal text implies equal length, so only blocks sharing a length can be
+        // duplicates — hashing length-unique blocks (the vast majority) is wasted
+        // SHA-256 over megabytes.
+        var byLength = new Dictionary<int, List<(TranscriptRecord Rec, int BlockIndex, string Text)>>();
         foreach (var rec in transcript.Records)
         {
             if (rec.IsProtected())
                 continue;
             int bi = -1;
-            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
+            foreach (var block in RuleHelpers.ContentBlocks(rec.CurrentView))
             {
                 bi++;
                 string text = RuleHelpers.TextOf(block);
                 if (RuleHelpers.Utf8Len(text) < MinBlockBytes)
                     continue;
-                string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
-                if (!occurrences.TryGetValue(hash, out var list))
-                    occurrences[hash] = list = [];
+                if (!byLength.TryGetValue(text.Length, out var bucket))
+                    byLength[text.Length] = bucket = [];
+                bucket.Add((rec, bi, text));
+            }
+        }
+
+        // Pass 1b: group only within length collisions, keyed by the text itself —
+        // the strings are already in memory, so a dictionary probe (allocation-free
+        // hash + ordinal compare on collision) beats copying each block to UTF-8
+        // bytes for a SHA-256. File order is preserved: buckets keep insertion
+        // order, so "first occurrence" stays the earliest.
+        var occurrences = new Dictionary<string, List<(TranscriptRecord Rec, int BlockIndex)>>(
+            StringComparer.Ordinal);
+        foreach (var bucket in byLength.Values)
+        {
+            if (bucket.Count <= 1)
+                continue;
+            foreach ((var rec, int bi, string text) in bucket)
+            {
+                if (!occurrences.TryGetValue(text, out var list))
+                    occurrences[text] = list = [];
                 list.Add((rec, bi));
             }
         }
@@ -45,15 +66,14 @@ internal sealed class DocumentDedupRule : ICompactionRule
                 continue;
             foreach ((var rec, int blockIndex) in list.Skip(1))
             {
-                var node = RuleHelpers.CurrentNode(rec);
-                if (RuleHelpers.ContentBlocks(node).ElementAtOrDefault(blockIndex) is not JsonObject block)
+                var block = RuleHelpers.ContentBlocks(rec.CurrentView).ElementAtOrDefault(blockIndex);
+                if (!block.IsObject)
                     continue;
                 // Only text and string tool_results, like the original.
-                string? field = block["type"].GetString() switch
+                string? field = block["type"].AsString() switch
                 {
                     "text" => "text",
-                    "tool_result" when block["content"] is JsonValue cv
-                        && cv.TryGetValue<string>(out _) => "content",
+                    "tool_result" when block["content"].AsStringMemo() is not null => "content",
                     _ => null,
                 };
                 if (field is null)
@@ -63,7 +83,7 @@ internal sealed class DocumentDedupRule : ICompactionRule
                 preview = preview[..Math.Min(80, preview.Length)].Replace('\n', ' ');
 
                 JsonObject? clone = null;
-                RuleHelpers.CloneBlockAt(ref clone, node, blockIndex)[field] =
+                RuleHelpers.CloneBlockAt(ref clone, rec, blockIndex)[field] =
                     $"[claudinine: duplicate content removed — first seen earlier: {preview}...]";
                 RuleHelpers.SetReplacement(rec, clone!, Name);
             }

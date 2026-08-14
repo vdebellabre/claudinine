@@ -30,7 +30,10 @@ public sealed class RestoreVerbTests : IDisposable
     /// <summary>A session rich enough that several rules fire.</summary>
     private string BuildCompactableSession()
     {
-        string output = "tool output " + new string('o', 400);
+        // Corpus-sized: see ChainCollapseTests.Output — chain-collapse only fires when
+        // the digest beats the payload it replaces, so 412b would leave this session
+        // uncompacted and the restore path untested.
+        string output = "tool output " + new string('o', 2000);
         var b = new TranscriptBuilder().UserPrompt("do the thing");
         for (int i = 0; i < 3; i++)
             b.ToolCall("Bash", new JsonObject { ["command"] = $"echo step {i}" }, output + i);

@@ -27,13 +27,12 @@ internal sealed class AgeIndex
 
         for (int i = 0; i < records.Count; i++)
         {
-            var node = records[i].Node;
+            var node = records[i].View;
             if (RuleHelpers.IsUserPrompt(node))
                 totalTurns++;
             turnOf[i] = totalTurns;
 
-            totalResults += RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                .Count(b => b["type"].GetString() == "tool_result");
+            totalResults += RuleHelpers.BlocksOfType(node, "tool_result").Count();
             resultsThrough[i] = totalResults;
         }
 

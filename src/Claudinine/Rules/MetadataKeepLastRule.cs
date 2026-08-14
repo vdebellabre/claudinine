@@ -21,20 +21,7 @@ internal sealed class MetadataKeepLastRule : ICompactionRule
 
     public void Apply(TranscriptFile transcript)
     {
-        var records = transcript.Records;
         foreach (string type in KeepLastTypes)
-        {
-            int last = -1;
-            for (int i = 0; i < records.Count; i++)
-            {
-                if (records[i].Type == type)
-                    last = i;
-            }
-            for (int i = 0; i < last; i++)
-            {
-                if (records[i].Type == type && !records[i].IsProtected())
-                    records[i].Removed = true;
-            }
-        }
+            RuleHelpers.RemoveAllButLast(transcript.Records, r => r.Type == type);
     }
 }

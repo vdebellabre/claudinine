@@ -86,7 +86,7 @@ internal static class RestoreVerb
         try
         {
             Jsonl.ReplaceAtomically(transcriptPath,
-                string.Concat(restored.Select(l => l.Raw + "\n")));
+                restored.Select(l => l.Raw).ToList(), endsWithNewline: true);
         }
         catch (Exception e)
         {
@@ -114,8 +114,11 @@ internal static class RestoreVerb
             if (header is null) return null;
             return (JsonNode.Parse(header) as JsonObject)?["claudinine"]?["mirrorOf"].GetString();
         }
-        catch
+        catch (Exception e)
         {
+            // Read as "no mirror found" either way, but an I/O or permission
+            // error is a different story than a missing header — say which.
+            Dbg.Log($"mirror header unreadable ({mirrorPath}): {e.Message}");
             return null;
         }
     }

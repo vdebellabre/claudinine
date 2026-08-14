@@ -36,19 +36,24 @@ internal static class LoadStamp
             string stem = Path.GetFileNameWithoutExtension(transcriptPath);
             string stampPath = Path.Combine(dir, stem + ".load");
 
-            var content = new StringBuilder();
-            content.Append(MirrorFormat.Line("loadStampOf", Path.GetFullPath(transcriptPath)))
-                .Append('\n');
-            if (File.Exists(transcriptPath))
-            {
-                foreach ((string uuid, long size) in ScanRecordSizes(transcriptPath))
-                    content.Append(uuid).Append('\t').Append(size).Append('\n');
-            }
-
             // Temp + move: the statusline may read mid-write, and a torn stamp
             // (header + partial body) silently misprices the missing records.
             string tmp = stampPath + ".tmp";
-            File.WriteAllText(tmp, content.ToString(), new UTF8Encoding(false));
+            using (var writer = new StreamWriter(tmp, append: false, new UTF8Encoding(false)))
+            {
+                writer.Write(MirrorFormat.Line("loadStampOf", Path.GetFullPath(transcriptPath)));
+                writer.Write('\n');
+                if (File.Exists(transcriptPath))
+                {
+                    foreach ((string uuid, long size) in ScanRecordSizes(transcriptPath))
+                    {
+                        writer.Write(uuid);
+                        writer.Write('\t');
+                        writer.Write(size);
+                        writer.Write('\n');
+                    }
+                }
+            }
             File.Move(tmp, stampPath, overwrite: true);
         }
         catch

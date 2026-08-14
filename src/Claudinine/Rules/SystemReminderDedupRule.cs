@@ -25,18 +25,17 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
             if (rec.IsProtected())
                 continue;
 
-            var node = RuleHelpers.CurrentNode(rec);
+            var node = rec.CurrentView;
 
             // Reminders are injected into plain-string user prompts too. Write the
             // deduped text back as a STRING — cozempic coerced these to block
             // lists, silently breaking the "real user message has string content"
             // invariant that turn detection relies on.
-            if ((node["message"] as JsonObject)?["content"] is JsonValue sv
-                && sv.TryGetValue(out string? promptText))
+            if (node["message"]["content"].AsStringMemo() is string promptText)
             {
                 if (DedupIn(promptText, seen) is string dedupedPrompt)
                 {
-                    var stringClone = (JsonObject)node.DeepClone();
+                    var stringClone = rec.CloneCurrentNode();
                     ((JsonObject)stringClone["message"]!)["content"] = dedupedPrompt;
                     RuleHelpers.SetReplacement(rec, stringClone, Name);
                 }
@@ -45,27 +44,25 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
 
             JsonObject? clone = null;
             int blockIndex = -1;
-            foreach (var block in RuleHelpers.ContentBlocks(node))
+            foreach (var b in RuleHelpers.ContentBlocks(node))
             {
                 blockIndex++;
-                if (block is not JsonObject b)
+                if (!b.IsObject)
                     continue;
-                string? btype = b["type"].GetString();
+                string? btype = b["type"].AsString();
                 if (btype is not ("text" or "tool_result"))
                     continue;
 
                 // text blocks carry "text"; tool_result only qualifies with string content.
                 bool isText = btype == "text";
-                string? text = isText
-                    ? (b["text"] as JsonValue).GetString()
-                    : b["content"] as JsonValue is JsonValue cv && cv.TryGetValue(out string? cs) ? cs : null;
+                string? text = isText ? b["text"].AsStringMemo() : b["content"].AsStringMemo();
                 if (string.IsNullOrEmpty(text))
                     continue;
 
                 if (DedupIn(text, seen) is not string newText)
                     continue;
 
-                RuleHelpers.CloneBlockAt(ref clone, node, blockIndex)[isText ? "text" : "content"] = newText;
+                RuleHelpers.CloneBlockAt(ref clone, rec, blockIndex)[isText ? "text" : "content"] = newText;
             }
 
             if (clone is not null)
@@ -82,11 +79,14 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
         // Remove by position, never by value: Replace(value, "") would also erase
         // the first occurrence when the SAME reminder repeats within this text,
         // leaving it surviving nowhere in context.
+        // Seen-set keyed by the reminder text itself: m.Value is already an
+        // allocated substring, so hashing it to hex only added a UTF-8 copy and
+        // a SHA-256 on top. The set lives for one pass; retaining the strings
+        // costs less than the per-match hashing did.
         List<(int Index, int Length)>? repeats = null;
         foreach (Match m in Reminder().Matches(text))
         {
-            string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(m.Value)));
-            if (!seen.Add(hash))
+            if (!seen.Add(m.Value))
                 (repeats ??= []).Add((m.Index, m.Length));
         }
         if (repeats is null)

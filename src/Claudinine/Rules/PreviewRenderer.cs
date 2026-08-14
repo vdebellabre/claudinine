@@ -47,6 +47,10 @@ internal static partial class PreviewRenderer
     public static string RenderPreview(string tool, string arg, string text, bool isError = false)
     {
         string prefix = isError ? "[ERROR] " : "";
+        // Result texts run to hundreds of KB; every helper that needs lines shares
+        // one lazy split instead of re-splitting the full text per heuristic.
+        string[]? lines = null;
+        string[] Lines() => lines ??= text.Split('\n');
 
         // Claude Code overflowed this result to a sidecar file and kept only a
         // preview. The path is the whole verdict — and the only pointer to a file
@@ -55,7 +59,8 @@ internal static partial class PreviewRenderer
         if (RuleHelpers.PersistedOutputPath(text) is string sidecar)
             return prefix + $"output persisted to {sidecar}";
 
-        if (arg.Contains("pytest") || text[..Math.Min(400, text.Length)].Contains("pytest"))
+        if (arg.Contains("pytest")
+            || text.AsSpan(0, Math.Min(400, text.Length)).Contains("pytest", StringComparison.Ordinal))
         {
             string? p = PytestPreview(text);
             if (p is not null)
@@ -67,7 +72,7 @@ internal static partial class PreviewRenderer
         {
             if (!text.Contains(marker, StringComparison.Ordinal))
                 continue;
-            foreach (string line in text.Split('\n'))
+            foreach (string line in Lines())
             {
                 if (line.Contains(marker, StringComparison.Ordinal))
                     return prefix + $"CONTAINS '{marker.Trim()}' :: {Truncate(line.Trim(), 160)}";
@@ -75,15 +80,15 @@ internal static partial class PreviewRenderer
         }
 
         if (tool is "Edit" or "Write")
-            return prefix + (arg.Length > 0 ? $"applied to {Truncate(arg, 120)}" : Head(text, 1));
+            return prefix + (arg.Length > 0 ? $"applied to {Truncate(arg, 120)}" : Head(Lines(), 1));
 
         if (tool == "Read")
         {
-            int n = text.Split('\n').Length;
+            int n = Lines().Length;
             // Skip the line-number gutter and punctuation-only lines so the preview
             // lands on the first line that actually says what the file is.
             var body = new List<string>();
-            foreach (string line in InformativeLines(text))
+            foreach (string line in InformativeLines(Lines()))
             {
                 string stripped = ReadGutter().Replace(line, "").Trim();
                 if (stripped.Length > 0 && stripped.Any(c => !@"{}[](),:""' ".Contains(c)))
@@ -92,39 +97,39 @@ internal static partial class PreviewRenderer
                     break;
             }
             string joined = Truncate(string.Join(" / ", body), 160);
-            return prefix + $"{n} lines :: " + (joined.Length > 0 ? joined : Head(text, 1));
+            return prefix + $"{n} lines :: " + (joined.Length > 0 ? joined : Head(Lines(), 1));
         }
 
         // JSON payloads (MCP tools, APIs): describe the shape — a head preview
         // shows only punctuation.
-        string lstripped = text.TrimStart();
-        if (lstripped.StartsWith('[') || lstripped.StartsWith('{'))
+        ReadOnlySpan<char> lstripped = text.AsSpan().TrimStart();
+        if (lstripped.Length > 0 && (lstripped[0] == '[' || lstripped[0] == '{'))
         {
             string? shape = JsonShape(text);
             if (shape is not null)
                 return prefix + shape;
         }
 
-        if (text.Trim().Length == 0)
+        if (string.IsNullOrWhiteSpace(text))
             return prefix + "(no output)";
 
         if (tool is "Bash" or "PowerShell")
         {
-            string? g = GitPreview(arg, text);
+            string? g = GitPreview(arg, Lines());
             if (g is not null)
                 return prefix + g;
             // Multi-section output (our own `echo "=== x ==="` scaffolding):
             // summarize every section rather than showing only the first.
-            string? s = Sectioned(text);
+            string? s = Sectioned(Lines());
             if (s is not null)
                 return prefix + s;
             // Commands whose payoff is at the end (pipelines into tail/wc, counters).
             if (TailPipeline().IsMatch(arg))
-                return prefix + $"tail :: {Tail(text, 3)}";
-            return prefix + Head(text, 2);
+                return prefix + $"tail :: {Tail(Lines(), 3)}";
+            return prefix + Head(Lines(), 2);
         }
 
-        return prefix + Head(text, 2);
+        return prefix + Head(Lines(), 2);
     }
 
     private static string? PytestPreview(string text)
@@ -144,17 +149,17 @@ internal static partial class PreviewRenderer
         return Truncate(result, 300);
     }
 
-    private static string? GitPreview(string cmd, string text)
+    private static string? GitPreview(string cmd, string[] lines)
     {
         if (GitStatus().IsMatch(cmd))
         {
-            int n = text.Split('\n').Count(l => l.Trim().Length > 0);
-            return $"{n} status line(s) :: {Head(text, 2)}";
+            int n = lines.Count(l => l.Trim().Length > 0);
+            return $"{n} status line(s) :: {Head(lines, 2)}";
         }
         if (GitLog().IsMatch(cmd))
         {
-            int n = text.Split('\n').Count(l => l.Trim().Length > 0);
-            return $"{n} commit line(s) :: {Head(text, 2)}";
+            int n = lines.Count(l => l.Trim().Length > 0);
+            return $"{n} commit line(s) :: {Head(lines, 2)}";
         }
         return null;
     }
@@ -164,9 +169,8 @@ internal static partial class PreviewRenderer
     /// show the first informative line of each — a head preview would show only
     /// the first section and silently hide the rest.
     /// </summary>
-    private static string? Sectioned(string text)
+    private static string? Sectioned(string[] lines)
     {
-        string[] lines = text.Split('\n');
         var idx = Enumerable.Range(0, lines.Length).Where(i => Banner().IsMatch(lines[i])).ToList();
         if (idx.Count < 2)
             return null;
@@ -185,43 +189,38 @@ internal static partial class PreviewRenderer
 
     private static string? JsonShape(string text)
     {
-        JsonNode? parsed;
-        try
-        {
-            parsed = JsonNode.Parse(text);
-        }
-        catch
-        {
-            return null;
-        }
-        if (parsed is JsonArray arr)
+        // TryParse absorbs the not-JSON-after-all case — same scoping as
+        // ToolResultAgeRule.Minify.
+        var parsed = JsonView.TryParse(text);
+        if (parsed.IsArray)
         {
             string shape = "";
-            if (arr.FirstOrDefault() is JsonObject first)
+            var first = parsed[0];
+            if (first.IsObject)
             {
-                var keys = first.Select(kv => kv.Key).Order().Take(6);
+                var keys = first.Properties.Select(kv => kv.Key).Order().Take(6);
                 shape = $" of objects with keys [{string.Join(", ", keys)}]";
             }
-            return $"JSON array, {arr.Count} item(s){shape}";
+            return $"JSON array, {parsed.Count} item(s){shape}";
         }
-        if (parsed is JsonObject obj)
+        if (parsed.IsObject)
         {
-            var keys = obj.Select(kv => kv.Key).Order().Take(8);
+            var keys = parsed.Properties.Select(kv => kv.Key).Order().Take(8);
             return $"JSON object, keys [{string.Join(", ", keys)}]";
         }
         return null;
     }
 
-    private static IEnumerable<string> InformativeLines(string text) =>
-        text.Split('\n').Where(l => l.Trim().Length > 0 && !Banner().IsMatch(l));
+    private static IEnumerable<string> InformativeLines(string[] lines) =>
+        lines.Where(l => l.Trim().Length > 0 && !Banner().IsMatch(l));
 
-    private static string Head(string text, int n) =>
-        Truncate(string.Join(" / ", InformativeLines(text).Take(n)), 200);
+    private static string Head(string[] lines, int n) =>
+        Truncate(string.Join(" / ", InformativeLines(lines).Take(n)), 200);
 
-    private static string Tail(string text, int n)
+    private static string Tail(string[] lines, int n)
     {
-        var lines = text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
-        return Truncate(string.Join(" / ", lines.TakeLast(n)), 200);
+        var kept = lines.Where(l => l.Trim().Length > 0).ToList();
+        return Truncate(string.Join(" / ", kept.TakeLast(n)), 200);
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];

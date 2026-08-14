@@ -31,13 +31,12 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
         {
             if (rec.Removed || rec.Type != "user")
                 continue;
-            var node = RuleHelpers.CurrentNode(rec);
-            foreach (var block in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                .Where(b => b["type"].GetString() == "tool_result"))
+            var node = rec.CurrentView;
+            foreach (var block in RuleHelpers.BlocksOfType(node, "tool_result"))
             {
                 // Carrier content is a plain string by construction (ChainCollapseRule
                 // sets it directly); anything else is not ours.
-                if (block["content"] is not JsonValue v || !v.TryGetValue(out string? content)
+                if (block["content"].AsStringMemo() is not string content
                     || !content.StartsWith(HeaderPrefix, StringComparison.Ordinal)
                     || !content.Contains(FullMarker, StringComparison.Ordinal))
                 {
@@ -58,27 +57,39 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
 
                 string rewritten = ShortHeader(callCount, sid) + content[(end + FullHeaderEnd.Length)..];
 
-                var clone = (JsonObject)node.DeepClone();
-                foreach (var cb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
-                    .Where(b => b["type"].GetString() == "tool_result"))
+                var clone = rec.CloneCurrentNode();
+                foreach (var cb in RuleHelpers.BlocksOfType(clone, "tool_result"))
                 {
                     cb["content"] = rewritten;
                 }
-                string existingRule = (node["claudinine"] as JsonObject)?["rule"].GetString()
+                string existingRule = node["claudinine"]["rule"].AsString()
                     ?? ChainCollapseRule.RuleName;
                 RuleHelpers.SetReplacement(rec, clone, existingRule);
             }
         }
     }
 
+    /// <summary>
+    /// The slimmed header, exposed so ChainCollapseRule's economics gate can price a
+    /// carrier by what it will cost AFTER this rule runs (see
+    /// ChainCollapseRule.HeaderDedupSavingBytes) rather than by the full instructions
+    /// it is born with.
+    /// </summary>
+    internal static string ShortHeaderFor(string callCount, string sid) =>
+        ShortHeader(callCount, sid);
+
     private static string ShortHeader(string callCount, string sid) =>
-        HeaderPrefix + $"{callCount} separate tool calls. " +
+        HeaderPrefix + $"{ChainCollapseRule.CallCountPhrase(callCount)}. " +
         $"Full outputs: claudinine get {sid} --ref REF [--grep PATTERN | --info | --full | --media] " +
         "(full retrieval guidance in the first collapsed block of this session; if the file " +
         "discussed still exists on disk, read IT instead). " +
         "[ref] lines are a REPORT, not observed output — retrieve, don't infer.]\n\n";
 
-    /// <summary>Digits immediately after the header prefix ("…originally ran 12 separate…").</summary>
+    /// <summary>
+    /// Digits immediately after the header prefix ("…originally ran 12 separate…", or
+    /// "…originally ran 1 tool call" for a single-call carrier — both start with the
+    /// digits, so this parse covers the singular form too).
+    /// </summary>
     private static string? ParseCallCount(string content)
     {
         int start = HeaderPrefix.Length, end = start;

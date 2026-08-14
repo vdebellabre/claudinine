@@ -1,9 +1,17 @@
+using System.Text.RegularExpressions;
+
 namespace Claudinine.Tests;
 
 public sealed class ChainCollapseTests : IDisposable
 {
     private readonly string _dir;
-    private static readonly string Output = "tool output " + new string('o', 400);
+    // Sized against the corpus, not arbitrary: chain-collapse now decides by
+    // comparing the built digest to the payload it replaces, so a fixture's result
+    // size determines whether the rule fires at all. Real per-call results run
+    // p25≈400b / p50≈800b / p90≈3.8KB; the old 412-byte value sat at the 26th
+    // percentile and is below the ~1.1KB retrieval header's break-even, so turns
+    // built from it are correctly REFUSED. 2KB models a normal call (~p78).
+    private static readonly string Output = "tool output " + new string('o', 2000);
 
     public ChainCollapseTests()
     {
@@ -421,13 +429,16 @@ public sealed class ChainCollapseTests : IDisposable
     }
 
     [Test]
-    public async Task TurnEndingOnToolResultWithTooFewRemainingCallsIsSkipped()
+    public async Task TurnEndingOnToolResultWithUnprofitableRemainderIsSkipped()
     {
-        // Two calls, the last one excluded by the tail guard, leaves one — below
-        // MinCalls, where the digest header costs more than the single [ref] saves.
+        // Two calls, the last excluded by the tail guard, leaves one — and that one
+        // is SMALL, so the retrieval header costs more than the single [ref] line
+        // saves and the economics gate refuses the turn. This is the case the old
+        // MinCalls=2 threshold approximated; the gate now decides it on real bytes,
+        // so the payload size (not the call count) is what makes this turn a skip.
         var b = new TranscriptBuilder().UserPrompt("short agent task");
         b.ToolUse("cmd-a", out string idA, out string uuidA);
-        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.ToolResultFor(idA, uuidA, "tiny-a");
         b.ToolUse("cmd-tail", out string idTail, out string uuidTail);
         b.ToolResultFor(idTail, uuidTail, Output + "TAIL");
         string path = b.WriteTo(_dir);
@@ -436,6 +447,90 @@ public sealed class ChainCollapseTests : IDisposable
         Compactor.Run(path);
 
         await Assert.That(File.ReadAllLines(path)).IsEquivalentTo(before);
+    }
+
+    [Test]
+    public async Task EditHeavyTurnWithSentinelResultsCollapses()
+    {
+        // Regression. The economics gate priced a removed tool_use record at its
+        // PREVIEW argument (Call.Arg — file_path for Edit/Write), but removing the
+        // record deletes the FULL input: old_string/new_string/content, the heaviest
+        // payload in real chains. Edit chains are the worst case — multi-KB inputs,
+        // one-line sentinel results — so the gate saw almost no payload and refused
+        // turns the old MinCalls=2 threshold collapsed profitably (corpus replay:
+        // 20–28 profitable turns refused, 16.5–26.6k tok forgone). Priced at the
+        // serialized input size, the replay reaches 100% of the collapse-iff-it-pays
+        // oracle under both preview bounds.
+        var b = new TranscriptBuilder().UserPrompt("refactor the helpers");
+        for (int i = 0; i < 3; i++)
+            b.ToolCall("Edit", new JsonObject
+            {
+                ["file_path"] = $"C:\\src\\file{i}.cs",
+                ["old_string"] = new string('o', 3000),
+                ["new_string"] = new string('n', 3000),
+            }, $"The file C:\\src\\file{i}.cs has been updated.");
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        await Assert.That(File.ReadAllText(path)).Contains(ChainCollapseRule.CarrierPrefix)
+            .Because("the removed Edit inputs dwarf the digest even though the results are sentinels");
+    }
+
+    [Test]
+    public async Task CarrierRetrimmedByAnotherRuleIsNotReCollapsed()
+    {
+        // Regression. Idempotence used to be tested via the `claudinine.rule` stamp,
+        // but that names whichever rule wrote the record LAST: a digest big enough for
+        // mega-block-trim to retrim comes back stamped "mega-block-trim", so the stamp
+        // test missed it and the carrier — an ordinary tool_result as far as pass 1 of
+        // this rule is concerned — was collapsed AGAIN into a digest of itself, losing
+        // every [ref] line but one. Measured on corpus file 00b42a12 before the fix:
+        // carriers of 79 and 159 refs both rewritten to "1 tool call".
+        //
+        // Build a span whose digest clears MegaBlockTrimRule.MaxBlockBytes (32KB) so
+        // both rules act on the same record, then assert the ref count survives a
+        // second pass.
+        var b = new TranscriptBuilder().UserPrompt("many calls");
+        for (int i = 0; i < 120; i++)
+            b.ToolCall("Bash", new JsonObject { ["command"] = $"echo {i} " + new string('c', 300) },
+                Output + i);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+        string afterFirst = File.ReadAllText(path);
+        int refsFirst = Regex.Matches(afterFirst, @"\[[0-9a-f]{8}\] Bash\(").Count;
+
+        Compactor.Run(path);
+        string afterSecond = File.ReadAllText(path);
+
+        await Assert.That(refsFirst).IsGreaterThan(1);
+        await Assert.That(Regex.Matches(afterSecond, @"\[[0-9a-f]{8}\] Bash\(").Count)
+            .IsEqualTo(refsFirst).Because("a carrier must never be re-collapsed");
+        await Assert.That(afterSecond).IsEqualTo(afterFirst);
+    }
+
+    [Test]
+    public async Task TurnEndingOnToolResultCollapsesWhenRemainderPays()
+    {
+        // Same shape, but the surviving call carries a real-sized result: dropping
+        // the tail pair still leaves enough payload to beat the digest, so the turn
+        // collapses — and the file's final record is untouched either way.
+        var b = new TranscriptBuilder().UserPrompt("short agent task");
+        b.ToolUse("cmd-a", out string idA, out string uuidA);
+        b.ToolResultFor(idA, uuidA, Output + "A");
+        b.ToolUse("cmd-tail", out string idTail, out string uuidTail);
+        b.ToolResultFor(idTail, uuidTail, Output + "TAIL");
+        string path = b.WriteTo(_dir);
+        string tailBefore = File.ReadAllLines(path)[^1];
+
+        Compactor.Run(path);
+
+        string[] after = File.ReadAllLines(path);
+        await Assert.That(File.ReadAllText(path)).Contains(ChainCollapseRule.CarrierPrefix);
+        await Assert.That(after[^1]).IsEqualTo(tailBefore);
     }
 
     [Test]

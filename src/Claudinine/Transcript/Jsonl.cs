@@ -65,13 +65,36 @@ internal static class Jsonl
     /// </summary>
     public static void ReplaceAtomically(string path, string content)
     {
+        ReplaceAtomicallyCore(path, writer => writer.Write(content));
+    }
+
+    /// <summary>
+    /// <see cref="ReplaceAtomically(string, string)"/> for line lists: streams the
+    /// lines to the temp file instead of joining them into one giant string first
+    /// (on a many-MB transcript that join was pure allocation).
+    /// </summary>
+    public static void ReplaceAtomically(string path, IReadOnlyList<string> lines, bool endsWithNewline)
+    {
+        ReplaceAtomicallyCore(path, writer =>
+        {
+            for (int i = 0; i < lines.Count; i++)
+            {
+                writer.Write(lines[i]);
+                if (i < lines.Count - 1 || endsWithNewline)
+                    writer.Write('\n');
+            }
+        });
+    }
+
+    private static void ReplaceAtomicallyCore(string path, Action<StreamWriter> writeContent)
+    {
         string temp = path + TempSuffix;
         try
         {
             using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
             using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
             {
-                writer.Write(content);
+                writeContent(writer);
                 writer.Flush();
                 stream.Flush(flushToDisk: true);
             }

@@ -44,8 +44,61 @@ internal sealed class ChainCollapseRule : ICompactionRule
 
     public string Name => RuleName;
 
-    /// <summary>Below this many calls the anchor+header overhead isn't worth it.</summary>
-    private const int MinCalls = 2;
+    /// <summary>
+    /// The call-count phrase that follows <see cref="CarrierPrefix"/> in every header,
+    /// full or slimmed. Singular matters now that the economics gate admits single-call
+    /// turns (a fat Read, a base64 screenshot pays for its own header), so "ran 1
+    /// separate tool calls" is reachable text rather than a theoretical case. Shared
+    /// with <see cref="CarrierHeaderDedupRule"/> so slimming a singular carrier cannot
+    /// silently re-pluralize it; takes the count as a STRING because the dedup rule
+    /// recovers it by parsing the header it is rewriting.
+    /// </summary>
+    internal static string CallCountPhrase(string callCount) =>
+        callCount == "1" ? "1 tool call" : $"{callCount} separate tool calls";
+
+    /// <summary>
+    /// Structural floor only: one settled pair is the least this rule can act on.
+    /// Whether collapsing PAYS is not decided here — see the economics gate at the
+    /// end of CollapseTurn, which compares the built digest against the payload it
+    /// would replace. A count threshold was the old proxy for that question
+    /// (MinCalls was 2); measured over the 174-file corpus that proxy is wrong in both
+    /// directions — it collapsed 64 turns at a net loss and skipped 40 single-call
+    /// turns that pay handsomely (one large result).
+    ///
+    /// Measured payoff on the 174-file corpus: 69.1% tokens / 77.5% bytes versus
+    /// 68.9% / 77.4% for MinCalls=2. The gate first measured as a NEUTRAL trade;
+    /// that was a pricing bug, not a structural limit — removed tool_use records
+    /// were credited at their preview argument's length (Call.Arg) instead of the
+    /// full serialized input the removal deletes, which refused every edit-heavy
+    /// turn (multi-KB old/new strings, one-line sentinel results; see
+    /// EditHeavyTurnWithSentinelResultsCollapses). Priced correctly, the corpus
+    /// replay reaches 100% of the collapse-iff-it-pays oracle under both preview
+    /// bounds, refusing zero profitable turns.
+    /// </summary>
+    private const int MinCalls = 1;
+
+    /// <summary>
+    /// The digest must beat the payload it replaces by this factor to be worth it.
+    /// Above 1.0 on purpose: the comparison is in UTF-8 bytes (no tokenizer here),
+    /// and bytes-per-token differs slightly between raw tool output and a digest of
+    /// it, so a flat margin absorbs the divergence without tuning. Measured over the
+    /// corpus, anything in 1.0–2.0 lands within ~0.02 pts, i.e. the exact value is
+    /// not load-bearing — do not "optimize" it against a single snapshot.
+    /// </summary>
+    private const double MinGain = 1.1;
+
+    /// <summary>
+    /// Bytes the retrieval header shrinks by once <see cref="CarrierHeaderDedupRule"/>
+    /// slims a carrier (full instructions → one-line form). The economics gate
+    /// discounts it from EVERY carrier: all but the file's first really are slimmed, and
+    /// making the discount conditional on that would tie a turn's verdict to what an
+    /// earlier pass wrote, breaking idempotence (see the gate). Derived from the two
+    /// real header texts rather than hard-coded, so it cannot drift when either is
+    /// reworded.
+    /// </summary>
+    private static readonly int HeaderDedupSavingBytes =
+        RuleHelpers.Utf8Len(Header(99, new string('0', 36)))
+        - RuleHelpers.Utf8Len(CarrierHeaderDedupRule.ShortHeaderFor("99", new string('0', 36)));
 
     public void Apply(TranscriptFile transcript)
     {
@@ -76,8 +129,17 @@ internal sealed class ChainCollapseRule : ICompactionRule
         }
     }
 
-    private sealed record Call(int UseIndex, int ResultIndex, string ToolUseId,
-        string Tool, string Arg, string ResultText, bool IsError, string Media);
+    // Struct on purpose: one is created per tool call in the hottest rule of the
+    // pipeline (largest allocator per eng/bench/profiling-notes.md — the pass is
+    // GC-bound), same pattern as RestoreVerb.Line and BashReadParser.ReadTarget.
+    // InputBytes is the FULL serialized input, not Arg's length: Arg is the
+    // one-line preview argument (file_path for Edit/Write), while removing the
+    // use record deletes the whole input — old_string/new_string/content included.
+    // The economics gate must price what is actually removed; pricing it at Arg
+    // refused every edit-heavy turn (sentinel results + preview-sized credit).
+    private readonly record struct Call(int UseIndex, int ResultIndex, string ToolUseId,
+        string Tool, string Arg, string ResultText, bool IsError, string Media, int MediaBytes,
+        int InputBytes);
 
     private void CollapseTurn(TranscriptFile transcript, int start, int end)
     {
@@ -92,7 +154,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         // by record index rather than by batch. The only temporal requirement is
         // that the turn be SETTLED, enforced after the loop by `pending.Count > 0`.
         var calls = new List<Call>();
-        var pending = new List<(int Index, string Id, string Tool, string Arg)>();
+        var pending = new List<(int Index, string Id, string Tool, string Arg, int InputBytes)>();
 
         for (int i = start; i < end; i++)
         {
@@ -101,42 +163,42 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 return;
             if (rec.IsSidechain && !transcript.IsSidechainFile)
                 return; // sidechain material spliced into a MAIN transcript's turn
-            var node = RuleHelpers.CurrentNode(rec);
+            var node = rec.CurrentView;
             string? type = rec.Type;
 
             if (type == "assistant")
             {
-                var uses = RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                    .Where(x => x["type"].GetString() == "tool_use").ToList();
+                var uses = RuleHelpers.BlocksOfType(node, "tool_use").ToList();
                 if (uses.Count > 1)
                     return; // legacy multi-use record: not a chain, don't touch
                 if (uses.Count == 1)
                 {
                     var u = uses[0];
-                    if (u["id"].GetString() is not string id || id.Length == 0)
+                    if (u["id"].AsString() is not string id || id.Length == 0)
                         return;
-                    pending.Add((i, id, u["name"].GetString() ?? "?", RuleHelpers.PrimaryArg(u)));
+                    pending.Add((i, id, u["name"].AsString() ?? "?", RuleHelpers.PrimaryArg(u),
+                        u["input"].Exists ? u["input"].SerializedLength() : 0));
                 }
             }
             else if (type == "user")
             {
-                var blocks = RuleHelpers.ContentBlocks(node).OfType<JsonObject>().ToList();
-                var results = blocks.Where(x => x["type"].GetString() == "tool_result").ToList();
+                var blocks = RuleHelpers.ContentBlocks(node).Where(x => x.IsObject).ToList();
+                var results = blocks.Where(x => x["type"].AsString() == "tool_result").ToList();
                 if (results.Count == 0)
                     continue; // an image share or similar — leave it alone, keep scanning
                 if (results.Count > 1 || blocks.Count != results.Count)
                     return; // legacy multi-result or mixed carrier: don't touch
                 var r = results[0];
-                int match = pending.FindIndex(p => p.Id == r["tool_use_id"].GetString());
+                int match = pending.FindIndex(p => p.Id == r["tool_use_id"].AsString());
                 if (match < 0)
                     return; // orphan or duplicate result
                 if (rec.Uuid is null)
                     return; // ref addressing needs the uuid
                 var p = pending[match];
                 pending.RemoveAt(match);
-                bool isError = r["is_error"] is JsonValue ev && ev.TryGetValue(out bool e) && e;
                 calls.Add(new Call(p.Index, i, p.Id, p.Tool, p.Arg,
-                    RuleHelpers.ResultText(r), isError, RuleHelpers.MediaKinds(r)));
+                    RuleHelpers.ResultText(r), r["is_error"].IsTrue, RuleHelpers.MediaKinds(r),
+                    RuleHelpers.MediaBytes(r), p.InputBytes));
             }
         }
         if (pending.Count > 0)
@@ -148,13 +210,19 @@ internal sealed class ChainCollapseRule : ICompactionRule
         // results arrived out of order, the first RESULT's pair would leave the
         // batch's first use outside the span (its result removed, the use kept —
         // API-invalid); the first USE's pair also keeps the survivor chain linear.
-        var anchor = calls.MinBy(c => c.UseIndex)!;
+        var anchor = calls.MinBy(c => c.UseIndex);
         var anchorResult = records[anchor.ResultIndex];
-        if ((RuleHelpers.CurrentNode(anchorResult)["claudinine"] as JsonObject)?["rule"]
-                .GetString() == Name)
-        {
+        // Idempotence, by CONTENT not by stamp. The envelope's `rule` key names
+        // whichever rule wrote the record LAST, and later rules legitimately rewrite
+        // a carrier (mega-block-trim retrims a huge digest), which overwrites
+        // "chain-collapse" and made a stamp test miss. A carrier re-enumerates as a
+        // perfectly ordinary 1-call turn, so on the next pass it was collapsed into a
+        // digest-OF-a-digest — measured on 00b42a12: two carriers of 79 and 159 [ref]
+        // lines each rewritten down to "1 tool call", silently destroying 236 real
+        // references. Harmless while MinCalls was 2 (one re-found call fell below the
+        // threshold) and load-bearing now that a single call can collapse.
+        if (calls.Any(c => RuleHelpers.IsCarrier(c.ResultText)))
             return; // already collapsed (idempotence)
-        }
 
         int spanStart = anchor.UseIndex;
         int spanEnd = calls.Max(c => c.ResultIndex);
@@ -184,8 +252,9 @@ internal sealed class ChainCollapseRule : ICompactionRule
         {
             var tailCall = calls.First(c => c.ResultIndex == spanEnd);
             calls.Remove(tailCall);
-            // Re-check against the REDUCED count: collapsing a single call pays the
-            // digest header for one [ref] line and can end up net-negative.
+            // Re-check against the REDUCED count. Structural only now: dropping the
+            // last call can empty the batch. Whether the remainder is worth
+            // collapsing is the economics gate's call, not a count's.
             if (calls.Count < MinCalls)
                 return;
             // The anchor cannot move: it is the first use in file order and only the
@@ -197,6 +266,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         var useIndexes = calls.Select(c => c.UseIndex).ToHashSet();
         var resultIndexes = calls.Select(c => c.ResultIndex).ToHashSet();
         var callByResult = calls.ToDictionary(c => c.ResultIndex);
+        var callByUse = calls.ToDictionary(c => c.UseIndex);
 
         // Pass 2: build the digest in reading order and decide removals. The
         // retrieval id is the FILE STEM, not the records' sessionId: the two are
@@ -207,28 +277,57 @@ internal sealed class ChainCollapseRule : ICompactionRule
         digest.Append(Header(calls.Count, sid));
         var toRemove = new List<TranscriptRecord>();
 
+        // Two byte counters for the economics gate, and they must be scoped
+        // IDENTICALLY or the comparison is meaningless.
+        //
+        // replacedBytes: payload the collapse actually removes — every result's text
+        // (non-anchor ones with their record, the anchor's by being overwritten) plus
+        // removed tool_use inputs.
+        //
+        // noteBytes: the (note) lines the digest re-emits VERBATIM. Interleaved prose
+        // survives the collapse unchanged, so it is on BOTH sides of the trade and is
+        // not a saving — but it IS inside the built digest. Comparing the whole digest
+        // against a prose-free payload therefore charges collapse for bytes it does not
+        // add, and refuses prose-heavy turns that pay. Measured cost of getting this
+        // wrong: 273 profitable turns refused, 432,914 tokens forgone, corpus saving
+        // down 2.3 pts.
+        int replacedBytes = 0;
+        int noteBytes = 0;
+
         for (int i = spanStart; i <= spanEnd; i++)
         {
             var rec = records[i];
-            var node = RuleHelpers.CurrentNode(rec);
+            var node = rec.CurrentView;
 
             if (rec.Type == "assistant" && (useIndexes.Contains(i) || IsProseOnly(node)))
             {
                 bool isAnchorUse = i == anchor.UseIndex;
                 if (!isAnchorUse)
+                {
                     toRemove.Add(rec);
+                    // A removed use record takes its FULL tool_use input with it.
+                    if (useIndexes.Contains(i))
+                        replacedBytes += callByUse[i].InputBytes;
+                }
                 // Interleaved prose, verbatim — it carries the reasoning and
                 // self-corrections (~10% of span bytes; collapsing it too would
                 // raise savings but destroy the thread). The anchor-use record is
                 // kept whole, so its text stays in place, not duplicated here.
                 if (!isAnchorUse)
                 {
-                    foreach (var tb in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                        .Where(x => x["type"].GetString() == "text"))
+                    foreach (var tb in RuleHelpers.BlocksOfType(node, "text"))
                     {
-                        string t = tb["text"].GetString()?.Trim() ?? "";
+                        string t = tb["text"].AsStringMemo()?.Trim() ?? "";
                         if (t.Length > 0)
-                            digest.Append("    (note) ").Append(t.Replace("\n", "\n    ")).Append('\n');
+                        {
+                            string indented = t.Replace("\n", "\n    ");
+                            digest.Append("    (note) ").Append(indented).Append('\n');
+                            // Carried verbatim, so it is not part of the trade — see
+                            // noteBytes. Counts the indented form actually appended,
+                            // frame included, and reuses the one string already built
+                            // (this rule is the pipeline's largest allocator).
+                            noteBytes += RuleHelpers.Utf8Len(indented) + "    (note) \n".Length;
+                        }
                     }
                 }
             }
@@ -241,6 +340,12 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 // note a screenshot-only result digests as "(no output)".
                 string media = c.Media.Length > 0 ? $" [+media {c.Media} — --media decodes it to a file]" : "";
                 digest.Append($"[{refId}] {c.Tool}({RuleHelpers.Truncate(c.Arg, 90)}) -> {RuleHelpers.Utf8Len(c.ResultText)}b :: {RuleHelpers.Truncate(preview, 300)}{media}\n");
+                // Every result's payload goes away: the non-anchor ones with their
+                // record, the anchor's by being overwritten with the digest. Media
+                // counts — a base64 screenshot is invisible to ResultText but is the
+                // heaviest thing in the span, and pricing it at zero would refuse
+                // exactly the turns most worth collapsing.
+                replacedBytes += RuleHelpers.Utf8Len(c.ResultText) + c.MediaBytes;
                 if (i != anchor.ResultIndex)
                     toRemove.Add(rec);
             }
@@ -248,14 +353,52 @@ internal sealed class ChainCollapseRule : ICompactionRule
             // shares…) is not part of the chain: it survives in place untouched.
         }
 
+        // Economics gate — the whole decision, on real bytes rather than a proxy.
+        // Nothing above this line mutated anything (the digest is a StringBuilder and
+        // toRemove is just a list), so bailing here leaves the turn untouched. This
+        // placement is load-bearing: it is the only point where BOTH sides of the
+        // trade are known exactly, which is what lets the rule skip the count
+        // heuristic entirely. Keep every mutation below it.
+        //
+        // Two corrections turn the raw digest length into what collapse actually costs.
+        //
+        // Subtract the verbatim (note) lines: they are carried, not added, so charging
+        // them to the digest would compare an inflated cost against a prose-free
+        // payload and refuse turns that genuinely pay.
+        //
+        // Also discount the retrieval header down to what it will really cost. This
+        // rule writes the full ~1.1KB instructions into every carrier, but
+        // CarrierHeaderDedupRule runs immediately after and slims all but the file's
+        // first carrier to a one-line header. Charging every turn the full header
+        // over-prices each later carrier by ~1KB and refuses many-small-call turns that
+        // are in fact profitable — measured: 18 files regressed, 57a4cdbf alone losing
+        // 20,737 tokens (-10.9 pts) with 9 of 23 turns wrongly refused.
+        //
+        // The discount is applied UNCONDITIONALLY, not just to non-first carriers.
+        // Pricing it by "is this the file's first carrier?" makes the verdict depend on
+        // what a PREVIOUS pass already wrote: a turn refused on pass 1 (full header, no
+        // carrier yet) sees the discount on pass 2 (carrier now present) and collapses,
+        // so the rewrite is not a fixpoint and the idempotence guard fails. Amortizing
+        // the one full header across the file instead keeps every turn's verdict a pure
+        // function of its own content — the property idempotence depends on. The
+        // residual error is bounded by a single header on the one turn that keeps it.
+        string body = digest.ToString().TrimEnd('\n');
+        int digestCost = RuleHelpers.Utf8Len(body) - noteBytes - HeaderDedupSavingBytes;
+        if (digestCost * MinGain >= replacedBytes)
+        {
+            Dbg.Log($"chain-collapse: turn at {spanStart} not worth collapsing " +
+                    $"(digest {digestCost}b vs payload {replacedBytes}b, {calls.Count} calls)");
+            return;
+        }
+
         // Commit: removals + anchor carrier replacement.
         foreach (var rec in toRemove)
             rec.Removed = true;
-        var clone = (JsonObject)RuleHelpers.CurrentNode(anchorResult).DeepClone();
+        var clone = anchorResult.CloneCurrentNode();
         foreach (var rb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
             .Where(x => x["tool_use_id"].GetString() == anchor.ToolUseId))
         {
-            rb["content"] = digest.ToString().TrimEnd('\n');
+            rb["content"] = body;
         }
         RuleHelpers.SetReplacement(anchorResult, clone, Name);
     }
@@ -263,7 +406,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
     private static string Header(int callCount, string sid)
     {
         return
-            CarrierPrefix + $"{callCount} separate tool calls. " +
+            CarrierPrefix + $"{CallCountPhrase(callCount.ToString())}. " +
             "Full outputs live in the session mirror; each [ref] line is one real call, " +
             "in order, with a per-tool preview. Interleaved assistant notes are verbatim.\n\n" +
             "RETRIEVAL — use the targeted form; printing a whole record costs hundreds-to-thousands of tokens:\n" +
@@ -278,10 +421,10 @@ internal sealed class ChainCollapseRule : ICompactionRule
     }
 
     /// <summary>Assistant record whose content is only text and/or thinking (no tool interaction).</summary>
-    private static bool IsProseOnly(JsonObject node)
+    private static bool IsProseOnly(JsonView node)
     {
-        var blocks = RuleHelpers.ContentBlocks(node).OfType<JsonObject>().ToList();
+        var blocks = RuleHelpers.ContentBlocks(node).Where(b => b.IsObject).ToList();
         return blocks.Count > 0 && blocks.All(b =>
-            b["type"].GetString() is "text" or "thinking");
+            b["type"].AsString() is "text" or "thinking");
     }
 }

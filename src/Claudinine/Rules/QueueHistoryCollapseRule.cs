@@ -29,12 +29,12 @@ internal sealed class QueueHistoryCollapseRule : ICompactionRule
                 continue;
             if (rec.IsProtected())
                 return;
-            var node = rec.Node;
-            string sid = node["sessionId"].GetString() ?? "";
+            var node = rec.View;
+            string sid = node["sessionId"].AsString() ?? "";
             if (!queues.TryGetValue(sid, out var queue))
                 queues[sid] = queue = [];
-            string? content = node["content"].GetString();
-            switch (node["operation"].GetString())
+            string? content = node["content"].AsString();
+            switch (node["operation"].AsString())
             {
                 case "enqueue" when content is not null:
                     queue.Add(content);

@@ -3,7 +3,7 @@
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
 		<AssemblyName>claudinine</AssemblyName>
-		<Version>0.1.16</Version>
+		<Version>0.1.17</Version>
 		<!-- No version here on develop: cd.yml writes the real one (see
 		     eng/set-version.ps1) into the runner's checkout just before a
 		     release is built, so `claudinine version` only ever reports a real
@@ -12,14 +12,38 @@
 		<RootNamespace>Claudinine</RootNamespace>
 
 		<PublishAot>true</PublishAot>
-		<InvariantGlobalization>true</InvariantGlobalization>
 		<StripSymbols>true</StripSymbols>
+		<TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
+		<!-- Explicit, because the ILCompiler default is NOT Size: measured on this
+		     project, Size 3.06 MB / default 3.59 MB / Speed 3.79 MB, three distinct
+		     binaries. All three are within noise of each other per invocation
+		     (median 47-49 ms, agent tier), so this buys 531 KB against the default
+		     for no measurable time cost. -->
 		<OptimizationPreference>Size</OptimizationPreference>
+
+		<InvariantGlobalization>true</InvariantGlobalization>
 		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+		<!-- Workstation GC, deliberately, and NOT because the pass is cheap on
+		     allocation — it is not. Server GC genuinely wins when many transcripts
+		     are compacted inside one process (~26-30% off a full-corpus pass, p95
+		     halved), which is how this was first measured.
+
+		     But that is not how the plugin runs. Every hook event spawns a fresh
+		     process that lives ~50 ms and exits, so server GC pays its heap setup
+		     on every single invocation and exits before the larger gen0 budget can
+		     repay it. Measured per-process on the corpus, workstation is ~15%
+		     faster at the median in every size tier, large sessions included.
+
+		     Do not "restore" server GC on the strength of a `run`/`bench` number:
+		     those are in-process by construction and will always favour it. Only
+		     the `aot` verb reproduces the shipped shape. Both sets of numbers, and
+		     the method traps behind them, are in eng/bench/profiling-notes.md. -->
+		<ServerGarbageCollection>false</ServerGarbageCollection>
 	</PropertyGroup>
 
 	<ItemGroup>
 		<InternalsVisibleTo Include="Claudinine.Tests" />
+		<InternalsVisibleTo Include="Claudinine.Benchmarks" />
 	</ItemGroup>
 
 </Project>

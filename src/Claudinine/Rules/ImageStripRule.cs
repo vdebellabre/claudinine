@@ -32,42 +32,41 @@ internal sealed class ImageStripRule : ICompactionRule
             if (!age.IsMidAged(pos))
                 continue; // recently shared — keep
 
-            var node = RuleHelpers.CurrentNode(rec);
-            string? sid = node["sessionId"].GetString();
+            var node = rec.CurrentView;
+            string? sid = node["sessionId"].AsString();
             string? refPrefix = rec.Uuid is string u ? RuleHelpers.RefPrefix(u) : null;
             JsonObject? clone = null;
             int bi = -1;
-            foreach (var block in RuleHelpers.ContentBlocks(node))
+            foreach (var b in RuleHelpers.ContentBlocks(node))
             {
                 bi++;
-                if (block is not JsonObject b)
+                if (!b.IsObject)
                     continue;
-                switch (b["type"].GetString())
+                switch (b["type"].AsString())
                 {
                     case "image":
                     case "document" when SourceType(b) == "base64":
-                        Stub(ref clone, node, bi, b, sid, refPrefix);
+                        Stub(ref clone, rec, bi, b, sid, refPrefix);
                         break;
 
                     case "text" when sid is not null && refPrefix is not null
-                        && b["text"].GetString() is string t
+                        && b["text"].AsString() is string t
                         && t.StartsWith(LegacyStubPrefix, StringComparison.Ordinal):
                         // The original media info is gone from a legacy stub;
                         // "image" is all it ever replaced.
-                        WriteStub(RuleHelpers.CloneBlockAt(ref clone, node, bi),
+                        WriteStub(RuleHelpers.CloneBlockAt(ref clone, rec, bi),
                             "image", sid, refPrefix);
                         break;
 
-                    case "tool_result" when b["content"] is JsonArray inner:
+                    case "tool_result" when b["content"].IsArray:
+                        var inner = b["content"];
                         for (int ti = 0; ti < inner.Count; ti++)
                         {
-                            if (inner[ti] is not JsonObject ib
-                                || ib["type"].GetString() != "image")
-                            {
+                            var ib = inner[ti];
+                            if (!ib.IsObject || ib["type"].AsString() != "image")
                                 continue;
-                            }
 
-                            var cloneResult = RuleHelpers.CloneBlockAt(ref clone, node, bi);
+                            var cloneResult = RuleHelpers.CloneBlockAt(ref clone, rec, bi);
                             var cloneInner = (JsonObject)((JsonArray)cloneResult["content"]!)[ti]!;
                             WriteStub(cloneInner, Describe(ib), sid, refPrefix);
                         }
@@ -81,9 +80,9 @@ internal sealed class ImageStripRule : ICompactionRule
     }
 
     private static void Stub(
-        ref JsonObject? clone, JsonObject node, int blockIndex,
-        JsonObject original, string? sid, string? refPrefix) =>
-        WriteStub(RuleHelpers.CloneBlockAt(ref clone, node, blockIndex), Describe(original), sid, refPrefix);
+        ref JsonObject? clone, TranscriptRecord rec, int blockIndex,
+        JsonView original, string? sid, string? refPrefix) =>
+        WriteStub(RuleHelpers.CloneBlockAt(ref clone, rec, blockIndex), Describe(original), sid, refPrefix);
 
     private static void WriteStub(JsonObject cloneBlock, string label, string? sid, string? refPrefix)
     {
@@ -98,16 +97,16 @@ internal sealed class ImageStripRule : ICompactionRule
         cloneBlock["text"] = text;
     }
 
-    private static string? SourceType(JsonObject block) =>
-        (block["source"] as JsonObject)?["type"].GetString();
+    private static string? SourceType(JsonView block) =>
+        block["source"]["type"].AsString();
 
     /// <summary>"image/png, 498KB" — enough to decide whether retrieval is worth it.</summary>
-    private static string Describe(JsonObject block)
+    private static string Describe(JsonView block)
     {
-        var source = block["source"] as JsonObject;
-        string label = source?["media_type"].GetString()
-            ?? block["type"].GetString() ?? "image";
-        if (source?["data"].GetString() is string data && data.Length > 0)
+        var source = block["source"];
+        string label = source["media_type"].AsString()
+            ?? block["type"].AsString() ?? "image";
+        if (source["data"].AsString() is string data && data.Length > 0)
             label += $", {Math.Max(1, data.Length * 3L / 4 / 1024)}KB";
         else if (SourceType(block) == "url")
             label += ", url source";

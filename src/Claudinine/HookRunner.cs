@@ -65,8 +65,12 @@ internal static class HookRunner
 
             return 0;
         }
-        catch
+        catch (Exception e)
         {
+            // Fail-closed exit is non-negotiable; being silent about it under
+            // CLAUDININE_DEBUG is not. This is also where a rule exception lands
+            // when debug lets it escape Compactor's per-rule filter.
+            Dbg.Log($"hook failed: {e}");
             return 0;
         }
     }
@@ -103,14 +107,16 @@ internal static class HookRunner
                         Compactor.Run(file);
                     }
                 }
-                catch
+                catch (Exception e)
                 {
+                    Dbg.Log($"subagent sweep failed on {file}: {e.Message}");
                     // next agent file
                 }
             }
         }
-        catch
+        catch (Exception e)
         {
+            Dbg.Log($"subagent sweep failed: {e.Message}");
             // no subagents dir we can read: nothing to sweep
         }
     }

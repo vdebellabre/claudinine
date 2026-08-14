@@ -19,25 +19,19 @@ internal sealed class StopHookSummaryStripRule : ICompactionRule
             var rec = records[i];
             if (rec.Type != "system" || rec.IsProtected())
                 continue;
-            var node = rec.Node;
-            if (node["subtype"].GetString() != "stop_hook_summary")
+            var node = rec.View;
+            if (node["subtype"].AsString() != "stop_hook_summary")
                 continue;
-            if (IsTruthy(node["hasOutput"]) || IsTruthy(node["preventedContinuation"]))
+            if (node["hasOutput"].IsTrue || node["preventedContinuation"].IsTrue)
                 continue;
             if (NonEmpty(node["hookErrors"]) || NonEmpty(node["hookAdditionalContext"]))
                 continue;
-            if (node["stopReason"] is JsonValue sr && sr.TryGetValue(out string? reason)
-                && reason.Length > 0)
-            {
+            if (node["stopReason"].AsString() is { Length: > 0 })
                 continue;
-            }
 
             rec.Removed = true;
         }
     }
 
-    private static bool IsTruthy(JsonNode? n) =>
-        n is JsonValue v && v.TryGetValue(out bool b) && b;
-
-    private static bool NonEmpty(JsonNode? n) => n is JsonArray a && a.Count > 0;
+    private static bool NonEmpty(JsonView n) => n.IsArray && n.Count > 0;
 }

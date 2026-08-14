@@ -26,3 +26,8 @@ TestResults/
 
 # Python bytecode from eng/bench tooling.
 __pycache__/
+
+# BenchmarkDotNet's per-run reports and the generated runner projects it builds.
+# Results are machine-specific, so they are read from the console and never
+# committed as if they were a portable number.
+BenchmarkDotNet.Artifacts/

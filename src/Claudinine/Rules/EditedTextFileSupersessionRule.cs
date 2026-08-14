@@ -50,29 +50,37 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
         for (int i = 0; i < records.Count; i++)
         {
             var rec = records[i];
-            if (NoticeFilename(rec) is string file && lastFullView[file] > i && !rec.IsProtected())
+            // TryGetValue, not the indexer: the scan above registers every notice
+            // filename, but that is a cross-loop invariant a future edit could
+            // silently break — and a throw here would kill the whole pass.
+            if (NoticeFilename(rec) is string file
+                && lastFullView.TryGetValue(file, out int lastView) && lastView > i
+                && !rec.IsProtected())
+            {
                 rec.Removed = true;
+            }
         }
     }
 
     /// <summary>The attachment's filename key, or null if this is not an edited_text_file.</summary>
     private static string? NoticeFilename(TranscriptRecord rec)
     {
-        if (rec.Type != "attachment" || rec.Node["attachment"] is not JsonObject att)
+        if (rec.Type != "attachment")
             return null;
-        if (att["type"].GetString() != "edited_text_file")
+        var att = rec.View["attachment"];
+        if (att["type"].AsString() != "edited_text_file")
             return null;
-        return att["filename"].GetString() is { Length: > 0 } file ? file : null;
+        return att["filename"].AsString() is { Length: > 0 } file ? file : null;
     }
 
     private static void CollectToolUses(TranscriptRecord rec, Dictionary<string, string> toolNames)
     {
-        if (rec.Type != "assistant" || rec.Node["message"]?["content"] is not JsonArray content)
+        if (rec.Type != "assistant")
             return;
-        foreach (var block in content)
+        foreach (var b in RuleHelpers.ContentBlocks(rec.View))
         {
-            if (block is JsonObject b && b["type"].GetString() == "tool_use"
-                && b["id"].GetString() is string id && b["name"].GetString() is string name)
+            if (b.IsObject && b["type"].AsString() == "tool_use"
+                && b["id"].AsString() is string id && b["name"].AsString() is string name)
             {
                 toolNames[id] = name;
             }
@@ -86,41 +94,40 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
     /// </summary>
     private static string? FullViewFilename(TranscriptRecord rec, Dictionary<string, string> toolNames)
     {
-        if (rec.Type != "user" || rec.Node["toolUseResult"] is not JsonObject result)
+        if (rec.Type != "user")
+            return null;
+        var result = rec.View["toolUseResult"];
+        if (!result.IsObject)
             return null;
         string? toolName = ResultToolName(rec, toolNames);
 
+        var file = result["file"];
         if (toolName == "Read"
-            && result["type"].GetString() == "text"
-            && result["file"] is JsonObject file
-            && GetInt(file["startLine"]) == 1
-            && GetInt(file["numLines"]) is int numLines
-            && GetInt(file["totalLines"]) is int totalLines && numLines == totalLines)
+            && result["type"].AsString() == "text"
+            && file.IsObject
+            && file["startLine"].AsInt() == 1
+            && file["numLines"].AsInt() is int numLines
+            && file["totalLines"].AsInt() is int totalLines && numLines == totalLines)
         {
-            return file["filePath"].GetString() is { Length: > 0 } read ? read : null;
+            return file["filePath"].AsString() is { Length: > 0 } read ? read : null;
         }
 
-        if (toolName == "Write" && result["type"].GetString() is "create" or "update")
-            return result["filePath"].GetString() is { Length: > 0 } written ? written : null;
+        if (toolName == "Write" && result["type"].AsString() is "create" or "update")
+            return result["filePath"].AsString() is { Length: > 0 } written ? written : null;
 
         return null;
     }
 
     private static string? ResultToolName(TranscriptRecord rec, Dictionary<string, string> toolNames)
     {
-        if (rec.Node["message"]?["content"] is not JsonArray content)
-            return null;
-        foreach (var block in content)
+        foreach (var b in RuleHelpers.ContentBlocks(rec.View))
         {
-            if (block is JsonObject b && b["type"].GetString() == "tool_result"
-                && b["tool_use_id"].GetString() is string id)
+            if (b.IsObject && b["type"].AsString() == "tool_result"
+                && b["tool_use_id"].AsString() is string id)
             {
                 return toolNames.TryGetValue(id, out string? name) ? name : null;
             }
         }
         return null;
     }
-
-    private static int? GetInt(JsonNode? n) =>
-        n is JsonValue v && v.TryGetValue(out int i) ? i : null;
 }

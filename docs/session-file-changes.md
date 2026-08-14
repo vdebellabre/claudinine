@@ -10,9 +10,12 @@ Audience: anyone reviewing this plugin before installing or listing it.
 ## The problem being solved
 
 A Claude Code session transcript (`~/.claude/projects/<project>/<session>.jsonl`,
-one JSON object per line) is append-only and grows without bound. Tool output
-dominates it: on a 95-session corpus measured 2026-08-08, tool results were 57%
-of the remaining API-visible content and assistant text 29%.
+one JSON object per line) is append-only and grows without bound. Tool traffic
+dominates it. Measured over the 174-session corpus (`eng/bench/census.py`,
+counting only what the model reads back — `message.content` from the last
+compaction boundary onward): **55.7% tool results, 27.1% tool-call inputs, 17.2%
+assistant and user text**. Better than four in five tokens a resumed session
+pays for are machine traffic, not conversation.
 
 That matters because the transcript is replayed. Resuming a session, clearing
 context, or compacting re-reads the file, so every byte of a verbose `grep` from
@@ -57,10 +60,35 @@ The rules, in execution order, are declared in one catalog
 | `ChainCollapseRule` | Collapses a multi-call turn into one digest record: one `[ref]` line per call with a short preview. The bulk of the savings. |
 | `CarrierHeaderDedupRule` | The digest's retrieval instructions are identical in every digest, so only the first per file keeps the long form. |
 | `AnchorInputStubRule` | Replaces a collapsed turn's retained `tool_use.input` with a pointer plus a 90-character preview. |
-| `ToolResultAgeRule` | Age-tiered stubbing of old tool results. |
-| `MegaBlockTrimRule` / `ImageStripRule` | Trims oversized blocks; stubs old base64 media (pasted images, PDFs, tool screenshots) with a retrieval pointer — `claudinine get <sid> --ref <uuid> --media` decodes the mirrored original to a file the Read tool can view. |
-| dedup rules (bash-read, read, system-reminder, document) | Collapse byte-identical repeats. Lossless, and near-zero yield in practice. |
-| housekeeping rules | Drop superseded edits, stale reminders, queue history, hook-success noise. |
+| `ToolResultAgeRule` | Age-tiered stubbing of old tool results. Age is measured on a dual clock — user turns *or* tool results appended since — because a user-turn-only clock never advances during long autonomous stretches. |
+| `MegaBlockTrimRule` / `ImageStripRule` | Trims oversized blocks; stubs old base64 media (pasted images, PDFs, tool screenshots) with a retrieval pointer — `claudinine get <sid> --ref <uuid> --media` decodes the mirrored original to a file the Read tool can view. Thinking blocks are never trimmed: they are signed, and a tampered block risks API rejection on replay. |
+| `ReadSupersessionRule` (bash-read, read) | Retires a read result whose every line range is covered by a later read of the same file — the earlier one is a strictly staler copy. The session's six most recent reads are never touched. |
+| dedup rules (system-reminder, document) | Collapse byte-identical repeats. Lossless, and near-zero yield in practice. |
+| `ForkHealRule` | The desktop app forks a conversation to a new session id on an API-error retry, copying history verbatim — so the copied digests still name the *parent* session, whose mirror will eventually be GC'd out from under them. Runs first, before any rule reads a digest: validates the candidate parent, merges its mirror, and retargets only records the parent actually mirrored under the same uuid. Quoted commands belonging to other sessions stay verbatim. |
+| housekeeping rules | Drop superseded edits, stale reminders, queue history, hook-success noise (see below). |
+
+### Whole-record removal is canary-verified
+
+The housekeeping rules delete entire records rather than stubbing them, so the
+question is not "is this big?" but "does the app replay it on resume?". That was
+settled empirically rather than assumed — marker records were planted early, mid
+and late in a live session (2026-08-07, session `6faceebf`, v2.1.222), which was
+then resumed to see what came back:
+
+- `Stop` and `PostToolUse` `hook_success` records were invisible to the resumed
+  model — pure disk history, and 81% of that type's bytes. They are removed.
+- `SessionStart` `hook_success` records **are** replayed verbatim into resumed
+  context. They are never touched.
+
+Removal is therefore an allowlist, not a blocklist: any event not *proven* inert
+(`SessionStart`, `PreToolUse`, or anything a future version introduces) is kept.
+`QueueHistoryCollapseRule` applies the same standard differently — it replays the
+enqueue/dequeue history internally and only drops it when every queue provably
+ends empty; anything the replay cannot account for fails the whole file closed.
+
+These removals shrink the file on disk. They are not counted in Claudinine's
+published token figures, which measure only `message.content` — the benchmark
+gives these rules no credit at all.
 
 Every stub carries a `claudinine` key, which makes changes machine-identifiable
 and the rules idempotent — re-running over already-compacted output is a no-op.
@@ -120,8 +148,17 @@ Stated plainly, because they are real:
   matching, and fail-closed validation — but a format change could make the plugin
   inert until updated. It should not corrupt anything, and that is the design
   priority.
-- **Hooks run on every prompt.** Worst measured pass across the corpus is 558 ms,
-  against a 25 s `UserPromptSubmit` budget; typical is ~91 ms.
+- **Hooks run on every prompt.** Measured over the 174-session corpus
+  (`eng/bench/steady.py`), the steady-state `UserPromptSubmit` pass — the one a
+  user actually waits for, over a transcript already compacted and mirrored — is
+  **17.5 ms median, 24.1 ms p90, 52.7 ms worst**, process startup included. That
+  is 0.21% of the 25 s hook budget at worst. The cold whole-file pass, which
+  happens once at SessionStart over an untouched transcript, is 81.8 ms median,
+  205 ms p90 and 832 ms worst; that is the one to cite for a first run rather
+  than for per-prompt cost. Both columns come from the same serial
+  `eng/bench/steady.py` run — `compare.py` also prints a per-file time, but it
+  runs files in parallel, so its timings carry contention and are not a latency
+  measurement.
 - **Session-directory GC deletes orphans.** At SessionStart, `<uuid>/` sidecar
   directories whose `<uuid>.jsonl` transcript is gone are removed, guarded by a
   strict lowercase-hex uuid match, a 24-hour grace period on the newest write
@@ -129,7 +166,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet run --project Claudinine.Tests` — 248 tests, covering each
+- `cd src && dotnet run --project Claudinine.Tests` — 285 tests, covering each
   rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.

@@ -15,7 +15,7 @@ internal abstract class ReadSupersessionRule : ICompactionRule
     protected internal abstract bool IsReadTool(string toolName);
 
     /// <summary>Ranges this call provably returns; empty = not a pure read, don't touch.</summary>
-    protected internal abstract List<ReadTarget> ExtractTargets(JsonObject toolUseBlock);
+    protected internal abstract List<ReadTarget> ExtractTargets(JsonView toolUseBlock);
 
     /// <summary>Results smaller than this aren't worth a stub (the stub itself costs bytes).</summary>
     private const int MinResultChars = 400;
@@ -31,18 +31,14 @@ internal abstract class ReadSupersessionRule : ICompactionRule
         {
             if (rec.IsProtected())
                 continue;
-            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
+            foreach (var b in RuleHelpers.BlocksOfType(rec.CurrentView, "tool_use"))
             {
-                if (block is not JsonObject b)
-                    continue;
-                if (b["type"].GetString() != "tool_use")
-                    continue;
-                if (b["name"].GetString() is not string name || !IsReadTool(name))
+                if (b["name"].AsString() is not string name || !IsReadTool(name))
                     continue;
                 var targets = ExtractTargets(b);
                 if (targets.Count == 0)
                     continue;
-                if (b["id"].GetString() is string toolUseId && toolUseId.Length > 0)
+                if (b["id"].AsString() is string toolUseId && toolUseId.Length > 0)
                     reads.Add((toolUseId, targets));
             }
         }
@@ -51,15 +47,29 @@ internal abstract class ReadSupersessionRule : ICompactionRule
 
         // Pass 2: a read is superseded when some LATER read covers every target.
         // Never the most recent read of a range, never the recency window.
+        // Walked backwards, accumulating later reads' targets per path, so each
+        // read checks only its own paths' candidates instead of rescanning every
+        // later read (that rescan was quadratic in the session's read count).
         var superseded = new Dictionary<string, List<ReadTarget>>();
         int cutoff = reads.Count - RecencyKeep;
-        for (int i = 0; i < reads.Count && i < cutoff; i++)
+        var laterByPath = new Dictionary<string, List<ReadTarget>>(StringComparer.Ordinal);
+        for (int i = reads.Count - 1; i >= 0; i--)
         {
             (string toolUseId, var targets) = reads[i];
-            bool allCovered = targets.All(t =>
-                reads.Skip(i + 1).Any(later => later.Targets.Any(lt => lt.Covers(t))));
-            if (allCovered)
-                superseded[toolUseId] = targets;
+            if (i < cutoff)
+            {
+                bool allCovered = targets.All(t =>
+                    laterByPath.TryGetValue(t.Path, out var laters)
+                    && laters.Any(lt => lt.Covers(t)));
+                if (allCovered)
+                    superseded[toolUseId] = targets;
+            }
+            foreach (var t in targets)
+            {
+                if (!laterByPath.TryGetValue(t.Path, out var bucket))
+                    laterByPath[t.Path] = bucket = [];
+                bucket.Add(t);
+            }
         }
         if (superseded.Count == 0)
             return;
@@ -72,13 +82,9 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 continue;
 
             JsonObject? clone = null;
-            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
+            foreach (var b in RuleHelpers.BlocksOfType(rec.CurrentView, "tool_result"))
             {
-                if (block is not JsonObject b)
-                    continue;
-                if (b["type"].GetString() != "tool_result")
-                    continue;
-                if (b["tool_use_id"].GetString() is not string toolUseId
+                if (b["tool_use_id"].AsString() is not string toolUseId
                     || !superseded.TryGetValue(toolUseId, out var targets))
                 {
                     continue;
@@ -95,7 +101,7 @@ internal abstract class ReadSupersessionRule : ICompactionRule
 
                 // First hit on this record: clone it, then mutate the clone's
                 // corresponding block (never the original parse).
-                clone ??= (JsonObject)RuleHelpers.CurrentNode(rec).DeepClone();
+                clone ??= rec.CloneCurrentNode();
                 foreach (var cb in RuleHelpers.ContentBlocks(clone))
                 {
                     if (cb is JsonObject cbo && cbo["tool_use_id"].GetString() == toolUseId)

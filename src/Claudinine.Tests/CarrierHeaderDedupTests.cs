@@ -3,7 +3,9 @@ namespace Claudinine.Tests;
 public sealed class CarrierHeaderDedupTests : IDisposable
 {
     private readonly string _dir;
-    private static readonly string Output = "tool output " + new string('o', 400);
+    // Corpus-sized: see ChainCollapseTests.Output — the economics gate makes the
+    // fixture payload size load-bearing (412b was below the header break-even).
+    private static readonly string Output = "tool output " + new string('o', 2000);
 
     public CarrierHeaderDedupTests()
     {
@@ -168,5 +170,30 @@ public sealed class CarrierHeaderDedupTests : IDisposable
             .Select(x => x["content"])
             .OfType<JsonValue>()
             .Select(v => v.TryGetValue<string>(out string? s) ? s : "")).Contains(c => c == weird);
+    }
+
+    [Test]
+    public async Task SlimmingASingleCallCarrierKeepsTheSingularPhrase()
+    {
+        // The economics gate admits single-call turns, so "1 tool call" carriers exist.
+        // Slimming rebuilds the phrase from a parsed count, and spelling it separately
+        // here would rewrite them to the ungrammatical "1 separate tool calls" — the two
+        // headers must share ChainCollapseRule.CallCountPhrase.
+        //
+        // Two turns each collapsing ONE fat call: the first keeps full instructions, the
+        // second is slimmed, so the slimmed path sees a singular count.
+        var b = new TranscriptBuilder().UserPrompt("one");
+        b.ToolCall("Bash", new JsonObject { ["command"] = "a" }, Output + "A");
+        b.AssistantText("prose");
+        b.UserPrompt("two");
+        b.ToolCall("Bash", new JsonObject { ["command"] = "b" }, Output + "B");
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string text = File.ReadAllText(path);
+        await Assert.That(text).Contains("originally ran 1 tool call.");
+        await Assert.That(text).DoesNotContain("1 separate tool calls");
     }
 }

@@ -1,5 +1,7 @@
 <Solution>
   <Folder Name="/github/">
+    <File Path="../.github/workflows/build.yml" />
+    <File Path="../.github/workflows/cd.yml" />
     <File Path="../.github/workflows/ci.yml" />
   </Folder>
   <Folder Name="/solution/">
@@ -7,6 +9,7 @@
     <File Path="Directory.Packages.props" />
     <File Path="global.json" />
   </Folder>
+  <Project Path="Claudinine.Benchmarks/Claudinine.Benchmarks.csproj" />
   <Project Path="Claudinine.Tests/Claudinine.Tests.csproj" />
   <Project Path="Claudinine/Claudinine.csproj" />
 </Solution>

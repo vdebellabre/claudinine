@@ -20,27 +20,11 @@ internal sealed class TaskReminderKeepLastRule : ICompactionRule
 {
     public string Name => "task-reminder-keep-last";
 
-    public void Apply(TranscriptFile transcript)
-    {
-        var records = transcript.Records;
-        int last = -1;
-        for (int i = 0; i < records.Count; i++)
-        {
-            if (IsMainChainReminder(records[i]))
-                last = i;
-        }
-        for (int i = 0; i < last; i++)
-        {
-            var rec = records[i];
-            if (IsMainChainReminder(rec) && !rec.IsProtected())
-                rec.Removed = true;
-        }
-    }
+    public void Apply(TranscriptFile transcript) =>
+        RuleHelpers.RemoveAllButLast(transcript.Records, IsMainChainReminder);
 
     private static bool IsMainChainReminder(TranscriptRecord rec) =>
         rec.Type == "attachment"
-        && rec.Node["attachment"] is JsonObject att
-        && att["type"] is JsonValue v && v.TryGetValue(out string? t)
-        && t == "task_reminder"
+        && rec.View["attachment"]["type"].AsString() == "task_reminder"
         && !rec.IsSidechain;
 }

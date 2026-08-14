@@ -8,8 +8,31 @@ internal sealed class TranscriptRecord
 {
     public required string RawLine { get; init; }
 
-    /// <summary>Parsed view of RawLine. Never mutated — replacements go to <see cref="Replacement"/>.</summary>
-    public required JsonObject Node { get; init; }
+    /// <summary>
+    /// Root element of RawLine's parse — read-only by construction. The element
+    /// keeps its JsonDocument alive through an internal reference; the document
+    /// is never disposed (per-invocation process, and a live element must never
+    /// outlive its document — GC reclaims both with the record). Replacements go
+    /// to <see cref="Replacement"/> as mutable node trees.
+    /// </summary>
+    public required JsonElement Root { get; init; }
+
+    /// <summary>Read view of the ORIGINAL parse — what is on disk, ignoring pending edits.</summary>
+    public JsonView View => new(Root);
+
+    /// <summary>Read view of the record as the pass currently sees it: pending replacement, else original.</summary>
+    public JsonView CurrentView => Replacement is not null ? new(Replacement) : new(Root);
+
+    /// <summary>
+    /// Mutable clone of the record's current state — the ONLY way non-transcript
+    /// code obtains a node to mutate (see <see cref="JsonView"/>). The original
+    /// parse is never touched; the clone goes back through <see cref="Replacement"/>.
+    /// The element side needs no deep clone: an element-backed JsonObject
+    /// materializes copies on mutation, and the immutable element is untouched.
+    /// </summary>
+    public JsonObject CloneCurrentNode() => Replacement is not null
+        ? (JsonObject)Replacement.DeepClone()
+        : JsonObject.Create(Root)!; // Root is always an object (TryParse checked)
 
     public string? Uuid { get; init; }
     public string? ParentUuid { get; init; }
@@ -33,17 +56,20 @@ internal sealed class TranscriptRecord
         string json = hadCr ? line[..^1] : line;
         try
         {
-            if (JsonNode.Parse(json) is not JsonObject obj)
+            var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                doc.Dispose();
                 return null;
-            // Identity fields stay strict: a wrong-typed uuid/parentUuid/type is an
-            // unfamiliar shape, and the throw lands in this catch → format sentinel.
+            }
             return new TranscriptRecord
             {
                 RawLine = line,
-                Node = obj,
-                Uuid = obj["uuid"]?.GetValue<string>(),
-                ParentUuid = obj["parentUuid"]?.GetValue<string>(),
-                Type = obj["type"]?.GetValue<string>(),
+                Root = root,
+                Uuid = IdentityString(root, "uuid"),
+                ParentUuid = IdentityString(root, "parentUuid"),
+                Type = IdentityString(root, "type"),
                 HadCarriageReturn = hadCr,
             };
         }
@@ -51,6 +77,19 @@ internal sealed class TranscriptRecord
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Identity fields stay strict: GetString() throws on a wrong-typed
+    /// uuid/parentUuid/type — an unfamiliar shape — and the throw lands in
+    /// TryParse's catch → format sentinel, exactly like GetValue&lt;string&gt; did
+    /// on the node graph. Absent or explicit null reads as null.
+    /// </summary>
+    private static string? IdentityString(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var e) || e.ValueKind == JsonValueKind.Null)
+            return null;
+        return e.GetString();
     }
 
     /// <summary>
@@ -81,15 +120,15 @@ internal sealed class TranscriptRecord
             return true;
         }
 
-        if (Type == "user" && IsTruthy(Node["isCompactSummary"]))
+        if (Type == "user" && View["isCompactSummary"].IsTrue)
             return true;
         if (Type == "system" &&
-            Node["subtype"].GetString() is "compact_boundary" or "microcompact_boundary")
+            View["subtype"].AsString() is "compact_boundary" or "microcompact_boundary")
         {
             return true;
         }
 
-        return IsTruthy(Node["isVisibleInTranscriptOnly"]);
+        return View["isVisibleInTranscriptOnly"].IsTrue;
     }
 
     /// <summary>
@@ -98,21 +137,17 @@ internal sealed class TranscriptRecord
     /// a subagent file (<see cref="TranscriptFile.IsSidechainFile"/>) they are the
     /// conversation itself — guards must read both together.
     /// </summary>
-    public bool IsSidechain => IsTruthy(Node["isSidechain"]);
+    public bool IsSidechain => View["isSidechain"].IsTrue;
 
     /// <summary>
     /// A real user turn: message.content is a plain string (tool-result carriers
     /// use a list). DELIBERATELY narrower than RuleHelpers.IsUserPrompt (the age
     /// clock): an image-share user message ticks the clock but must not act as a
-    /// chain-collapse turn boundary.
+    /// chain-collapse turn boundary. IsString is a kind check — it never decodes
+    /// the prompt just to test its type.
     /// </summary>
     public bool IsRealUserMessage() =>
         Type == "user"
-        && !IsTruthy(Node["isCompactSummary"])
-        && Node["message"] is JsonObject m
-        && m["content"] is JsonValue v
-        && v.TryGetValue<string>(out _);
-
-    private static bool IsTruthy(JsonNode? n) =>
-        n is JsonValue v && v.TryGetValue(out bool b) && b;
+        && !View["isCompactSummary"].IsTrue
+        && View["message"]["content"].IsString;
 }
