@@ -1050,3 +1050,60 @@ back-to-back full-corpus passes churning the whole 189 MB corpus. Use the
 ranking and the two findings, not the absolute percentages. The earlier
 interleaved A/B evidence says allocation pressure hurts in every shape, so the
 interventions above should transfer — but verify each with `aot`, as always.
+
+## 2026-08-14 — reconciling `profile --full` (~7 ms/file) with `aot --full` (~84 ms)
+
+Same corpus, same rules, an order of magnitude apart: profile per-file mean
+6.8 ms / median 2.2 ms against aot mean 83.6 ms / median 58.9 ms. Both are
+right; they differ in **span** and in **environment**, and each difference is
+now measured rather than assumed. Budget for the median (450 KB) file's cold
+`aot` invocation of ~59 ms:
+
+| component | ~ms | evidence |
+|---|---:|---|
+| process creation | 11 | `claudinine version`, CI baseline |
+| **filter-driver rescan on first read** | **14** | probe below |
+| mirror append (450 KB) + fsync | 2.5 | probe at median volumes |
+| rewrite (~104 KB) + fsync + rename | 2.5 | probe at median volumes |
+| the pass, in production conditions | ~29 | remainder; see multiplier below |
+
+`profile` measures ONLY the last row's algorithmic content — by design (text
+pre-loaded, no mirror, no file writes; `Harness.SerializeAndValidate` stops
+before the file half). Everything else is span that `profile` deliberately
+excludes. The environment then multiplies the pass row itself: a fresh process
+pays heap growth from zero and first-touch page faults, AOT-`Size` codegen has
+no dynamic PGO, and the JIT number comes from a 20-iteration-warmed server-GC
+process. The multiplier is visible on the settled pass too: `aot --steady`
+minus startup leaves ~5-6 ms where the warmed in-process equivalent is
+~0.4 ms — same ~10x, so the cold ratio (29 vs 2.2 ms) is the same effect, not
+a mystery.
+
+### New finding: the endpoint agent taxes file READS ~14 ms, not spawns
+
+Measured with a Python probe in the temp dir (medians of 25):
+
+| operation | median |
+|---|---:|
+| read an unchanged file | 0.18 ms |
+| read after copy/write/1 KB-append (any modification) | **13-15 ms** |
+| same, 8 MB / 15 MB file | 21 / 25 ms |
+| 450 KB append + fsync | 2.5 ms (0.4 without fsync) |
+
+The rescan-on-modified-read is flat ~14 ms up to ~2 MB. This CORRECTS the
+scope of the earlier "XDR is costing essentially nothing" conclusion — that
+was measured for process CREATION only. File reads are a separate channel,
+and production pays it on every prompt: the app appends to the transcript,
+then the hook opens it. On a machine without an endpoint agent the whole gap
+narrows by that much.
+
+Consequence for the harness: **`aot --steady` slightly understates the real
+per-prompt cost on scan-taxed machines.** Its warm pass rewrites the file, so
+only timed pass 1 pays the rescan and the median of 3 excludes it — while
+production, where the file changes between every pair of hook invocations,
+pays it every time. Real per-prompt latency here is closer to steady + ~14 ms
+than to steady.
+
+Two fsyncs per invocation (`Jsonl.cs` mirror append + atomic rewrite, both
+`Flush(flushToDisk: true)`) cost ~4-5 ms combined at median volumes. They are
+the durability the mirror-first invariant exists for; noted as a component,
+not a target.
