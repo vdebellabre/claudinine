@@ -1107,3 +1107,30 @@ Two fsyncs per invocation (`Jsonl.cs` mirror append + atomic rewrite, both
 `Flush(flushToDisk: true)`) cost ~4-5 ms combined at median volumes. They are
 the durability the mirror-first invariant exists for; noted as a component,
 not a target.
+
+## 2026-08-14 — static PGO for the AOT binary: considered, rejected
+
+Prompted by the JIT-vs-AOT multiplier above ("the JIT number benefits from
+dynamic PGO"). Three independent reasons, any one of which suffices:
+
+1. **It does not work.** Dynamic PGO is JIT-only (needs tiering to instrument
+   and recompile). The AOT equivalent — a `.mibc` profile fed to ILCompiler —
+   is a real pipeline for ReadyToRun/crossgen2 but NOT for Native AOT:
+   dotnet/runtime#95236 reports MIBC passed to ILC is silently ignored, and
+   there is no supported publish property. Still true as of .NET 10.
+2. **Our own A/B bounds the gain at ~zero.** Speed vs Size vs default, all
+   confounds removed (settled entry above): within noise. PGO is a subtler
+   codegen lever than `OptimizationPreference=Speed`; it will not beat a knob
+   that measurably did nothing.
+3. **The pass is not codegen-bound.** ~40% GC waits, plus memmove / zeroing /
+   UTF validation — intrinsic and native helpers PGO cannot touch. The
+   fresh-process ~10x multiplier applies equally to the settled pass, which
+   runs almost no rule logic — it is heap growth and page faults, not
+   instruction selection.
+
+If a codegen lever is ever wanted, the one with real headroom is
+`IlcInstructionSet` (AOT compiles to a conservative x64 baseline; the JIT uses
+the machine's full ISA, and the profile's UTF helpers are SIMD-sensitive) — a
+compat decision (raises the CPU floor on six RIDs) for a bounded few percent.
+Parked. Optimization budget stays on allocation reduction: memo storage,
+exception probe, read-layer refactor.
