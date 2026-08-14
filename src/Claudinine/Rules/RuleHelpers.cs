@@ -109,7 +109,7 @@ internal static class RuleHelpers
     /// The write half of the read-view / mutate-clone-only convention: lazily
     /// deep-clone the record's current state, then hand back the clone's content
     /// block at <paramref name="blockIndex"/> for mutation. The original parse is
-    /// never touched (see <see cref="TranscriptRecord.Node"/>).
+    /// never touched (see <see cref="TranscriptRecord.Root"/>).
     /// </summary>
     public static JsonObject CloneBlockAt(ref JsonObject? clone, TranscriptRecord rec, int blockIndex)
     {

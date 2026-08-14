@@ -311,7 +311,7 @@ internal static class MirrorFile
     /// mirror with a rewritten copy on the pass after a collapse.
     /// </summary>
     /// <param name="disposableObj">The line's parse, owned by this method — it may
-    /// be mutated. NEVER pass a TranscriptRecord.Node here.</param>
+    /// be mutated. Only ever a mirror-line parse, never a record's tree.</param>
     private static string IdentityOf(string line, JsonObject? disposableObj)
     {
         if (disposableObj?["uuid"].GetString() is string uuid)

@@ -106,20 +106,29 @@ internal sealed class TranscriptFile
         foreach (var rec in records)
         {
             if (rec.Type != "system" ||
-                rec.Node["subtype"].GetString() is not ("compact_boundary" or "microcompact_boundary"))
+                rec.View["subtype"].AsString() is not ("compact_boundary" or "microcompact_boundary"))
             {
                 continue;
             }
-            if (rec.Node["compactMetadata"] is not JsonObject meta ||
-                meta["preservedMessages"] is not JsonObject pm ||
-                pm["allUuids"] is not JsonArray all)
+            if (!rec.Root.TryGetProperty("compactMetadata", out var meta)
+                || meta.ValueKind != JsonValueKind.Object
+                || !meta.TryGetProperty("preservedMessages", out var pm)
+                || pm.ValueKind != JsonValueKind.Object
+                || !pm.TryGetProperty("allUuids", out var all)
+                || all.ValueKind != JsonValueKind.Array)
             {
                 continue;
             }
-            foreach (var entry in all)
+            foreach (var entry in all.EnumerateArray())
             {
-                if (entry?.GetValue<string>() is string uuid && uuid.Length > 0)
+                // GetString throws on a non-string, non-null entry — deliberately
+                // strict, like the GetValue<string> this replaces: an alien shape
+                // in the app's own boundary metadata must not be half-understood.
+                if (entry.ValueKind != JsonValueKind.Null
+                    && entry.GetString() is { Length: > 0 } uuid)
+                {
                     (preserved ??= new HashSet<string>(StringComparer.Ordinal)).Add(uuid);
+                }
             }
         }
         if (preserved is null)
@@ -234,8 +243,8 @@ internal sealed class TranscriptFile
             if (newParent is not null && removedUuids.Contains(newParent))
                 newParent = SurvivingAncestor(newParent);
 
-            string? origLeaf = (node ?? rec.Node)["leafUuid"] is JsonValue lv
-                && lv.TryGetValue(out string? l) ? l : null;
+            string? origLeaf =
+                (node is not null ? new JsonView(node) : rec.View)["leafUuid"].AsString();
             string? newLeaf = origLeaf is not null && removedUuids.Contains(origLeaf)
                 ? SurvivingAncestor(origLeaf)
                 : origLeaf;
@@ -244,7 +253,7 @@ internal sealed class TranscriptFile
             {
                 if (ReferenceEquals(rec, Records[^1]))
                     tailRewritten = true;
-                node ??= (JsonObject)rec.Node.DeepClone();
+                node ??= rec.CloneCurrentNode();
                 if (newParent != rec.ParentUuid)
                     node["parentUuid"] = newParent is null ? null : JsonValue.Create(newParent);
                 if (newLeaf != origLeaf)
@@ -271,7 +280,7 @@ internal sealed class TranscriptFile
         // Re-validation. Serialized lines are independently re-parsed — that is
         // the round-trip proof for everything a rule or the rechain touched. An
         // untouched line IS the load-time bytes, whose parse already exists in
-        // rec.Node; re-parsing it proved nothing and doubled the pass's parse
+        // rec.Root; re-parsing it proved nothing and doubled the pass's parse
         // cost on large files (eng/bench/profiling-notes.md), so those are
         // checked through the parse we have. The old join-then-split count check
         // survives as the embedded-newline guard: a raw '\n' inside a serialized
@@ -280,7 +289,7 @@ internal sealed class TranscriptFile
         for (int i = 0; i < kept.Count; i++)
         {
             var (rec, line, serialized) = kept[i];
-            JsonObject nodeToCheck;
+            JsonView viewToCheck;
             string? parentToCheck;
             if (serialized)
             {
@@ -291,28 +300,25 @@ internal sealed class TranscriptFile
                     return RefuseCompute("reparse");
                 if (reparsed.Uuid != expected[i].Uuid || reparsed.ParentUuid != expected[i].Parent)
                     return RefuseCompute("chain-mismatch");
-                nodeToCheck = reparsed.Node;
+                viewToCheck = reparsed.View;
                 parentToCheck = reparsed.ParentUuid;
             }
             else
             {
-                nodeToCheck = rec.Node;
+                viewToCheck = rec.View;
                 parentToCheck = rec.ParentUuid;
             }
 
             // Nothing may still point at a removed record.
             if (parentToCheck is not null && removedUuids.Contains(parentToCheck))
                 return RefuseCompute("dangling-parent");
-            if (nodeToCheck["leafUuid"] is JsonValue rlv
-                && rlv.TryGetValue(out string? rleaf) && removedUuids.Contains(rleaf))
-            {
+            if (viewToCheck["leafUuid"].AsString() is string rleaf && removedUuids.Contains(rleaf))
                 return RefuseCompute("dangling-leaf");
-            }
             // A result carrier pointing at a removed tool_use record means a rule
             // broke pair atomicity. Unlike parentUuid/leafUuid this is not an
             // ancestry link — remapping has no meaning, so fail the rewrite.
-            if (nodeToCheck["sourceToolAssistantUUID"] is JsonValue rsv
-                && rsv.TryGetValue(out string? rsrc) && removedUuids.Contains(rsrc))
+            if (viewToCheck["sourceToolAssistantUUID"].AsString() is string rsrc
+                && removedUuids.Contains(rsrc))
             {
                 return RefuseCompute("dangling-source");
             }
