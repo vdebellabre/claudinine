@@ -16,12 +16,12 @@ require a mode, and the two modes share one vocabulary:
 The mode is required rather than defaulted because the numbers differ
 several-fold and quoting one for the other is the recurring trap in
 `eng/bench/profiling-notes.md`. (Entries there predating the rename say
-`run --warmup` — that is today's `profile --full --warmup`.)
+`run --warmup` — that is today's `profile --full`.)
 
 ## `profile` — full-corpus pass in-process, the profiler target
 
 ```bash
-dotnet run -c Release --project src/Claudinine.Benchmarks -- profile --full --warmup
+dotnet run -c Release --project src/Claudinine.Benchmarks -- profile --full
 ```
 
 Compacts all 174 corpus transcripts in ONE process: no child processes, no
@@ -31,52 +31,52 @@ attributable to a rule.
 
 `profile --steady` settles each file in memory first (parse, apply rules, take
 the rewritten text), then measures passes over that settled text — useful for
-profiling what a per-prompt invocation actually does. The settling pass warms
-the JIT as a side effect, so `--warmup` is only meaningful with `--full`. The
-report replaces the byte-saving line with an `at rest` count: if files are
-still shrinking during timed passes, the steady premise broke and the report
-says so.
+profiling what a per-prompt invocation actually does. The report replaces the
+byte-saving line with an `at rest` count: if files are still shrinking during
+timed passes, the steady premise broke and the report says so.
+
+An unmeasured warm-up pass always runs before the measured region, so
+first-call JIT compilation is never attributed to whichever rule happened to
+execute first (in `--steady` mode the settling pass plays that role). There is
+no flag for it: a measurement polluted by first-call JIT is never the number
+anyone wants.
 
 ### Under the Visual Studio profiler
 
 1. Set **Claudinine.Benchmarks** as the startup project.
-2. Set its launch arguments to **`profile --full --warmup -n 20`** (see below on
-   why `-n`).
+2. Set its launch arguments to **`profile --full`** (the `-n 20` default is
+   already profiler-sized, see below).
 3. **Debug > Performance Profiler** (`Alt+F2`), tick **CPU Usage**, then Start.
 4. Build configuration must be **Release** — the project defaults to it, so
    `dotnet run` without `-c` is already correct here, but the VS configuration
    dropdown is per-solution and needs setting once.
-
-`--warmup` runs one unmeasured pass first so first-call JIT compilation is not
-attributed to whichever rule happened to execute first. Use it whenever the
-profile is what you care about.
 
 When run in a real console the summary ends with "Press any key to close…", so a
 profiler-launched window does not vanish before you have read it. The wait is
 skipped automatically when stdin or stdout is redirected, so pipes and scripts
 never hang on it.
 
-### Why `-n 20` for a CPU profile
+### Why the default is `-n 20`
 
-One pass over the whole corpus is only ~2.7 s of CPU, so a whole profiling run
-finishes in well under 10 s — expected, but **too thin to profile**. A ~1 kHz
-sampling profiler collects a few thousand samples from that, and since
+One pass over the whole corpus is only ~2.7 s of CPU — **too thin to profile**.
+A ~1 kHz sampling profiler collects a few thousand samples from that, and since
 `chain-collapse` alone takes roughly half of them, every cheap rule lands inside
 the noise band and their relative ranking is not trustworthy.
 
-`-n 20` gives ~44 s of measured CPU (~44k samples), enough that the small rules
-are statistically solid. The corpus is read into memory once before the measured
-region, so extra iterations are pure compute and add no disk time to the profile.
-The CLI prints a reminder when it is run at the `-n 1` default.
+20 iterations give ~44 s of measured CPU (~44k samples), enough that the small
+rules are statistically solid. The corpus is read into memory once before the
+measured region, so extra iterations are pure compute and add no disk time to
+the profile. Pass `-n 1` for a quick single pass — the CLI prints a
+thin-profile reminder when you do.
 
 Note that `pass time` and the per-file stats describe the **last** iteration —
 the fully warmed one ("steady" is reserved for the input mode, a different
 axis). `wall clock` covers all iterations, so at `-n 20` the two legitimately
 differ by ~20x.
 
-Options: `-n/--iterations N` (repeat the corpus), `--limit N` (only the N
-smallest files — a fast edit/profile loop), `--only main|agent`, `-v/--verbose`
-(per-file lines).
+Options: `-n/--iterations N` (repeat the corpus, default 20), `--limit N` (only
+the N smallest files — a fast edit/profile loop), `--only main|agent`,
+`-v/--verbose` (per-file lines).
 
 Output reports mean/median/p95/max per file, throughput, and the five slowest
 files, so a regression shows up as a shifted tail rather than a moved average.

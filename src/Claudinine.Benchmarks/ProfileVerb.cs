@@ -56,8 +56,7 @@ internal static class ProfileVerb
         }
 
         Console.WriteLine($"Compacting {files.Count} transcript(s), {options.Iterations} iteration(s), "
-            + (options.Steady ? "STEADY mode (settled input)" : "FULL mode (uncompacted input)")
-            + (options.WarmUp ? ", after a warm-up pass" : "") + ".");
+            + (options.Steady ? "STEADY mode (settled input)" : "FULL mode (uncompacted input)") + ".");
 
         // One pass over the corpus is only ~3 s of CPU. A ~1 kHz sampling
         // profiler gets a few thousand samples for that, and since one rule
@@ -96,14 +95,15 @@ internal static class ProfileVerb
             Console.WriteLine("Settling pass complete (untimed; also serves as JIT warm-up).");
         }
 
-        if (options.WarmUp && !options.Steady)
+        else
         {
             // Force JIT of the whole pipeline before the measured region, so
             // first-call compilation cost is not attributed to whichever rule
-            // happened to run first.
+            // happened to run first. Always on: there is no situation where a
+            // measured pass polluted by first-call JIT is the number wanted.
             foreach (var (file, text) in inputs)
                 CompactOnce(text, file.FullName);
-            Console.WriteLine("Warm-up pass complete.");
+            Console.WriteLine("Warm-up pass complete (untimed).");
         }
 
         Console.WriteLine();
@@ -202,14 +202,15 @@ internal static class ProfileVerb
         Console.WriteLine($"corpus size      : {Corpus.Human(totalBytes)}");
         Console.WriteLine($"wall clock       : {wall.TotalSeconds:F2} s (all {options.Iterations} iteration(s))");
 
-        // Every stat below this line describes the LAST iteration only. With
-        // --warmup that is a fully warmed steady-state pass, which is the number
-        // worth quoting; folding in the earlier (colder) iterations would only
-        // blur it. Said explicitly because wall clock above covers all of them,
-        // so at -n 5 the two figures differ ~5x and would otherwise read as a bug.
-        Console.WriteLine($"pass time        : {totalMs:F0} ms  <- last iteration, the warmed number");
+        // Every stat below this line describes the LAST iteration only — an
+        // unmeasured warm-up (or settling) pass always runs first, so every
+        // iteration is warmed and the last is representative; folding them all
+        // in would only add noise. Said explicitly because wall clock above
+        // covers all of them, so at -n 20 the two figures differ ~20x and would
+        // otherwise read as a bug.
+        Console.WriteLine($"pass time        : {totalMs:F0} ms  <- last iteration");
         if (options.Iterations > 1)
-            Console.WriteLine($"       mean/iter : {wall.TotalMilliseconds / options.Iterations:F0} ms (incl. cold first pass)");
+            Console.WriteLine($"       mean/iter : {wall.TotalMilliseconds / options.Iterations:F0} ms");
 
         if (ok.Count > 0)
         {
@@ -277,11 +278,12 @@ internal static class ProfileVerb
 
     private sealed class ProfileOptions
     {
-        public int Iterations { get; private set; } = 1;
+        // 20 by default: one pass is ~3 s of CPU, too thin for a ~1 kHz sampling
+        // profiler to rank the cheap rules — see the note printed at -n 1.
+        public int Iterations { get; private set; } = 20;
         public int? Limit { get; private set; }
         public string? Only { get; private set; }
         public bool Verbose { get; private set; }
-        public bool WarmUp { get; private set; }
         public bool Steady { get; private set; }
         public string? Error { get; private set; }
 
@@ -317,9 +319,6 @@ internal static class ProfileVerb
                         break;
                     case "--verbose" or "-v":
                         o.Verbose = true;
-                        break;
-                    case "--warmup":
-                        o.WarmUp = true;
                         break;
                     default:
                         return Fail(o, $"unknown option: {args[i]}");

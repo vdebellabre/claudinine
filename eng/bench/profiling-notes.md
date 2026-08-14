@@ -969,11 +969,16 @@ shared by both verbs:
 - `profile --steady` is NEW: settles each file in memory (parse → rules →
   `TryComputeRewrite` text) before the measured passes, and reports an
   `at rest` count instead of a byte saving, same premise guard as `aot
-  --steady` / steady.py. Settling doubles as the JIT warm-up, so `--warmup`
-  only matters with `--full`.
+  --steady` / steady.py.
 
-Reading older entries: `run --warmup [-n N]` = today's `profile --full
---warmup [-n N]`; bare `aot` = today's `aot --full`; `aot --steady` unchanged.
-VS launch profile updated to `profile --full --warmup -n 20`. Smoke-tested all
-four verb×mode combinations (steady premise held 10/10 in-process, 3/3
-subprocess); 275/275 tests pass.
+Follow-up the same day: `--warmup` is REMOVED — an unmeasured warm pass now
+always runs before the measured region (in steady mode the settling pass plays
+that role), because a measurement polluted by first-call JIT is never the
+number anyone wants — and `profile`'s `-n` default went 1 → 20, the
+profiler-sized value the README always told you to pass anyway. `-n 1` still
+works for a quick pass and still prints the thin-profile reminder.
+
+Reading older entries: `run --warmup [-n N]` = today's `profile --full [-n N]`;
+bare `aot` = today's `aot --full`; `aot --steady` unchanged. VS launch profile
+is now just `profile --full`. Smoke-tested all four verb×mode combinations
+(steady premise held 10/10 in-process, 3/3 subprocess); 275/275 tests pass.

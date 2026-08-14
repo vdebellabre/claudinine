@@ -66,13 +66,14 @@ static int Usage()
           profile  Compact the whole corpus in-process (JIT, one long-lived
                    process). This is the profiler target — launch it under the
                    Visual Studio Performance Profiler for a per-rule call tree.
+                   An unmeasured JIT-warming pass always runs first (in steady
+                   mode the settling pass plays that role).
 
-                    --iterations, -n N   repeat the corpus N times (default 1)
+                    --iterations, -n N   repeat the corpus N times (default 20 —
+                                         one pass is too thin for a sampling
+                                         profiler)
                     --limit N            only the N smallest files
                     --only main|agent    restrict to one corpus half
-                    --warmup             unmeasured JIT-warming pass first
-                                         (--steady's settling pass already
-                                         warms, so only useful with --full)
                     --verbose, -v        per-file timing lines
 
           aot      Wall-clock the SHIPPED Native AOT binary, invoked as a

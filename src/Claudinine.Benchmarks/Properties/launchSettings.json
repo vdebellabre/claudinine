@@ -2,7 +2,7 @@
   "profiles": {
     "Claudinine.Benchmarks": {
       "commandName": "Project",
-      "commandLineArgs": "profile --full --warmup -n 20"
+      "commandLineArgs": "profile --full"
     }
   }
 }
