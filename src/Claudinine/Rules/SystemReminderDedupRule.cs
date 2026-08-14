@@ -25,17 +25,17 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
             if (rec.IsProtected())
                 continue;
 
-            var node = RuleHelpers.CurrentNode(rec);
+            var node = rec.CurrentView;
 
             // Reminders are injected into plain-string user prompts too. Write the
             // deduped text back as a STRING — cozempic coerced these to block
             // lists, silently breaking the "real user message has string content"
             // invariant that turn detection relies on.
-            if ((node["message"] as JsonObject)?["content"].GetStringMemo() is string promptText)
+            if (node["message"]["content"].AsStringMemo() is string promptText)
             {
                 if (DedupIn(promptText, seen) is string dedupedPrompt)
                 {
-                    var stringClone = (JsonObject)node.DeepClone();
+                    var stringClone = rec.CloneCurrentNode();
                     ((JsonObject)stringClone["message"]!)["content"] = dedupedPrompt;
                     RuleHelpers.SetReplacement(rec, stringClone, Name);
                 }
@@ -44,25 +44,25 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
 
             JsonObject? clone = null;
             int blockIndex = -1;
-            foreach (var block in RuleHelpers.ContentBlocks(node))
+            foreach (var b in RuleHelpers.ContentBlocks(node))
             {
                 blockIndex++;
-                if (block is not JsonObject b)
+                if (!b.IsObject)
                     continue;
-                string? btype = b["type"].GetString();
+                string? btype = b["type"].AsString();
                 if (btype is not ("text" or "tool_result"))
                     continue;
 
                 // text blocks carry "text"; tool_result only qualifies with string content.
                 bool isText = btype == "text";
-                string? text = isText ? b["text"].GetStringMemo() : b["content"].GetStringMemo();
+                string? text = isText ? b["text"].AsStringMemo() : b["content"].AsStringMemo();
                 if (string.IsNullOrEmpty(text))
                     continue;
 
                 if (DedupIn(text, seen) is not string newText)
                     continue;
 
-                RuleHelpers.CloneBlockAt(ref clone, node, blockIndex)[isText ? "text" : "content"] = newText;
+                RuleHelpers.CloneBlockAt(ref clone, rec, blockIndex)[isText ? "text" : "content"] = newText;
             }
 
             if (clone is not null)

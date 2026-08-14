@@ -42,35 +42,36 @@ internal sealed class ToolResultAgeRule : ICompactionRule
             if (!age.IsMidAged(pos))
                 continue; // recent — keep verbatim
 
-            var node = RuleHelpers.CurrentNode(rec);
             JsonObject? clone = null;
             int bi = -1;
-            foreach (var block in RuleHelpers.ContentBlocks(node))
+            foreach (var b in RuleHelpers.ContentBlocks(rec.CurrentView))
             {
                 bi++;
-                if (block is not JsonObject b || b["type"].GetString() != "tool_result")
+                if (!b.IsObject || b["type"].AsString() != "tool_result")
                     continue;
 
-                if (b["content"].GetStringMemo() is string content)
+                if (b["content"].AsStringMemo() is string content)
                 {
                     if (Rewrite(content, age.IsOld(pos), b, records, pos) is string newContent)
-                        RuleHelpers.CloneBlockAt(ref clone, node, bi)["content"] = newContent;
+                        RuleHelpers.CloneBlockAt(ref clone, rec, bi)["content"] = newContent;
                 }
-                else if (b["content"] is JsonArray parts)
+                else if (b["content"].IsArray)
                 {
                     // MCP array shape: each text block is an independent payload.
+                    var parts = b["content"];
                     for (int ti = 0; ti < parts.Count; ti++)
                     {
-                        if (parts[ti] is not JsonObject ib
-                            || ib["type"].GetString() != "text"
-                            || ib["text"].GetStringMemo() is not string text)
+                        var ib = parts[ti];
+                        if (!ib.IsObject
+                            || ib["type"].AsString() != "text"
+                            || ib["text"].AsStringMemo() is not string text)
                         {
                             continue;
                         }
 
                         if (Rewrite(text, age.IsOld(pos), b, records, pos) is not string newText)
                             continue;
-                        var resultClone = RuleHelpers.CloneBlockAt(ref clone, node, bi);
+                        var resultClone = RuleHelpers.CloneBlockAt(ref clone, rec, bi);
                         ((JsonObject)((JsonArray)resultClone["content"]!)[ti]!)["text"] = newText;
                     }
                 }
@@ -85,7 +86,7 @@ internal sealed class ToolResultAgeRule : ICompactionRule
     /// The tiered decision for one text payload, shared by both content shapes:
     /// null to keep as-is, else the replacement (old → stub, mid → minify + trim).
     /// </summary>
-    private static string? Rewrite(string content, bool old, JsonObject block,
+    private static string? Rewrite(string content, bool old, JsonView block,
         List<TranscriptRecord> records, int pos)
     {
         if (content.Length < MinContentChars || RuleHelpers.IsClaudinineStub(content))
@@ -116,19 +117,14 @@ internal sealed class ToolResultAgeRule : ICompactionRule
     {
         if (MayBeJson(content))
         {
-            try
+            // TryParse absorbs the structurally-invalid-despite-JSON-shaped-start
+            // case (and the literal `null`, which has nothing to minify).
+            var parsed = JsonView.TryParse(content);
+            if (parsed.Exists)
             {
-                var node = JsonNode.Parse(content);
-                if (node is not null)
-                {
-                    string minified = node.ToJsonString(Json.Compact);
-                    if (minified.Length < content.Length * 0.85)
-                        return minified;
-                }
-            }
-            catch (JsonException)
-            {
-                // structurally invalid despite the JSON-shaped start — fall through
+                string minified = parsed.ToCompactJson();
+                if (minified.Length < content.Length * 0.85)
+                    return minified;
             }
         }
 
@@ -228,10 +224,10 @@ internal sealed class ToolResultAgeRule : ICompactionRule
     /// When the result was a persisted-output stub, the sidecar path is appended so
     /// the full output stays reachable ("full output: C:\...\tool-results\x.txt").
     /// </summary>
-    private static string BuildStub(JsonObject block, string content,
+    private static string BuildStub(JsonView block, string content,
         List<TranscriptRecord> records, int pos, string? persistedPath = null)
     {
-        string? toolUseId = block["tool_use_id"].GetString();
+        string? toolUseId = block["tool_use_id"].AsString();
         string toolName = "", toolPath = "";
         if (toolUseId is not null)
         {
@@ -240,24 +236,25 @@ internal sealed class ToolResultAgeRule : ICompactionRule
             // in completion order) it can sit arbitrarily many records back — a
             // fixed window produced anonymous stubs on large batches, so scan to
             // the turn boundary instead.
-            // Reads .Node, not CurrentNode, on purpose: anchor-input-stub runs
+            // Reads View, not CurrentView, on purpose: anchor-input-stub runs
             // earlier in the catalog and may have replaced the input with its
             // pointer stub — the ORIGINAL input is what names this stub usefully.
             for (int p = pos - 1; p >= 0 && toolName.Length == 0; p--)
             {
                 if (records[p].IsRealUserMessage())
                     break; // turn boundary: the use cannot be earlier
-                foreach (var n in RuleHelpers.ContentBlocks(records[p].Node))
+                foreach (var u in RuleHelpers.ContentBlocks(records[p].View))
                 {
-                    if (n is not JsonObject u
-                        || u["type"].GetString() != "tool_use"
-                        || u["id"].GetString() != toolUseId)
+                    if (!u.IsObject
+                        || u["type"].AsString() != "tool_use"
+                        || u["id"].AsString() != toolUseId)
                     {
                         continue;
                     }
 
-                    toolName = u["name"].GetString() ?? "";
-                    if (u["input"] is JsonObject input)
+                    toolName = u["name"].AsString() ?? "";
+                    var input = u["input"];
+                    if (input.IsObject)
                     {
                         toolPath = StringField(input, "file_path")
                             ?? StringField(input, "path")
@@ -280,7 +277,7 @@ internal sealed class ToolResultAgeRule : ICompactionRule
         return parts;
     }
 
-    /// <summary>Like GetString, but empty reads as absent so ?? chains fall through.</summary>
-    private static string? StringField(JsonObject obj, string key) =>
-        obj[key].GetString() is { Length: > 0 } s ? s : null;
+    /// <summary>Like AsString, but empty reads as absent so ?? chains fall through.</summary>
+    private static string? StringField(JsonView obj, string key) =>
+        obj[key].AsString() is { Length: > 0 } s ? s : null;
 }

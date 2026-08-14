@@ -11,7 +11,7 @@ namespace Claudinine.Benchmarks;
 /// Each rule is measured IN ITS CATALOG POSITION, not on a pristine transcript.
 /// The catalog is ordered deliberately (supersession and dedup before the age
 /// tiers, the mega-block net last), and later rules read through
-/// <c>RuleHelpers.CurrentNode</c>, so they see earlier rules' pending edits.
+/// <c>TranscriptRecord.CurrentView</c>, so they see earlier rules' pending edits.
 /// Running rule N against an untouched file would measure a workload that never
 /// occurs in production — typically a larger one, since the rules ahead of it
 /// have not yet shrunk anything.

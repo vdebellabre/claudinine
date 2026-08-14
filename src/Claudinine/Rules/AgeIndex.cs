@@ -27,7 +27,7 @@ internal sealed class AgeIndex
 
         for (int i = 0; i < records.Count; i++)
         {
-            var node = records[i].Node;
+            var node = records[i].View;
             if (RuleHelpers.IsUserPrompt(node))
                 totalTurns++;
             turnOf[i] = totalTurns;

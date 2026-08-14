@@ -1,3 +1,5 @@
+using Claudinine.Transcript;
+
 namespace Claudinine.Tests;
 
 public sealed class ReadToolDedupTests : IDisposable
@@ -19,10 +21,10 @@ public sealed class ReadToolDedupTests : IDisposable
     }
 
     private static List<ReadTarget> Extract(JsonObject input) =>
-        new ReadToolDedupRule().ExtractTargets(new JsonObject
+        new ReadToolDedupRule().ExtractTargets(new JsonView(new JsonObject
         {
             ["type"] = "tool_use", ["id"] = "t1", ["name"] = "Read", ["input"] = input,
-        });
+        }));
 
     [Test]
     public async Task PlainReadClaimsDefaultWindow()

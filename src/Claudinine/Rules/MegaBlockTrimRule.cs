@@ -29,22 +29,21 @@ internal sealed class MegaBlockTrimRule : ICompactionRule
             if (!age.IsMidAged(pos))
                 continue; // active tail — leave alone (deviation, see class doc)
 
-            var node = RuleHelpers.CurrentNode(rec);
             JsonObject? clone = null;
             int bi = -1;
-            foreach (var block in RuleHelpers.ContentBlocks(node))
+            foreach (var b in RuleHelpers.ContentBlocks(rec.CurrentView))
             {
                 bi++;
-                if (block is not JsonObject b)
+                if (!b.IsObject)
                     continue;
-                string? btype = b["type"].GetString();
+                string? btype = b["type"].AsString();
                 string? field = btype switch
                 {
                     "text" => "text",
-                    "tool_result" when b["content"].GetStringMemo() is not null => "content",
+                    "tool_result" when b["content"].AsStringMemo() is not null => "content",
                     _ => null,
                 };
-                if (field is null || b[field].GetStringMemo() is not string text)
+                if (field is null || b[field].AsStringMemo() is not string text)
                     continue;
                 if (RuleHelpers.Utf8Len(text) <= MaxBlockBytes)
                     continue;
@@ -52,7 +51,7 @@ internal sealed class MegaBlockTrimRule : ICompactionRule
                 if (text.Contains(RuleHelpers.TrimSentinel, StringComparison.Ordinal))
                     continue;
 
-                RuleHelpers.CloneBlockAt(ref clone, node, bi)[field] =
+                RuleHelpers.CloneBlockAt(ref clone, rec, bi)[field] =
                     RuleHelpers.HeadTailTrimBytes(text, MaxBlockBytes);
             }
 

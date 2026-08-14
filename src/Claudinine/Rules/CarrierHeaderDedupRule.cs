@@ -31,12 +31,12 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
         {
             if (rec.Removed || rec.Type != "user")
                 continue;
-            var node = RuleHelpers.CurrentNode(rec);
+            var node = rec.CurrentView;
             foreach (var block in RuleHelpers.BlocksOfType(node, "tool_result"))
             {
                 // Carrier content is a plain string by construction (ChainCollapseRule
                 // sets it directly); anything else is not ours.
-                if (block["content"].GetStringMemo() is not string content
+                if (block["content"].AsStringMemo() is not string content
                     || !content.StartsWith(HeaderPrefix, StringComparison.Ordinal)
                     || !content.Contains(FullMarker, StringComparison.Ordinal))
                 {
@@ -57,12 +57,12 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
 
                 string rewritten = ShortHeader(callCount, sid) + content[(end + FullHeaderEnd.Length)..];
 
-                var clone = (JsonObject)node.DeepClone();
+                var clone = rec.CloneCurrentNode();
                 foreach (var cb in RuleHelpers.BlocksOfType(clone, "tool_result"))
                 {
                     cb["content"] = rewritten;
                 }
-                string existingRule = (node["claudinine"] as JsonObject)?["rule"].GetString()
+                string existingRule = node["claudinine"]["rule"].AsString()
                     ?? ChainCollapseRule.RuleName;
                 RuleHelpers.SetReplacement(rec, clone, existingRule);
             }

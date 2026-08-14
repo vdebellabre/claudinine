@@ -18,37 +18,35 @@ internal sealed class ReadToolDedupRule : ReadSupersessionRule
 
     protected internal override bool IsReadTool(string toolName) => toolName is "Read" or "read";
 
-    protected internal override List<ReadTarget> ExtractTargets(JsonObject toolUseBlock)
+    protected internal override List<ReadTarget> ExtractTargets(JsonView toolUseBlock)
     {
         var none = new List<ReadTarget>();
-        if (toolUseBlock["input"] is not JsonObject input)
+        var input = toolUseBlock["input"];
+        if (!input.IsObject)
             return none;
-        if (input["file_path"] is not JsonValue pathValue
-            || !pathValue.TryGetValue(out string? path) || path.Length == 0)
-        {
+        if (input["file_path"].AsString() is not { Length: > 0 } path)
             return none;
-        }
         // Page-ranged PDF reads etc. aren't line-addressed; refuse anything with
         // input fields we don't fully understand beyond the three known ones.
-        foreach (var (key, _) in input)
+        foreach (var (key, _) in input.Properties)
         {
             if (key is not ("file_path" or "offset" or "limit"))
                 return none;
         }
 
         int start = 1;
-        if (input["offset"] is JsonValue ov)
+        if (input["offset"].IsValue)
         {
-            if (!ov.TryGetValue(out int offset) || offset < 0)
+            if (input["offset"].AsInt() is not int offset || offset < 0)
                 return none;
             // The app treats offset as the 1-based start line; 0 behaves as 1.
             start = Math.Max(offset, 1);
         }
 
         int limit = DefaultReadLimit;
-        if (input["limit"] is JsonValue lv)
+        if (input["limit"].IsValue)
         {
-            if (!lv.TryGetValue(out int explicitLimit) || explicitLimit <= 0)
+            if (input["limit"].AsInt() is not int explicitLimit || explicitLimit <= 0)
                 return none;
             limit = explicitLimit;
         }

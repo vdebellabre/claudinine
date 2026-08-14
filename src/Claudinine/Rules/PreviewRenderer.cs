@@ -189,29 +189,23 @@ internal static partial class PreviewRenderer
 
     private static string? JsonShape(string text)
     {
-        JsonNode? parsed;
-        try
-        {
-            parsed = JsonNode.Parse(text);
-        }
-        catch (JsonException)
-        {
-            // not JSON after all — same scoping as ToolResultAgeRule.Minify
-            return null;
-        }
-        if (parsed is JsonArray arr)
+        // TryParse absorbs the not-JSON-after-all case — same scoping as
+        // ToolResultAgeRule.Minify.
+        var parsed = JsonView.TryParse(text);
+        if (parsed.IsArray)
         {
             string shape = "";
-            if (arr.FirstOrDefault() is JsonObject first)
+            var first = parsed[0];
+            if (first.IsObject)
             {
-                var keys = first.Select(kv => kv.Key).Order().Take(6);
+                var keys = first.Properties.Select(kv => kv.Key).Order().Take(6);
                 shape = $" of objects with keys [{string.Join(", ", keys)}]";
             }
-            return $"JSON array, {arr.Count} item(s){shape}";
+            return $"JSON array, {parsed.Count} item(s){shape}";
         }
-        if (parsed is JsonObject obj)
+        if (parsed.IsObject)
         {
-            var keys = obj.Select(kv => kv.Key).Order().Take(8);
+            var keys = parsed.Properties.Select(kv => kv.Key).Order().Take(8);
             return $"JSON object, keys [{string.Join(", ", keys)}]";
         }
         return null;

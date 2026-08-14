@@ -104,7 +104,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 return;
             if (rec.IsSidechain && !transcript.IsSidechainFile)
                 return; // sidechain material spliced into a MAIN transcript's turn
-            var node = RuleHelpers.CurrentNode(rec);
+            var node = rec.CurrentView;
             string? type = rec.Type;
 
             if (type == "assistant")
@@ -115,30 +115,29 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 if (uses.Count == 1)
                 {
                     var u = uses[0];
-                    if (u["id"].GetString() is not string id || id.Length == 0)
+                    if (u["id"].AsString() is not string id || id.Length == 0)
                         return;
-                    pending.Add((i, id, u["name"].GetString() ?? "?", RuleHelpers.PrimaryArg(u)));
+                    pending.Add((i, id, u["name"].AsString() ?? "?", RuleHelpers.PrimaryArg(u)));
                 }
             }
             else if (type == "user")
             {
-                var blocks = RuleHelpers.ContentBlocks(node).OfType<JsonObject>().ToList();
-                var results = blocks.Where(x => x["type"].GetString() == "tool_result").ToList();
+                var blocks = RuleHelpers.ContentBlocks(node).Where(x => x.IsObject).ToList();
+                var results = blocks.Where(x => x["type"].AsString() == "tool_result").ToList();
                 if (results.Count == 0)
                     continue; // an image share or similar — leave it alone, keep scanning
                 if (results.Count > 1 || blocks.Count != results.Count)
                     return; // legacy multi-result or mixed carrier: don't touch
                 var r = results[0];
-                int match = pending.FindIndex(p => p.Id == r["tool_use_id"].GetString());
+                int match = pending.FindIndex(p => p.Id == r["tool_use_id"].AsString());
                 if (match < 0)
                     return; // orphan or duplicate result
                 if (rec.Uuid is null)
                     return; // ref addressing needs the uuid
                 var p = pending[match];
                 pending.RemoveAt(match);
-                bool isError = r["is_error"] is JsonValue ev && ev.TryGetValue(out bool e) && e;
                 calls.Add(new Call(p.Index, i, p.Id, p.Tool, p.Arg,
-                    RuleHelpers.ResultText(r), isError, RuleHelpers.MediaKinds(r)));
+                    RuleHelpers.ResultText(r), r["is_error"].IsTrue, RuleHelpers.MediaKinds(r)));
             }
         }
         if (pending.Count > 0)
@@ -152,11 +151,8 @@ internal sealed class ChainCollapseRule : ICompactionRule
         // API-invalid); the first USE's pair also keeps the survivor chain linear.
         var anchor = calls.MinBy(c => c.UseIndex);
         var anchorResult = records[anchor.ResultIndex];
-        if ((RuleHelpers.CurrentNode(anchorResult)["claudinine"] as JsonObject)?["rule"]
-                .GetString() == Name)
-        {
+        if (anchorResult.CurrentView["claudinine"]["rule"].AsString() == Name)
             return; // already collapsed (idempotence)
-        }
 
         int spanStart = anchor.UseIndex;
         int spanEnd = calls.Max(c => c.ResultIndex);
@@ -212,7 +208,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         for (int i = spanStart; i <= spanEnd; i++)
         {
             var rec = records[i];
-            var node = RuleHelpers.CurrentNode(rec);
+            var node = rec.CurrentView;
 
             if (rec.Type == "assistant" && (useIndexes.Contains(i) || IsProseOnly(node)))
             {
@@ -227,7 +223,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 {
                     foreach (var tb in RuleHelpers.BlocksOfType(node, "text"))
                     {
-                        string t = tb["text"].GetStringMemo()?.Trim() ?? "";
+                        string t = tb["text"].AsStringMemo()?.Trim() ?? "";
                         if (t.Length > 0)
                             digest.Append("    (note) ").Append(t.Replace("\n", "\n    ")).Append('\n');
                     }
@@ -252,7 +248,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         // Commit: removals + anchor carrier replacement.
         foreach (var rec in toRemove)
             rec.Removed = true;
-        var clone = (JsonObject)RuleHelpers.CurrentNode(anchorResult).DeepClone();
+        var clone = anchorResult.CloneCurrentNode();
         foreach (var rb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
             .Where(x => x["tool_use_id"].GetString() == anchor.ToolUseId))
         {
@@ -279,10 +275,10 @@ internal sealed class ChainCollapseRule : ICompactionRule
     }
 
     /// <summary>Assistant record whose content is only text and/or thinking (no tool interaction).</summary>
-    private static bool IsProseOnly(JsonObject node)
+    private static bool IsProseOnly(JsonView node)
     {
-        var blocks = RuleHelpers.ContentBlocks(node).OfType<JsonObject>().ToList();
+        var blocks = RuleHelpers.ContentBlocks(node).Where(b => b.IsObject).ToList();
         return blocks.Count > 0 && blocks.All(b =>
-            b["type"].GetString() is "text" or "thinking");
+            b["type"].AsString() is "text" or "thinking");
     }
 }

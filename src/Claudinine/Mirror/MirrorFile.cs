@@ -68,7 +68,7 @@ internal static class MirrorFile
             var transcriptCounts = new Dictionary<string, int>();
             foreach (var rec in transcript.Records)
             {
-                if (rec.Node["claudinine"] is not null)
+                if (rec.View["claudinine"].Exists)
                     continue; // already a stub; its original is already mirrored
                 string line = rec.HadCarriageReturn ? rec.RawLine[..^1] : rec.RawLine;
                 string identity = IdentityOf(line, rec.Uuid);

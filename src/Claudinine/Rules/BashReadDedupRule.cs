@@ -13,9 +13,9 @@ internal sealed class BashReadDedupRule : ReadSupersessionRule
 
     protected internal override bool IsReadTool(string toolName) => toolName is "Bash" or "bash";
 
-    protected internal override List<ReadTarget> ExtractTargets(JsonObject toolUseBlock)
+    protected internal override List<ReadTarget> ExtractTargets(JsonView toolUseBlock)
     {
-        string? cmd = (toolUseBlock["input"] as JsonObject)?["command"].GetString();
+        string? cmd = toolUseBlock["input"]["command"].AsString();
         return BashReadParser.ParseReadTargets(cmd);
     }
 }

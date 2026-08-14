@@ -15,7 +15,7 @@ internal abstract class ReadSupersessionRule : ICompactionRule
     protected internal abstract bool IsReadTool(string toolName);
 
     /// <summary>Ranges this call provably returns; empty = not a pure read, don't touch.</summary>
-    protected internal abstract List<ReadTarget> ExtractTargets(JsonObject toolUseBlock);
+    protected internal abstract List<ReadTarget> ExtractTargets(JsonView toolUseBlock);
 
     /// <summary>Results smaller than this aren't worth a stub (the stub itself costs bytes).</summary>
     private const int MinResultChars = 400;
@@ -31,14 +31,14 @@ internal abstract class ReadSupersessionRule : ICompactionRule
         {
             if (rec.IsProtected())
                 continue;
-            foreach (var b in RuleHelpers.BlocksOfType(RuleHelpers.CurrentNode(rec), "tool_use"))
+            foreach (var b in RuleHelpers.BlocksOfType(rec.CurrentView, "tool_use"))
             {
-                if (b["name"].GetString() is not string name || !IsReadTool(name))
+                if (b["name"].AsString() is not string name || !IsReadTool(name))
                     continue;
                 var targets = ExtractTargets(b);
                 if (targets.Count == 0)
                     continue;
-                if (b["id"].GetString() is string toolUseId && toolUseId.Length > 0)
+                if (b["id"].AsString() is string toolUseId && toolUseId.Length > 0)
                     reads.Add((toolUseId, targets));
             }
         }
@@ -82,9 +82,9 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 continue;
 
             JsonObject? clone = null;
-            foreach (var b in RuleHelpers.BlocksOfType(RuleHelpers.CurrentNode(rec), "tool_result"))
+            foreach (var b in RuleHelpers.BlocksOfType(rec.CurrentView, "tool_result"))
             {
-                if (b["tool_use_id"].GetString() is not string toolUseId
+                if (b["tool_use_id"].AsString() is not string toolUseId
                     || !superseded.TryGetValue(toolUseId, out var targets))
                 {
                     continue;
@@ -101,7 +101,7 @@ internal abstract class ReadSupersessionRule : ICompactionRule
 
                 // First hit on this record: clone it, then mutate the clone's
                 // corresponding block (never the original parse).
-                clone ??= (JsonObject)RuleHelpers.CurrentNode(rec).DeepClone();
+                clone ??= rec.CloneCurrentNode();
                 foreach (var cb in RuleHelpers.ContentBlocks(clone))
                 {
                     if (cb is JsonObject cbo && cbo["tool_use_id"].GetString() == toolUseId)

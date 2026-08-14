@@ -11,6 +11,19 @@ internal sealed class TranscriptRecord
     /// <summary>Parsed view of RawLine. Never mutated — replacements go to <see cref="Replacement"/>.</summary>
     public required JsonObject Node { get; init; }
 
+    /// <summary>Read view of the ORIGINAL parse — what is on disk, ignoring pending edits.</summary>
+    public JsonView View => new(Node);
+
+    /// <summary>Read view of the record as the pass currently sees it: pending replacement, else original.</summary>
+    public JsonView CurrentView => new(Replacement ?? Node);
+
+    /// <summary>
+    /// Mutable deep clone of the record's current state — the ONLY way non-transcript
+    /// code obtains a node to mutate (see <see cref="JsonView"/>). The original parse
+    /// is never touched; the clone goes back through <see cref="Replacement"/>.
+    /// </summary>
+    public JsonObject CloneCurrentNode() => (JsonObject)((JsonNode)(Replacement ?? Node)).DeepClone();
+
     public string? Uuid { get; init; }
     public string? ParentUuid { get; init; }
     public string? Type { get; init; }

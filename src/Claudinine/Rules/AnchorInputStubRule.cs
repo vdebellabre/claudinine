@@ -41,9 +41,9 @@ internal sealed class AnchorInputStubRule : ICompactionRule
         {
             if (records[i].Removed || records[i].Type != "assistant")
                 continue;
-            foreach (var b in RuleHelpers.BlocksOfType(RuleHelpers.CurrentNode(records[i]), "tool_use"))
+            foreach (var b in RuleHelpers.BlocksOfType(records[i].CurrentView, "tool_use"))
             {
-                if (b["id"].GetString() is string id && id.Length > 0)
+                if (b["id"].AsString() is string id && id.Length > 0)
                     useIndexById[id] = i;
             }
         }
@@ -52,15 +52,15 @@ internal sealed class AnchorInputStubRule : ICompactionRule
         {
             if (rec.Removed || rec.Type != "user")
                 continue;
-            foreach (var block in RuleHelpers.BlocksOfType(RuleHelpers.CurrentNode(rec), "tool_result"))
+            foreach (var block in RuleHelpers.BlocksOfType(rec.CurrentView, "tool_result"))
             {
-                if (block["content"].GetStringMemo() is not string content
+                if (block["content"].AsStringMemo() is not string content
                     || !content.StartsWith(CarrierPrefix, StringComparison.Ordinal))
                 {
                     continue; // not a collapse carrier
                 }
 
-                if (block["tool_use_id"].GetString() is not string useId
+                if (block["tool_use_id"].AsString() is not string useId
                     || !useIndexById.TryGetValue(useId, out int useIdx))
                 {
                     continue;
@@ -73,20 +73,20 @@ internal sealed class AnchorInputStubRule : ICompactionRule
 
     private void StubAnchorInput(TranscriptRecord useRec, string useId, string sid)
     {
-        var node = RuleHelpers.CurrentNode(useRec);
-        var use = RuleHelpers.BlocksOfType(node, "tool_use")
-            .FirstOrDefault(b => b["id"].GetString() == useId);
-        if (use?["input"] is not JsonObject input)
+        var use = RuleHelpers.BlocksOfType(useRec.CurrentView, "tool_use")
+            .FirstOrDefault(b => b["id"].AsString() == useId);
+        var input = use["input"];
+        if (!input.IsObject)
             return;
-        if (input.ContainsKey("claudinine"))
+        if (input.HasProperty("claudinine"))
             return; // already stubbed (idempotence)
-        if (input.ToJsonString().Length < MinInputChars)
+        if (input.SerializedLength() < MinInputChars)
             return;
         if (useRec.Uuid is null)
             return; // retrieval addressing needs the uuid
 
         string preview = RuleHelpers.PrimaryArg(use);
-        var clone = (JsonObject)node.DeepClone();
+        var clone = useRec.CloneCurrentNode();
         foreach (var cb in RuleHelpers.BlocksOfType(clone, "tool_use")
             .Where(b => b["id"].GetString() == useId))
         {

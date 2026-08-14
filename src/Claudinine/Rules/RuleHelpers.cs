@@ -1,16 +1,16 @@
 namespace Claudinine.Rules;
 
 /// <summary>
-/// Shared plumbing for compaction rules. Rules always read through
-/// <see cref="CurrentNode"/> (so they see earlier rules' edits) and write through
-/// <see cref="SetReplacement"/> (which maintains the claudinine marker that gives
-/// idempotence-by-inspection and mirror retrieval addressing).
+/// Shared plumbing for compaction rules. Rules always READ through
+/// <see cref="JsonView"/> (<see cref="TranscriptRecord.CurrentView"/>, so they see
+/// earlier rules' edits) and WRITE through <see cref="SetReplacement"/> on a clone
+/// from <see cref="TranscriptRecord.CloneCurrentNode"/> (which maintains the
+/// claudinine marker that gives idempotence-by-inspection and mirror retrieval
+/// addressing). The JsonObject-typed helpers here exist ONLY for those mutable
+/// clones — never for reading a record's parse.
 /// </summary>
 internal static class RuleHelpers
 {
-    /// <summary>The record as the pass currently sees it: pending replacement, else original.</summary>
-    public static JsonObject CurrentNode(TranscriptRecord rec) => rec.Replacement ?? rec.Node;
-
     /// <summary>Register a rule's rewrite of a record, stamping/refreshing the marker.</summary>
     public static void SetReplacement(TranscriptRecord rec, JsonObject clone, string ruleName)
     {
@@ -23,12 +23,21 @@ internal static class RuleHelpers
         rec.Replacement = clone;
     }
 
+    /// <summary>The record's content blocks (message.content array items), read side.</summary>
+    public static IEnumerable<JsonView> ContentBlocks(JsonView record) =>
+        record["message"]["content"].Items;
+
+    /// <summary>The record's content blocks of one type — the filter almost every rule opens with.</summary>
+    public static IEnumerable<JsonView> BlocksOfType(JsonView record, string type) =>
+        ContentBlocks(record).Where(b => b.IsObject && b["type"].AsString() == type);
+
+    /// <summary>Content blocks of a mutable CLONE (write side; see the class doc).</summary>
     public static IEnumerable<JsonNode?> ContentBlocks(JsonObject record) =>
         record["message"] is JsonObject m && m["content"] is JsonArray blocks
         ? blocks
         : [];
 
-    /// <summary>The record's content blocks of one type — the filter almost every rule opens with.</summary>
+    /// <summary>Typed content blocks of a mutable CLONE (write side; see the class doc).</summary>
     public static IEnumerable<JsonObject> BlocksOfType(JsonObject record, string type) =>
         ContentBlocks(record).OfType<JsonObject>()
             .Where(b => b["type"].GetString() == type);
@@ -55,11 +64,11 @@ internal static class RuleHelpers
     }
 
     /// <summary>
-    /// Visit every string leaf of a JSON tree; a non-null return replaces the
-    /// leaf in place. One traversal shared by fork-heal's collect/retarget and
-    /// clone's retrieval-command rewrite — three hand-rolled copies of this walk
-    /// had already drifted apart in shape. Recursion depth is bounded by the
-    /// parser (JsonNode.Parse caps document depth at 64), so no explicit guard.
+    /// Visit every string leaf of a mutable CLONE; a non-null return replaces the
+    /// leaf in place. Write side only — the read-only walk is
+    /// <see cref="JsonView.ForEachString"/>. One traversal shared by fork-heal's
+    /// retarget and clone's retrieval-command rewrite. Recursion depth is bounded
+    /// by the parser (JsonNode.Parse caps document depth at 64), so no explicit guard.
     /// </summary>
     public static void VisitStrings(JsonNode? node, Func<string, string?> transform)
     {
@@ -97,14 +106,14 @@ internal static class RuleHelpers
     }
 
     /// <summary>
-    /// The write half of the read-CurrentNode / mutate-clone-only convention:
-    /// lazily deep-clone the record's node, then hand back the clone's content
+    /// The write half of the read-view / mutate-clone-only convention: lazily
+    /// deep-clone the record's current state, then hand back the clone's content
     /// block at <paramref name="blockIndex"/> for mutation. The original parse is
     /// never touched (see <see cref="TranscriptRecord.Node"/>).
     /// </summary>
-    public static JsonObject CloneBlockAt(ref JsonObject? clone, JsonObject node, int blockIndex)
+    public static JsonObject CloneBlockAt(ref JsonObject? clone, TranscriptRecord rec, int blockIndex)
     {
-        clone ??= (JsonObject)node.DeepClone();
+        clone ??= rec.CloneCurrentNode();
         return (JsonObject)ContentBlocks(clone).ElementAt(blockIndex)!;
     }
 
@@ -113,41 +122,41 @@ internal static class RuleHelpers
     /// else content; list content joins sub-block texts with a space. Never throws
     /// on untrusted shapes.
     /// </summary>
-    public static string TextOf(JsonNode? block)
+    public static string TextOf(JsonView block)
     {
-        if (block is not JsonObject b)
+        if (!block.IsObject)
             return "";
-        var result = FirstNonEmpty(b["text"], b["thinking"], b["content"]);
-        if (result is JsonArray list)
+        var result = FirstNonEmpty(block["text"], block["thinking"], block["content"]);
+        if (result.IsArray)
         {
-            return string.Join(" ", list.OfType<JsonObject>()
-                .Select(sub => sub["text"].GetStringMemo())
+            return string.Join(" ", result.Items.Where(sub => sub.IsObject)
+                .Select(sub => sub["text"].AsStringMemo())
                 .Where(s => s is not null));
         }
 
-        return result.GetStringMemo() ?? "";
+        return result.AsStringMemo() ?? "";
     }
 
-    private static JsonNode? FirstNonEmpty(params JsonNode?[] candidates)
+    private static JsonView FirstNonEmpty(params JsonView[] candidates)
     {
         foreach (var c in candidates)
         {
-            if (c is JsonArray) return c;
-            if (c.GetStringMemo() is { Length: > 0 }) return c;
+            if (c.IsArray) return c;
+            if (c.AsStringMemo() is { Length: > 0 }) return c;
         }
-        return null;
+        return default;
     }
 
     /// <summary>tool_result payload text: plain string, or concatenated text sub-blocks.</summary>
-    public static string ResultText(JsonObject block)
+    public static string ResultText(JsonView block)
     {
         var c = block["content"];
-        if (c.GetStringMemo() is string s)
+        if (c.AsStringMemo() is string s)
             return s;
-        if (c is JsonArray parts)
+        if (c.IsArray)
         {
-            return string.Concat(parts.OfType<JsonObject>()
-                .Select(p => p["text"].GetStringMemo() ?? ""));
+            return string.Concat(c.Items.Where(p => p.IsObject)
+                .Select(p => p["text"].AsStringMemo() ?? ""));
         }
 
         return "";
@@ -226,13 +235,14 @@ internal static class RuleHelpers
     /// extraction is blind to these blocks, so without this summary a screenshot
     /// result digests as "(no output)" and its existence is silently lost.
     /// </summary>
-    public static string MediaKinds(JsonObject toolResultBlock)
+    public static string MediaKinds(JsonView toolResultBlock)
     {
-        if (toolResultBlock["content"] is not JsonArray parts)
+        var parts = toolResultBlock["content"];
+        if (!parts.IsArray)
             return "";
-        var kinds = parts.OfType<JsonObject>()
-            .Where(p => p["type"].GetString() is "image" or "document")
-            .Select(p => (p["source"] as JsonObject)?["media_type"].GetString() ?? "media")
+        var kinds = parts.Items.Where(p => p.IsObject)
+            .Where(p => p["type"].AsString() is "image" or "document")
+            .Select(p => p["source"]["media_type"].AsString() ?? "media")
             .ToList();
         return string.Join("+", kinds.GroupBy(k => k)
             .Select(g => g.Count() > 1 ? $"{g.Key} x{g.Count()}" : g.Key));
@@ -242,16 +252,17 @@ internal static class RuleHelpers
     /// The human-meaningful argument of a tool_use input, for one-line previews:
     /// first non-empty well-known key, else the first non-empty string value.
     /// </summary>
-    public static string PrimaryArg(JsonObject toolUse)
+    public static string PrimaryArg(JsonView toolUse)
     {
-        if (toolUse["input"] is not JsonObject input)
+        var input = toolUse["input"];
+        if (!input.IsObject)
             return "";
         foreach (string key in (string[])["command", "file_path", "path", "pattern", "url", "query", "prompt"])
         {
-            if (input[key].GetString() is { Length: > 0 } s)
+            if (input[key].AsString() is { Length: > 0 } s)
                 return s.ReplaceLineEndings(" ");
         }
-        return input.Select(kv => kv.Value.GetString())
+        return input.Properties.Select(kv => kv.Value.AsString())
             .FirstOrDefault(s => !string.IsNullOrEmpty(s))?.ReplaceLineEndings(" ") ?? "";
     }
 
@@ -262,19 +273,19 @@ internal static class RuleHelpers
     /// (chain-collapse's turn boundary, string content only): an image-share user
     /// message advances the age clock but is not a collapse boundary.
     /// </summary>
-    public static bool IsUserPrompt(JsonObject record)
+    public static bool IsUserPrompt(JsonView record)
     {
-        if (record["type"].GetString() != "user")
+        if (record["type"].AsString() != "user")
             return false;
-        // Kind check, not TryGetValue<string>: that would decode the entire
-        // prompt just to test its type.
-        var content = (record["message"] as JsonObject)?["content"];
-        if (content is JsonValue v && v.GetValueKind() == JsonValueKind.String)
+        // Kind check, not AsString: that would decode the entire prompt just to
+        // test its type.
+        var content = record["message"]["content"];
+        if (content.IsString)
             return true;
-        if (content is JsonArray list)
+        if (content.IsArray)
         {
-            return !list.OfType<JsonObject>()
-                .Any(b => b["type"].GetString() == "tool_result");
+            return !content.Items.Where(b => b.IsObject)
+                .Any(b => b["type"].AsString() == "tool_result");
         }
 
         return false;

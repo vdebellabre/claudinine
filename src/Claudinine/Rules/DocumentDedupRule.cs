@@ -28,7 +28,7 @@ internal sealed class DocumentDedupRule : ICompactionRule
             if (rec.IsProtected())
                 continue;
             int bi = -1;
-            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
+            foreach (var block in RuleHelpers.ContentBlocks(rec.CurrentView))
             {
                 bi++;
                 string text = RuleHelpers.TextOf(block);
@@ -66,14 +66,14 @@ internal sealed class DocumentDedupRule : ICompactionRule
                 continue;
             foreach ((var rec, int blockIndex) in list.Skip(1))
             {
-                var node = RuleHelpers.CurrentNode(rec);
-                if (RuleHelpers.ContentBlocks(node).ElementAtOrDefault(blockIndex) is not JsonObject block)
+                var block = RuleHelpers.ContentBlocks(rec.CurrentView).ElementAtOrDefault(blockIndex);
+                if (!block.IsObject)
                     continue;
                 // Only text and string tool_results, like the original.
-                string? field = block["type"].GetString() switch
+                string? field = block["type"].AsString() switch
                 {
                     "text" => "text",
-                    "tool_result" when block["content"].GetStringMemo() is not null => "content",
+                    "tool_result" when block["content"].AsStringMemo() is not null => "content",
                     _ => null,
                 };
                 if (field is null)
@@ -83,7 +83,7 @@ internal sealed class DocumentDedupRule : ICompactionRule
                 preview = preview[..Math.Min(80, preview.Length)].Replace('\n', ' ');
 
                 JsonObject? clone = null;
-                RuleHelpers.CloneBlockAt(ref clone, node, blockIndex)[field] =
+                RuleHelpers.CloneBlockAt(ref clone, rec, blockIndex)[field] =
                     $"[claudinine: duplicate content removed — first seen earlier: {preview}...]";
                 RuleHelpers.SetReplacement(rec, clone!, Name);
             }

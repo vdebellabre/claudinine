@@ -92,12 +92,13 @@ internal static class GetVerb
                     continue;
                 if (refPrefix is not null && !uuid.StartsWith(refPrefix, StringComparison.OrdinalIgnoreCase))
                     continue;
+                var view = new JsonView(rec);
                 if (media)
                 {
-                    DecodeMediaBlocks(rec, uuid, matches);
+                    DecodeMediaBlocks(view, uuid, matches);
                     continue;
                 }
-                foreach (var b in RuleHelpers.BlocksOfType(rec, "tool_result"))
+                foreach (var b in RuleHelpers.BlocksOfType(view, "tool_result"))
                 {
                     string text = RuleHelpers.ResultText(b);
                     if (text.Length == 0)
@@ -115,12 +116,13 @@ internal static class GetVerb
                 // — plain --grep stays an output search, not an input search.
                 if (refPrefix is null)
                     continue;
-                foreach (var b in RuleHelpers.BlocksOfType(rec, "tool_use"))
+                foreach (var b in RuleHelpers.BlocksOfType(view, "tool_use"))
                 {
-                    if (b["input"] is not JsonObject input)
+                    var input = b["input"];
+                    if (!input.IsObject)
                         continue;
-                    string name = b["name"].GetString() ?? "?";
-                    matches.Add((uuid, $"{name} input: {input.ToJsonString(Json.Compact)}"));
+                    string name = b["name"].AsString() ?? "?";
+                    matches.Add((uuid, $"{name} input: {input.ToCompactJson()}"));
                 }
             }
         }
@@ -177,22 +179,22 @@ internal static class GetVerb
     /// report the paths as one match. Deterministic names (uuid prefix + block
     /// ordinal) make repeated retrievals overwrite rather than accumulate.
     /// </summary>
-    private static void DecodeMediaBlocks(JsonObject rec, string uuid,
+    private static void DecodeMediaBlocks(JsonView rec, string uuid,
         List<(string Uuid, string Text)> matches)
     {
         var lines = new List<string>();
         int n = 0;
-        foreach (var b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>())
+        foreach (var b in RuleHelpers.ContentBlocks(rec).Where(x => x.IsObject))
         {
-            string? btype = b["type"].GetString();
+            string? btype = b["type"].AsString();
             if (btype is "image" or "document")
             {
                 DecodeOne(b, uuid, n++, lines);
             }
-            else if (btype == "tool_result" && b["content"] is JsonArray inner)
+            else if (btype == "tool_result" && b["content"].IsArray)
             {
-                foreach (var ib in inner.OfType<JsonObject>()
-                    .Where(x => x["type"].GetString() is "image" or "document"))
+                foreach (var ib in b["content"].Items.Where(x =>
+                    x.IsObject && x["type"].AsString() is "image" or "document"))
                 {
                     DecodeOne(ib, uuid, n++, lines);
                 }
@@ -202,17 +204,18 @@ internal static class GetVerb
             matches.Add((uuid, string.Join("\n", lines)));
     }
 
-    private static void DecodeOne(JsonObject block, string uuid, int index, List<string> lines)
+    private static void DecodeOne(JsonView block, string uuid, int index, List<string> lines)
     {
-        if (block["source"] is not JsonObject source)
+        var source = block["source"];
+        if (!source.IsObject)
             return;
-        string? sourceType = source["type"].GetString();
+        string? sourceType = source["type"].AsString();
         if (sourceType == "url")
         {
-            lines.Add($"media {index} is a URL source: {source["url"].GetString() ?? "?"}");
+            lines.Add($"media {index} is a URL source: {source["url"].AsString() ?? "?"}");
             return;
         }
-        if (sourceType != "base64" || source["data"].GetString() is not string data)
+        if (sourceType != "base64" || source["data"].AsString() is not string data)
             return;
         byte[] bytes;
         try
@@ -224,7 +227,7 @@ internal static class GetVerb
             lines.Add($"media {index}: base64 decode failed");
             return;
         }
-        string mediaType = source["media_type"].GetString() ?? "application/octet-stream";
+        string mediaType = source["media_type"].AsString() ?? "application/octet-stream";
         string dir = Path.Combine(Path.GetTempPath(), "claudinine", "media");
         string path = Path.Combine(dir, $"{RuleHelpers.RefPrefix(uuid)}-{index}{Extension(mediaType)}");
         try

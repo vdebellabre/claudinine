@@ -138,8 +138,7 @@ public sealed class CompactorTests : IDisposable
         string before = File.ReadAllText(path);
 
         var transcript = Claudinine.Transcript.TranscriptFile.TryLoad(path)!;
-        transcript.Records[^1].Replacement =
-            (JsonObject)transcript.Records[^1].Node.DeepClone();
+        transcript.Records[^1].Replacement = transcript.Records[^1].CloneCurrentNode();
 
         await Assert.That(transcript.TryRewrite()).IsFalse();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
@@ -153,8 +152,7 @@ public sealed class CompactorTests : IDisposable
         // was never mirrored either. The pre-swap length re-check must refuse.
         string path = EightIdenticalReads(out _).WriteTo(_dir);
         var transcript = Claudinine.Transcript.TranscriptFile.TryLoad(path)!;
-        transcript.Records[1].Replacement =
-            (JsonObject)transcript.Records[1].Node.DeepClone();
+        transcript.Records[1].Replacement = transcript.Records[1].CloneCurrentNode();
 
         File.AppendAllText(path, """{"type":"user","uuid":"late-append"}""" + "\n");
         string withLateAppend = File.ReadAllText(path);

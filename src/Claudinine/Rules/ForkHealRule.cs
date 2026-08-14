@@ -45,8 +45,8 @@ internal sealed partial class ForkHealRule : ICompactionRule
         {
             if (rec.Removed || rec.IsProtected())
                 continue;
-            var node = RuleHelpers.CurrentNode(rec);
-            if (node["claudinine"] is null)
+            var node = rec.CurrentView;
+            if (!node["claudinine"].Exists)
                 continue; // only our own rewrites embed retrieval commands
             var sids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             CollectForeignSids(node, currentSid, sids);
@@ -89,20 +89,19 @@ internal sealed partial class ForkHealRule : ICompactionRule
                 && rec.Uuid is not null && parentUuids.Contains(rec.Uuid)).ToList();
             if (retarget.Count == 0)
                 continue;
-            var node = RuleHelpers.CurrentNode(rec);
-            var clone = (JsonObject)node.DeepClone();
+            var clone = rec.CloneCurrentNode();
             foreach (string sid in retarget)
                 RetargetStrings(clone, sid, currentSid);
             // The marker identifies what the record IS, not who touched it last —
             // same convention as carrier-header-dedup.
-            string existingRule = (node["claudinine"] as JsonObject)?["rule"].GetString() ?? Name;
+            string existingRule = rec.CurrentView["claudinine"]["rule"].AsString() ?? Name;
             RuleHelpers.SetReplacement(rec, clone, existingRule);
         }
     }
 
-    private static void CollectForeignSids(JsonNode? node, string currentSid, HashSet<string> sids)
+    private static void CollectForeignSids(JsonView node, string currentSid, HashSet<string> sids)
     {
-        RuleHelpers.VisitStrings(node, text =>
+        node.ForEachString(text =>
         {
             foreach (Match m in GetCommand().Matches(text))
             {
@@ -110,7 +109,6 @@ internal sealed partial class ForkHealRule : ICompactionRule
                 if (!sid.Equals(currentSid, StringComparison.OrdinalIgnoreCase))
                     sids.Add(sid);
             }
-            return null; // collect only, never rewrite
         });
     }
 

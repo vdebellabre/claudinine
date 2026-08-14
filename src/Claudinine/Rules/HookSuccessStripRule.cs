@@ -26,11 +26,12 @@ internal sealed class HookSuccessStripRule : ICompactionRule
                 continue;
             if (rec.IsSidechain)
                 continue;
-            if (rec.Node["attachment"] is not JsonObject att)
+            var att = rec.View["attachment"];
+            if (!att.IsObject)
                 continue;
-            if (att["type"].GetString() != "hook_success")
+            if (att["type"].AsString() != "hook_success")
                 continue;
-            if (att["hookEvent"].GetString() is "Stop" or "PostToolUse")
+            if (att["hookEvent"].AsString() is "Stop" or "PostToolUse")
                 rec.Removed = true;
         }
     }
