@@ -59,6 +59,10 @@ internal sealed class TranscriptFile
         if (text.Length == 0)
             return null;
 
+        // Every pass starts here; the previous pass's decoded-string memo caches
+        // for a tree that is now unreachable.
+        Json.ResetMemo();
+
         bool endsWithNewline = text.EndsWith('\n');
         string[] lines = text.Split('\n');
         int count = endsWithNewline ? lines.Length - 1 : lines.Length;
