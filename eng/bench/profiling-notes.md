@@ -431,3 +431,56 @@ decision, and the in-process `run` path may legitimately prefer server GC):
 Worth noting the asymmetry before flipping it: server GC was chosen from an
 in-process measurement (174 files in one process), which is the one shape
 production never has — every hook invocation is a fresh ~50 ms process.
+
+## 2026-08-14 (settled, part 2) — server GC IS a real win in-process
+
+Confirms the other half of the asymmetry. `run --warmup -n 5`, one discarded
+cold-cache round, then 5 interleaved rounds. Steady-state pass time (last
+iteration of each run) in ms:
+
+| round | server | workstation |
+|---|---:|---:|
+| 1 | 1289 | 1693 |
+| 2 | 1356 | 1694 |
+| 3 | 1238 | 1758 |
+| 4 | 1321 | 1777 |
+| 5 | 1214 | 1766 |
+
+**Server GC wins every round with no overlap** — ~1280 vs ~1740 ms, a ~26-30%
+reduction. It also halves the tail: p95 ~33 ms vs ~59 ms, and max on the 14.9 MB
+session 108-118 ms vs 162-166 ms. Per-file median barely moves (2.3-2.6 ms both
+ways), so the gain is concentrated exactly where allocation pressure is highest —
+the large sessions, which is what the original decision predicted.
+
+Method note: unlike the AOT binaries, `DOTNET_gcServer` **is** honoured here. The
+bench host is a JIT build with an external `runtimeconfig.json`
+(`System.GC.Server: true`), and the env var takes precedence over that. Verified
+with a probe reading `GCSettings.IsServerGC`: default True, `DOTNET_gcServer=0`
+→ False, `=1` → True. That is why this measurement is valid where the earlier
+AOT one was not — an embedded AOT config is not overridable the same way.
+
+### The two paths genuinely disagree
+
+| | in-process (`run`, 174 files, one process) | subprocess (`aot`, one process per file) |
+|---|---|---|
+| winner | **server GC**, ~26-30% faster | **workstation GC**, ~15% faster |
+| where the gain lands | large sessions (p95 halved) | all tiers, median |
+
+Both results are real and reproducible; they are measuring different things. Server
+GC's larger gen0 budget and per-core heaps pay off across 174 files in one process
+and never pay their setup cost twice. A hook invocation lives ~50 ms, so it pays
+that setup on every call and exits before the budget matters.
+
+**Production is the subprocess shape** — every hook event is a fresh process. So the
+subprocess measurement is the one that describes shipped behaviour, and `run` is the
+in-process proxy that motivated the original server-GC decision.
+
+Still not changed in the csproj. The decision is now a clear trade with numbers on
+both sides rather than an open question:
+
+- ship `ServerGarbageCollection=false` → ~8 ms (~15%) off every real hook invocation
+- keep `true` → ~460 ms off a full-corpus in-process pass, which only the bench does
+
+If the goal is user-visible hook latency, workstation wins. Note that flipping it
+makes the `run` verb's numbers ~30% worse, so re-baseline the notes above if it
+changes; `bench`/`run` remain useful for relative comparisons either way.

@@ -13,7 +13,6 @@
 		<PublishAot>true</PublishAot>
 		<StripSymbols>true</StripSymbols>
 		<TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
-		<OptimizationPreference>Size</OptimizationPreference>
 		
 		<InvariantGlobalization>true</InvariantGlobalization>
 		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
