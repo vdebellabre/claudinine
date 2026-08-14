@@ -294,3 +294,63 @@ Two csproj properties in the current publish setup are no-ops worth removing:
 - `PublishReadyToRun` (in `FolderProfile.pubxml`) — R2R pre-JITs managed IL, which
   a Native AOT publish does not emit. Both output directories contain only
   `claudinine.exe` + `.pdb`, confirming it was ignored.
+
+## 2026-08-14 (later) — Size restored, and server GC turns out to be a pessimization
+
+Rebuilt from VS with `OptimizationPreference=Size` and the redundant
+`PublishTrimmed` removed. Binary 3.87 → 3.17 MB.
+
+Full corpus, `--event UserPromptSubmit`, 174 files:
+
+| | Size (new) | Speed (new) | Size (old, 08-12) |
+|---|---:|---:|---:|
+| mean | 85.8 ms | 96.4 ms | 77.1 ms |
+| median | 58.5 ms | 66.8 ms | 51.8 ms |
+| p95 | 208.1 ms | 262.7 ms | 198.9 ms |
+| floor | 39.1 ms | 43.3 ms | 39.1 ms |
+| start only | 15.7 ms | 15.7 ms | 12.2 ms |
+
+So `Size` recovers most of the Speed regression (median 66.8 → 58.5 ms) and is the
+right setting. But it does **not** explain the gap to the old binary: with the flag
+now identical on both, interleaved A/B still gives new 52.9 / 51.2 ms against old
+47.5 / 46.9 ms, and startup is still +3.5 ms. `OptimizationPreference` was not the
+main cause. Remaining candidates: ILCompiler 10.0.10 → 10.0.11, and the code
+changes since 08-12.
+
+### Server GC is slower here, in every size tier
+
+`ServerGarbageCollection=true` (csproj line 26) was shipped on the reasoning that
+the pass is GC-bound. That holds **in-process**, but not for the subprocess path
+the hooks actually use. Toggled at runtime via `DOTNET_gcServer`, same binary, so
+nothing else varies:
+
+| corpus slice | gcServer=0 (workstation) | gcServer=1 (server) |
+|---|---:|---:|
+| full, median | ~50 ms | ~60 ms |
+| 60 smallest, median | 48.4 ms | 52.0 ms |
+| agent half, median | 46.8 ms | 55.3 ms |
+| main half (big sessions), median | 59.5 ms | 73.0 ms |
+| main half, mean | 92.2 ms | 104.4 ms |
+
+Workstation GC wins **every** tier, by 10–15 ms at the median — including the large
+sessions server GC was meant to help. With `gcServer=0` the new binary beats the
+old one outright (44.6 vs 44.5 ms on the 60-file subset, and better on the full
+corpus), which also closes the regression above.
+
+Why the in-process result inverted: server GC sizes its heap and per-core heaps for
+a long-lived process amortizing startup across many collections. A hook invocation
+lives ~50 ms and exits, so it pays server GC's setup on every single call and never
+reaches the point where the larger gen0 budget pays off. The one measurement where
+server GC looked good (`run`, in-process, 174 files in one process) is exactly the
+shape production never has.
+
+Caveat on the aggregate: on the full corpus `gcServer=0` shows a *worse* mean and
+p95 in some rounds despite the better median — variance is high on the few 10 MB+
+files. The per-tier split above is the reliable read; the aggregate mean is
+dominated by a handful of outliers.
+
+**Not changed in the csproj** — this contradicts a deliberate, documented decision
+(see the comment above line 26 and the 2026-08-14 speed round in memory), so it is
+reported, not applied. Verifying before flipping it: confirm with `PerfView` that
+GC pause time actually drops, and re-check the in-process `run` number, which may
+legitimately prefer server GC.

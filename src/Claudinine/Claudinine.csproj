@@ -11,10 +11,9 @@
 		<RootNamespace>Claudinine</RootNamespace>
 
 		<PublishAot>true</PublishAot>
-		<PublishTrimmed>true</PublishTrimmed>
 		<StripSymbols>true</StripSymbols>
 		<TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
-		<OptimizationPreference>Speed</OptimizationPreference>
+		<OptimizationPreference>Size</OptimizationPreference>
 		
 		<InvariantGlobalization>true</InvariantGlobalization>
 		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
