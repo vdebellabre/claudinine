@@ -32,8 +32,7 @@ internal sealed class AgeIndex
                 totalTurns++;
             turnOf[i] = totalTurns;
 
-            totalResults += RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                .Count(b => b["type"].GetString() == "tool_result");
+            totalResults += RuleHelpers.BlocksOfType(node, "tool_result").Count();
             resultsThrough[i] = totalResults;
         }
 

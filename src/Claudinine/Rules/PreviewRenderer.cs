@@ -59,7 +59,8 @@ internal static partial class PreviewRenderer
         if (RuleHelpers.PersistedOutputPath(text) is string sidecar)
             return prefix + $"output persisted to {sidecar}";
 
-        if (arg.Contains("pytest") || text[..Math.Min(400, text.Length)].Contains("pytest"))
+        if (arg.Contains("pytest")
+            || text.AsSpan(0, Math.Min(400, text.Length)).Contains("pytest", StringComparison.Ordinal))
         {
             string? p = PytestPreview(text);
             if (p is not null)
@@ -101,15 +102,15 @@ internal static partial class PreviewRenderer
 
         // JSON payloads (MCP tools, APIs): describe the shape — a head preview
         // shows only punctuation.
-        string lstripped = text.TrimStart();
-        if (lstripped.StartsWith('[') || lstripped.StartsWith('{'))
+        ReadOnlySpan<char> lstripped = text.AsSpan().TrimStart();
+        if (lstripped.Length > 0 && (lstripped[0] == '[' || lstripped[0] == '{'))
         {
             string? shape = JsonShape(text);
             if (shape is not null)
                 return prefix + shape;
         }
 
-        if (text.Trim().Length == 0)
+        if (string.IsNullOrWhiteSpace(text))
             return prefix + "(no output)";
 
         if (tool is "Bash" or "PowerShell")
@@ -193,8 +194,9 @@ internal static partial class PreviewRenderer
         {
             parsed = JsonNode.Parse(text);
         }
-        catch
+        catch (JsonException)
         {
+            // not JSON after all — same scoping as ToolResultAgeRule.Minify
             return null;
         }
         if (parsed is JsonArray arr)

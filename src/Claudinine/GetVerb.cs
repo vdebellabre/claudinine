@@ -17,6 +17,21 @@ internal static class GetVerb
 {
     public static int Run(string[] args)
     {
+        // Same top-level guard as clone: a mirror going away mid-read (GC race,
+        // network share) should report and exit 1, not dump a stack trace.
+        try
+        {
+            return RunCore(args);
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"get failed: {e.Message}");
+            return 1;
+        }
+    }
+
+    private static int RunCore(string[] args)
+    {
         if (args.Length == 0)
         {
             Console.Error.WriteLine(
@@ -82,8 +97,7 @@ internal static class GetVerb
                     DecodeMediaBlocks(rec, uuid, matches);
                     continue;
                 }
-                foreach (var b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
-                    .Where(x => x["type"].GetString() == "tool_result"))
+                foreach (var b in RuleHelpers.BlocksOfType(rec, "tool_result"))
                 {
                     string text = RuleHelpers.ResultText(b);
                     if (text.Length == 0)
@@ -101,8 +115,7 @@ internal static class GetVerb
                 // — plain --grep stays an output search, not an input search.
                 if (refPrefix is null)
                     continue;
-                foreach (var b in RuleHelpers.ContentBlocks(rec).OfType<JsonObject>()
-                    .Where(x => x["type"].GetString() == "tool_use"))
+                foreach (var b in RuleHelpers.BlocksOfType(rec, "tool_use"))
                 {
                     if (b["input"] is not JsonObject input)
                         continue;
@@ -127,7 +140,7 @@ internal static class GetVerb
             string tag = RuleHelpers.RefPrefix(uuid);
             if (info)
             {
-                Console.WriteLine($"[{tag}] {RuleHelpers.Utf8Len(text)} bytes, {text.Split('\n').Length} lines (~{text.Length / 4} tokens)");
+                Console.WriteLine($"[{tag}] {RuleHelpers.Utf8Len(text)} bytes, {text.AsSpan().Count('\n') + 1} lines (~{text.Length / 4} tokens)");
                 printed = true;
                 continue;
             }
@@ -213,9 +226,19 @@ internal static class GetVerb
         }
         string mediaType = source["media_type"].GetString() ?? "application/octet-stream";
         string dir = Path.Combine(Path.GetTempPath(), "claudinine", "media");
-        Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, $"{RuleHelpers.RefPrefix(uuid)}-{index}{Extension(mediaType)}");
-        File.WriteAllBytes(path, bytes);
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllBytes(path, bytes);
+        }
+        catch (Exception e)
+        {
+            // One undecodable/unwritable block must not kill the other blocks'
+            // decode — report it as a line instead, same shape as the successes.
+            lines.Add($"media {index}: could not write {path}: {e.Message}");
+            return;
+        }
         lines.Add($"wrote {path} ({mediaType}, {Math.Max(1, bytes.Length / 1024)}KB) — use the Read tool on this file to view it");
     }
 

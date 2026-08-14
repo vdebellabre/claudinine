@@ -32,8 +32,7 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
             if (rec.Removed || rec.Type != "user")
                 continue;
             var node = RuleHelpers.CurrentNode(rec);
-            foreach (var block in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                .Where(b => b["type"].GetString() == "tool_result"))
+            foreach (var block in RuleHelpers.BlocksOfType(node, "tool_result"))
             {
                 // Carrier content is a plain string by construction (ChainCollapseRule
                 // sets it directly); anything else is not ours.
@@ -59,8 +58,7 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
                 string rewritten = ShortHeader(callCount, sid) + content[(end + FullHeaderEnd.Length)..];
 
                 var clone = (JsonObject)node.DeepClone();
-                foreach (var cb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
-                    .Where(b => b["type"].GetString() == "tool_result"))
+                foreach (var cb in RuleHelpers.BlocksOfType(clone, "tool_result"))
                 {
                     cb["content"] = rewritten;
                 }

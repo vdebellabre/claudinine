@@ -31,12 +31,8 @@ internal abstract class ReadSupersessionRule : ICompactionRule
         {
             if (rec.IsProtected())
                 continue;
-            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
+            foreach (var b in RuleHelpers.BlocksOfType(RuleHelpers.CurrentNode(rec), "tool_use"))
             {
-                if (block is not JsonObject b)
-                    continue;
-                if (b["type"].GetString() != "tool_use")
-                    continue;
                 if (b["name"].GetString() is not string name || !IsReadTool(name))
                     continue;
                 var targets = ExtractTargets(b);
@@ -51,15 +47,29 @@ internal abstract class ReadSupersessionRule : ICompactionRule
 
         // Pass 2: a read is superseded when some LATER read covers every target.
         // Never the most recent read of a range, never the recency window.
+        // Walked backwards, accumulating later reads' targets per path, so each
+        // read checks only its own paths' candidates instead of rescanning every
+        // later read (that rescan was quadratic in the session's read count).
         var superseded = new Dictionary<string, List<ReadTarget>>();
         int cutoff = reads.Count - RecencyKeep;
-        for (int i = 0; i < reads.Count && i < cutoff; i++)
+        var laterByPath = new Dictionary<string, List<ReadTarget>>(StringComparer.Ordinal);
+        for (int i = reads.Count - 1; i >= 0; i--)
         {
             (string toolUseId, var targets) = reads[i];
-            bool allCovered = targets.All(t =>
-                reads.Skip(i + 1).Any(later => later.Targets.Any(lt => lt.Covers(t))));
-            if (allCovered)
-                superseded[toolUseId] = targets;
+            if (i < cutoff)
+            {
+                bool allCovered = targets.All(t =>
+                    laterByPath.TryGetValue(t.Path, out var laters)
+                    && laters.Any(lt => lt.Covers(t)));
+                if (allCovered)
+                    superseded[toolUseId] = targets;
+            }
+            foreach (var t in targets)
+            {
+                if (!laterByPath.TryGetValue(t.Path, out var bucket))
+                    laterByPath[t.Path] = bucket = [];
+                bucket.Add(t);
+            }
         }
         if (superseded.Count == 0)
             return;
@@ -72,12 +82,8 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 continue;
 
             JsonObject? clone = null;
-            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec)))
+            foreach (var b in RuleHelpers.BlocksOfType(RuleHelpers.CurrentNode(rec), "tool_result"))
             {
-                if (block is not JsonObject b)
-                    continue;
-                if (b["type"].GetString() != "tool_result")
-                    continue;
                 if (b["tool_use_id"].GetString() is not string toolUseId
                     || !superseded.TryGetValue(toolUseId, out var targets))
                 {

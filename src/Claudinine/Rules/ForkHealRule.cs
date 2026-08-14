@@ -102,62 +102,24 @@ internal sealed partial class ForkHealRule : ICompactionRule
 
     private static void CollectForeignSids(JsonNode? node, string currentSid, HashSet<string> sids)
     {
-        switch (node)
+        RuleHelpers.VisitStrings(node, text =>
         {
-            case JsonObject obj:
-                foreach (var kv in obj)
-                    CollectForeignSids(kv.Value, currentSid, sids);
-                break;
-            case JsonArray array:
-                foreach (var item in array)
-                    CollectForeignSids(item, currentSid, sids);
-                break;
-            case JsonValue value when value.TryGetValue(out string? text):
-                foreach (Match m in GetCommand().Matches(text))
-                {
-                    string sid = m.Groups[1].Value;
-                    if (!sid.Equals(currentSid, StringComparison.OrdinalIgnoreCase))
-                        sids.Add(sid);
-                }
-                break;
-        }
+            foreach (Match m in GetCommand().Matches(text))
+            {
+                string sid = m.Groups[1].Value;
+                if (!sid.Equals(currentSid, StringComparison.OrdinalIgnoreCase))
+                    sids.Add(sid);
+            }
+            return null; // collect only, never rewrite
+        });
     }
 
     private static void RetargetStrings(JsonNode? node, string fromSid, string toSid)
     {
-        switch (node)
-        {
-            case JsonObject obj:
-                foreach (string key in obj.Select(kv => kv.Key).ToList())
-                {
-                    if (obj[key] is JsonValue value
-                        && value.TryGetValue(out string? text)
-                        && text.Contains(fromSid, StringComparison.OrdinalIgnoreCase))
-                    {
-                        obj[key] = text.Replace(fromSid, toSid, StringComparison.OrdinalIgnoreCase);
-                    }
-                    else
-                    {
-                        RetargetStrings(obj[key], fromSid, toSid);
-                    }
-                }
-                break;
-            case JsonArray array:
-                for (int i = 0; i < array.Count; i++)
-                {
-                    if (array[i] is JsonValue value
-                        && value.TryGetValue(out string? text)
-                        && text.Contains(fromSid, StringComparison.OrdinalIgnoreCase))
-                    {
-                        array[i] = text.Replace(fromSid, toSid, StringComparison.OrdinalIgnoreCase);
-                    }
-                    else
-                    {
-                        RetargetStrings(array[i], fromSid, toSid);
-                    }
-                }
-                break;
-        }
+        RuleHelpers.VisitStrings(node, text =>
+            text.Contains(fromSid, StringComparison.OrdinalIgnoreCase)
+                ? text.Replace(fromSid, toSid, StringComparison.OrdinalIgnoreCase)
+                : null);
     }
 
     /// <summary>

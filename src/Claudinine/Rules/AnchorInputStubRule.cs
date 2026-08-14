@@ -41,9 +41,7 @@ internal sealed class AnchorInputStubRule : ICompactionRule
         {
             if (records[i].Removed || records[i].Type != "assistant")
                 continue;
-            foreach (var b in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(records[i]))
-                .OfType<JsonObject>()
-                .Where(x => x["type"].GetString() == "tool_use"))
+            foreach (var b in RuleHelpers.BlocksOfType(RuleHelpers.CurrentNode(records[i]), "tool_use"))
             {
                 if (b["id"].GetString() is string id && id.Length > 0)
                     useIndexById[id] = i;
@@ -54,9 +52,7 @@ internal sealed class AnchorInputStubRule : ICompactionRule
         {
             if (rec.Removed || rec.Type != "user")
                 continue;
-            foreach (var block in RuleHelpers.ContentBlocks(RuleHelpers.CurrentNode(rec))
-                .OfType<JsonObject>()
-                .Where(b => b["type"].GetString() == "tool_result"))
+            foreach (var block in RuleHelpers.BlocksOfType(RuleHelpers.CurrentNode(rec), "tool_result"))
             {
                 if (block["content"].GetStringMemo() is not string content
                     || !content.StartsWith(CarrierPrefix, StringComparison.Ordinal))
@@ -78,9 +74,8 @@ internal sealed class AnchorInputStubRule : ICompactionRule
     private void StubAnchorInput(TranscriptRecord useRec, string useId, string sid)
     {
         var node = RuleHelpers.CurrentNode(useRec);
-        var use = RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-            .FirstOrDefault(b => b["type"].GetString() == "tool_use"
-                && b["id"].GetString() == useId);
+        var use = RuleHelpers.BlocksOfType(node, "tool_use")
+            .FirstOrDefault(b => b["id"].GetString() == useId);
         if (use?["input"] is not JsonObject input)
             return;
         if (input.ContainsKey("claudinine"))
@@ -92,9 +87,8 @@ internal sealed class AnchorInputStubRule : ICompactionRule
 
         string preview = RuleHelpers.PrimaryArg(use);
         var clone = (JsonObject)node.DeepClone();
-        foreach (var cb in RuleHelpers.ContentBlocks(clone).OfType<JsonObject>()
-            .Where(b => b["type"].GetString() == "tool_use"
-                && b["id"].GetString() == useId))
+        foreach (var cb in RuleHelpers.BlocksOfType(clone, "tool_use")
+            .Where(b => b["id"].GetString() == useId))
         {
             cb["input"] = new JsonObject
             {

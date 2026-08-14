@@ -50,8 +50,15 @@ internal sealed class EditedTextFileSupersessionRule : ICompactionRule
         for (int i = 0; i < records.Count; i++)
         {
             var rec = records[i];
-            if (NoticeFilename(rec) is string file && lastFullView[file] > i && !rec.IsProtected())
+            // TryGetValue, not the indexer: the scan above registers every notice
+            // filename, but that is a cross-loop invariant a future edit could
+            // silently break — and a throw here would kill the whole pass.
+            if (NoticeFilename(rec) is string file
+                && lastFullView.TryGetValue(file, out int lastView) && lastView > i
+                && !rec.IsProtected())
+            {
                 rec.Removed = true;
+            }
         }
     }
 

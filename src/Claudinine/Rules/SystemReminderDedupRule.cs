@@ -79,11 +79,14 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
         // Remove by position, never by value: Replace(value, "") would also erase
         // the first occurrence when the SAME reminder repeats within this text,
         // leaving it surviving nowhere in context.
+        // Seen-set keyed by the reminder text itself: m.Value is already an
+        // allocated substring, so hashing it to hex only added a UTF-8 copy and
+        // a SHA-256 on top. The set lives for one pass; retaining the strings
+        // costs less than the per-match hashing did.
         List<(int Index, int Length)>? repeats = null;
         foreach (Match m in Reminder().Matches(text))
         {
-            string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(m.Value)));
-            if (!seen.Add(hash))
+            if (!seen.Add(m.Value))
                 (repeats ??= []).Add((m.Index, m.Length));
         }
         if (repeats is null)

@@ -76,7 +76,10 @@ internal sealed class ChainCollapseRule : ICompactionRule
         }
     }
 
-    private sealed record Call(int UseIndex, int ResultIndex, string ToolUseId,
+    // Struct on purpose: one is created per tool call in the hottest rule of the
+    // pipeline (largest allocator per eng/bench/profiling-notes.md — the pass is
+    // GC-bound), same pattern as RestoreVerb.Line and BashReadParser.ReadTarget.
+    private readonly record struct Call(int UseIndex, int ResultIndex, string ToolUseId,
         string Tool, string Arg, string ResultText, bool IsError, string Media);
 
     private void CollapseTurn(TranscriptFile transcript, int start, int end)
@@ -106,8 +109,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
 
             if (type == "assistant")
             {
-                var uses = RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                    .Where(x => x["type"].GetString() == "tool_use").ToList();
+                var uses = RuleHelpers.BlocksOfType(node, "tool_use").ToList();
                 if (uses.Count > 1)
                     return; // legacy multi-use record: not a chain, don't touch
                 if (uses.Count == 1)
@@ -148,7 +150,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         // results arrived out of order, the first RESULT's pair would leave the
         // batch's first use outside the span (its result removed, the use kept —
         // API-invalid); the first USE's pair also keeps the survivor chain linear.
-        var anchor = calls.MinBy(c => c.UseIndex)!;
+        var anchor = calls.MinBy(c => c.UseIndex);
         var anchorResult = records[anchor.ResultIndex];
         if ((RuleHelpers.CurrentNode(anchorResult)["claudinine"] as JsonObject)?["rule"]
                 .GetString() == Name)
@@ -223,8 +225,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 // kept whole, so its text stays in place, not duplicated here.
                 if (!isAnchorUse)
                 {
-                    foreach (var tb in RuleHelpers.ContentBlocks(node).OfType<JsonObject>()
-                        .Where(x => x["type"].GetString() == "text"))
+                    foreach (var tb in RuleHelpers.BlocksOfType(node, "text"))
                     {
                         string t = tb["text"].GetStringMemo()?.Trim() ?? "";
                         if (t.Length > 0)

@@ -40,18 +40,21 @@ internal sealed class DocumentDedupRule : ICompactionRule
             }
         }
 
-        // Pass 1b: hash only within length collisions. File order is preserved:
-        // buckets keep insertion order, so "first occurrence" stays the earliest.
-        var occurrences = new Dictionary<string, List<(TranscriptRecord Rec, int BlockIndex)>>();
+        // Pass 1b: group only within length collisions, keyed by the text itself —
+        // the strings are already in memory, so a dictionary probe (allocation-free
+        // hash + ordinal compare on collision) beats copying each block to UTF-8
+        // bytes for a SHA-256. File order is preserved: buckets keep insertion
+        // order, so "first occurrence" stays the earliest.
+        var occurrences = new Dictionary<string, List<(TranscriptRecord Rec, int BlockIndex)>>(
+            StringComparer.Ordinal);
         foreach (var bucket in byLength.Values)
         {
             if (bucket.Count <= 1)
                 continue;
             foreach ((var rec, int bi, string text) in bucket)
             {
-                string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
-                if (!occurrences.TryGetValue(hash, out var list))
-                    occurrences[hash] = list = [];
+                if (!occurrences.TryGetValue(text, out var list))
+                    occurrences[text] = list = [];
                 list.Add((rec, bi));
             }
         }

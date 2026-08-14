@@ -99,8 +99,10 @@ internal static class CloneVerb
             // A half-written clone is worse than none: the transcript would show up in
             // the resume picker as a plausible session and fail on load, and a partial
             // headerless mirror is invisible to CollectGarbage forever.
-            try { if (File.Exists(targetTranscript)) File.Delete(targetTranscript); } catch { }
-            try { if (targetMirror is not null && File.Exists(targetMirror)) File.Delete(targetMirror); } catch { }
+            try { if (File.Exists(targetTranscript)) File.Delete(targetTranscript); }
+            catch (Exception e) { Dbg.Log($"clone cleanup failed ({targetTranscript}): {e.Message}"); }
+            try { if (targetMirror is not null && File.Exists(targetMirror)) File.Delete(targetMirror); }
+            catch (Exception e) { Dbg.Log($"clone cleanup failed ({targetMirror}): {e.Message}"); }
             Console.Error.WriteLine($"clone failed: {ex.Message}");
             return 1;
         }
@@ -194,44 +196,10 @@ internal static class CloneVerb
     {
         string sourcePhrase = "claudinine get " + sourceId;
         string targetPhrase = "claudinine get " + targetId;
-        RewritePhrase(node, sourcePhrase, targetPhrase);
-    }
-
-    private static void RewritePhrase(JsonNode? node, string sourcePhrase, string targetPhrase)
-    {
-        switch (node)
-        {
-            case JsonObject obj:
-                foreach (string key in obj.Select(kv => kv.Key).ToList())
-                {
-                    if (obj[key] is JsonValue value
-                        && value.TryGetValue(out string? text)
-                        && text.Contains(sourcePhrase, StringComparison.OrdinalIgnoreCase))
-                    {
-                        obj[key] = text.Replace(sourcePhrase, targetPhrase, StringComparison.OrdinalIgnoreCase);
-                    }
-                    else
-                    {
-                        RewritePhrase(obj[key], sourcePhrase, targetPhrase);
-                    }
-                }
-                break;
-            case JsonArray array:
-                for (int i = 0; i < array.Count; i++)
-                {
-                    if (array[i] is JsonValue value
-                        && value.TryGetValue(out string? text)
-                        && text.Contains(sourcePhrase, StringComparison.OrdinalIgnoreCase))
-                    {
-                        array[i] = text.Replace(sourcePhrase, targetPhrase, StringComparison.OrdinalIgnoreCase);
-                    }
-                    else
-                    {
-                        RewritePhrase(array[i], sourcePhrase, targetPhrase);
-                    }
-                }
-                break;
-        }
+        Rules.RuleHelpers.VisitStrings(node, text =>
+            text.Contains(sourcePhrase, StringComparison.OrdinalIgnoreCase)
+                ? text.Replace(sourcePhrase, targetPhrase, StringComparison.OrdinalIgnoreCase)
+                : null);
     }
 
     /// <summary>The source session's mirror, from the first search dir that has one.</summary>

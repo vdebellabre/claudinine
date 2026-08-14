@@ -28,6 +28,74 @@ internal static class RuleHelpers
         ? blocks
         : [];
 
+    /// <summary>The record's content blocks of one type — the filter almost every rule opens with.</summary>
+    public static IEnumerable<JsonObject> BlocksOfType(JsonObject record, string type) =>
+        ContentBlocks(record).OfType<JsonObject>()
+            .Where(b => b["type"].GetString() == type);
+
+    /// <summary>
+    /// Keep-last supersession: remove every unprotected match before the final
+    /// one. The final occurrence always survives, so the file's tail record is
+    /// safe by construction — the invariant both keep-last rules lean on.
+    /// </summary>
+    public static void RemoveAllButLast(
+        List<TranscriptRecord> records, Func<TranscriptRecord, bool> matches)
+    {
+        int last = -1;
+        for (int i = 0; i < records.Count; i++)
+        {
+            if (matches(records[i]))
+                last = i;
+        }
+        for (int i = 0; i < last; i++)
+        {
+            if (matches(records[i]) && !records[i].IsProtected())
+                records[i].Removed = true;
+        }
+    }
+
+    /// <summary>
+    /// Visit every string leaf of a JSON tree; a non-null return replaces the
+    /// leaf in place. One traversal shared by fork-heal's collect/retarget and
+    /// clone's retrieval-command rewrite — three hand-rolled copies of this walk
+    /// had already drifted apart in shape. Recursion depth is bounded by the
+    /// parser (JsonNode.Parse caps document depth at 64), so no explicit guard.
+    /// </summary>
+    public static void VisitStrings(JsonNode? node, Func<string, string?> transform)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (string key in obj.Select(kv => kv.Key).ToList())
+                {
+                    if (obj[key] is JsonValue value && value.TryGetValue(out string? text))
+                    {
+                        if (transform(text) is string replaced)
+                            obj[key] = replaced;
+                    }
+                    else
+                    {
+                        VisitStrings(obj[key], transform);
+                    }
+                }
+                break;
+            case JsonArray array:
+                for (int i = 0; i < array.Count; i++)
+                {
+                    if (array[i] is JsonValue value && value.TryGetValue(out string? text))
+                    {
+                        if (transform(text) is string replaced)
+                            array[i] = replaced;
+                    }
+                    else
+                    {
+                        VisitStrings(array[i], transform);
+                    }
+                }
+                break;
+        }
+    }
+
     /// <summary>
     /// The write half of the read-CurrentNode / mutate-clone-only convention:
     /// lazily deep-clone the record's node, then hand back the clone's content
