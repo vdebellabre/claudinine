@@ -790,3 +790,59 @@ remembering for any future cross-platform probe workflow:
   `Process.Start` on the same relative forward-slash path throws
   **Win32Exception(2) "file not found"**: `CreateProcess` will not take it. The
   harness now calls `Path.GetFullPath` before spawning.
+
+## 2026-08-14 — cross-platform startup baseline (CI, six RIDs)
+
+Run 31800672920, `workflow_dispatch --ref develop`, 200 timed spawns per target
+after 20 discarded warm-ups. Medians in ms:
+
+| RID | runner | claudinine | empty AOT | **delta** | native |
+|---|---|---:|---:|---:|---:|
+| linux-arm64 | ubuntu-24.04-arm | 2.56 | 1.68 | **+0.88** | 0.73 |
+| linux-x64 | ubuntu-latest | 3.86 | 2.49 | **+1.37** | 0.71 |
+| win-x64 | windows-latest | 11.28 | 10.16 | **+1.12** | 83.61 |
+| win-arm64 | windows-11-arm | 14.36 | 12.67 | **+1.69** | 71.77 |
+| osx-x64 | macos-15-intel | 14.53 | 11.16 | **+3.37** | 5.93 |
+| osx-arm64 | macos-latest | 22.78 | 20.92 | **+1.86** | 17.53 |
+
+**Our binary costs ~1-3.4 ms over a do-nothing AOT exe, on every platform.** That is
+the only figure here attributable to this code; everything else is the platform's
+process-creation floor. Nothing to optimize — the earlier conclusion holds, now with
+a real baseline instead of one machine's reading.
+
+### Correction: the ~10 ms Windows floor is Windows, not Cortex XDR
+
+The previous two sections blamed the local ~10 ms on an endpoint agent — first
+Defender, then Cortex XDR. Both attributions were wrong.
+
+Clean CI win-x64 with **no endpoint agent** spawns an empty AOT exe in 10.16 ms.
+The local machine measured 9.97 ms for the same thing. Identical. **XDR is costing
+essentially nothing**; ~10 ms is simply what Windows charges for process creation,
+against 1.68-2.49 ms on Linux for the same binary.
+
+The zero-CPU-with-9.7 ms-wall observation was accurate, and the process really is
+blocked rather than computing — but that block is Windows' own creation path, not a
+third-party filter. Do not re-open this looking for an AV exclusion.
+
+The local `where.exe` control was also misleading: it costs **83.61 ms on a clean
+win-x64 runner** and 71.77 on win-arm64. So the 45 ms measured locally was not
+XDR overhead, it is just an expensive binary (it walks PATH). Using it as "the native
+floor" understated how good AOT looks on Windows. The tiny C exe on Unix is the
+honest control: 0.71 ms on linux-x64.
+
+### Platform notes
+
+- **Linux is ~4-6x faster to spawn than Windows** for the identical AOT binary
+  (1.68 ms vs 10.16 ms empty). Purely OS, not codegen.
+- **osx-arm64 is the slowest floor** (20.92 ms empty AOT, 17.53 ms native C) —
+  runner virtualization, most likely; the delta over empty AOT is still only 1.86 ms.
+- **`cpu` reads `n/a` on Unix**: `TotalProcessorTime` is unavailable after exit
+  there. Windows legs show cpu ~= wall (12.03 vs 11.28), i.e. mostly busy, not
+  blocked — a useful contrast to the pre-Main window measured locally.
+- Steady-state hook latency of ~17 ms measured locally is therefore **pessimistic
+  for Linux/macOS users** and roughly right for Windows. The ~11 ms Windows floor is
+  most of it, and it is not ours.
+
+Workflow deleted after recording: `.github/workflows/startup-baseline.yml` was
+throwaway by construction (`workflow_dispatch` only, never referenced by ci/cd).
+To re-run it, recover from git history — commit 6db28d4 on develop, or PR #7 on main.
