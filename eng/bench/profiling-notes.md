@@ -171,3 +171,76 @@ The memory cost is transient working set in a process that lives well under a
 second; on production single files (≤15 MB) the absolute delta is a fraction
 of the bench's. Cumulative since the 2026-08-13 baseline: pass ~2187 → ~1376
 ms on the same machine, per-file mean into single digits.
+
+## 2026-08-14 — end-to-end wall clock of the shipped AOT binary
+
+Everything above measures JIT-compiled code inside one warm, long-lived process.
+Production is nothing like that: the app spawns the Native AOT binary once per
+hook event, it compacts one file and exits. The `aot` verb closes that gap —
+subprocess invocation, hook JSON on stdin, one process per event.
+
+Binary: `publish/win-x64/claudinine.exe` (AOT, 3.0 MB, built 2026-08-12 — so it
+predates the server-GC commit; re-measure after the next release build).
+Full corpus, 174 files, 189 MB, one iteration:
+
+| | UserPromptSubmit | SessionStart |
+|---|---:|---:|
+| | steady state, session file only | adds subagent sweep + mirror GC + session-dir GC |
+| total wall clock | 15.94 s | 19.04 s |
+| mean / invocation | 91.6 ms | 109.4 ms |
+| median | 56.4 ms | 71.0 ms |
+| p95 | 209.2 ms | 287.2 ms |
+| min / max | 33.3 / 560.3 ms | 48.1 / 798.9 ms |
+
+Output was byte-identical to the in-process `run` (77.4% smaller both ways),
+which is the cross-check that the subprocess path does the same work.
+
+### The floor is not process startup
+
+Tempting conclusion from a 33 ms minimum: "startup dominates, the pass is
+free". Measured directly, it does not hold. `claudinine version` — start, print
+a string, exit — is **~12 ms** (median of 15 runs, file cache warm). So on the
+smallest real session the split is roughly 12 ms of process creation and ~21 ms
+of actual pass. Process start is real and unavoidable, but it is the minority
+of the floor; the reporting line is deliberately labelled `floor`, not
+`startup`, to keep the two from being conflated.
+
+Useful framing for the numbers above: the median session costs ~56 ms of hook
+latency per prompt, of which ~12 ms is process creation. Cutting the decode
+traffic (see 2026-08-13) attacks the other ~44 ms; nothing in this codebase can
+attack the 12 ms short of not spawning a process.
+
+### Three invariants the harness must keep, and why
+
+1. **Runs on a copy.** `Compactor.Run` rewrites in place; pointing this at
+   `bench/corpus/` would destroy the baseline on first use. Verified after a
+   full run: corpus mtimes and byte total (198,496,208) unchanged.
+2. **Pristine copy per invocation.** The pass is idempotent — a second run over
+   the same file finds its work done and reports a time no real hook would see.
+3. **`CLAUDE_PLUGIN_DATA` redirected into the temp workspace.** Mirrors live
+   outside the transcript dir, so without this the harness appends megabytes
+   into the real mirror pool. Verified untouched after a full run.
+
+Related trap, not currently a problem: mirror *reads* (`MirrorLocator.SearchDirectories`)
+also probe `~/.claudinine/mirrors`, so `ForkHealRule` could in principle read a
+real mirror for a session id that exists there. Read-only and it changed nothing
+observable here, but it is why the corpus copies keep their original session ids
+rather than being renamed — renaming would make this silently more likely, not
+less.
+
+### Local AOT builds are broken on this machine (not a code problem)
+
+`dotnet publish -r win-x64` fails with "Platform linker not found". Diagnosed:
+VS 18 Enterprise ships `link.exe`, but `VC/Tools/MSVC/*/lib/x64` is empty (only
+the `onecore` variant is present) and the Windows SDK has no `kernel32.lib` — the
+C++ libs/headers are not installed. `Launch-VsDevShell.ps1` also fails (no
+`vswhere.exe`), and `vcvars64.bat` delegates to a `vcvarsall.bat` that is not
+present in this layout. CI does the AOT builds; locally, point `--exe` at a
+release archive or the plugin cache
+(`~/.claude/plugins/cache/claudinine/claudinine/<ver>/bin/win-x64/`).
+
+Size is the reliable AOT tell and the harness filters on it: a real AOT binary
+is ~3.0 MB, while the framework-dependent apphost of the identical name in
+`bin/Release/net10.0/` is ~162 KB. Timing the apphost would measure a `dotnet`
+launch, not the shipped artifact — the reason auto-detection ignores anything
+under 1 MB and there is no JIT fallback.

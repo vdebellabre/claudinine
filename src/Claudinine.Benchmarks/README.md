@@ -5,7 +5,7 @@ saves. The effectiveness number (token reduction) is a different tool entirely:
 `eng/bench/compare.py`. Do not conflate the two, and do not quote a byte
 percentage from here as a context saving.
 
-Two entry points, for two different questions.
+Three entry points, for three different questions.
 
 ## `run` — full-corpus pass, the profiler target
 
@@ -59,6 +59,41 @@ smallest files — a fast edit/profile loop), `--only main|agent`, `-v/--verbose
 
 Output reports mean/median/p95/max per file, throughput, and the five slowest
 files, so a regression shows up as a shifted tail rather than a moved average.
+
+## `aot` — wall clock of the shipped binary
+
+```bash
+dotnet run -c Release --project src/Claudinine.Benchmarks -- aot
+```
+
+The only measurement here that sees what a user actually waits for. `run` and
+`bench` both time JIT-compiled code in a warm, long-lived process; production
+spawns the Native AOT binary once per hook event, feeds it a JSON payload on
+stdin, and it exits. This verb reproduces that: one subprocess per invocation,
+process startup included.
+
+It times two events, because they do different amounts of work —
+`UserPromptSubmit` (the per-prompt critical path, session file only) and
+`SessionStart` (adds the subagent sweep, mirror GC and session-dir GC). Use
+`--event` for one of them.
+
+Needs an AOT binary. Auto-detection takes the newest one under `publish/` or
+`src/Claudinine/bin/Release/`, ignoring anything under 1 MB — the
+framework-dependent apphost of the same name is ~162 KB against ~3.0 MB for a
+real AOT build, and timing it would measure a `dotnet` launch instead of the
+shipped artifact. There is deliberately **no JIT fallback**: silently answering a
+different question is worse than failing. Point `--exe` at a release archive or
+the plugin cache when a local publish is not available (AOT needs the C++
+workload for the platform linker; see `eng/bench/profiling-notes.md` if it fails
+on your machine).
+
+Never touches `bench/corpus/`: every invocation gets a pristine copy in a temp
+workspace, and `CLAUDE_PLUGIN_DATA` is redirected there too so mirrors never
+reach the real pool. `--keep` retains the workspace for inspection.
+
+The reported `floor` is the smallest session, **not** process startup — measure
+that separately with `claudinine version` (~12 ms here) and see the notes file
+before drawing conclusions from it.
 
 ## `bench` — BenchmarkDotNet, statistically rigorous
 

@@ -5,6 +5,7 @@ using Claudinine.Benchmarks;
 int exitCode = args switch
 {
     ["run", .. var runArgs] => RunVerb.Run(runArgs),
+    ["aot", .. var aotArgs] => AotVerb.Run(aotArgs),
     ["bench", .. var benchArgs] => Bench(benchArgs),
     _ => Usage(),
 };
@@ -52,7 +53,7 @@ static int Usage()
 {
     Console.Error.WriteLine(
         """
-        usage: Claudinine.Benchmarks <run|bench> [options]
+        usage: Claudinine.Benchmarks <run|aot|bench> [options]
 
           run     Compact the whole corpus once, in-process. This is the
                   profiler target — launch it under the Visual Studio
@@ -63,6 +64,21 @@ static int Usage()
                     --only main|agent    restrict to one corpus half
                     --warmup             unmeasured JIT-warming pass first
                     --verbose, -v        per-file timing lines
+
+          aot     Wall-clock the SHIPPED Native AOT binary, invoked as a
+                  subprocess with a hook payload on stdin — one process per
+                  event, exactly as the app runs it. Includes process startup,
+                  which `run` and `bench` (warm, in-process, JIT) both exclude.
+                  Operates on a throwaway copy; never touches bench/corpus.
+
+                    --exe PATH           binary to time (default: newest AOT
+                                         publish found under publish/ or bin/)
+                    --event NAME         only UserPromptSubmit, or SessionStart
+                    --iterations, -n N   repeat the corpus N times (default 1)
+                    --limit N            only the N smallest files
+                    --only main|agent    restrict to one corpus half
+                    --keep               keep the temp workspace for inspection
+                    --verbose, -v        per-invocation timing lines
 
           bench   Run the BenchmarkDotNet suite (statistically rigorous, slow).
                   Extra args pass through to BenchmarkDotNet, e.g.
