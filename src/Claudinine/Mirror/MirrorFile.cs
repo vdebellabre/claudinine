@@ -28,19 +28,41 @@ internal static class MirrorFile
             // Identity: uuid when present; identical uuid-less lines (repeated
             // queue-operations…) are tracked by content hash WITH multiplicity, so
             // a restore reproduces every copy.
+            //
+            // The state comes from the SeenCache sidecar when its length key
+            // matches the mirror — the full mirror re-read+parse below was the
+            // largest steady-state stage at every session size (see the cache's
+            // doc comment). Any mismatch falls back to the full read, which is
+            // also what rebuilds the cache.
             var seen = new HashSet<string>();
             var seenCounts = new Dictionary<string, int>();
             bool hasHeader = false;
+            bool cacheValid = false;
+            long mirrorLength = 0;
             if (File.Exists(mirrorPath))
             {
-                foreach (var (line, node) in Jsonl.ReadRecords(mirrorPath))
+                mirrorLength = new FileInfo(mirrorPath).Length;
+                if (mirrorLength > 0
+                    && SeenCache.TryLoad(mirrorPath, mirrorLength, seen, seenCounts))
                 {
-                    if (!hasHeader) { hasHeader = true; continue; }
-                    Register(IdentityOf(line, node), seen, seenCounts);
+                    // A non-empty mirror always starts with the header line.
+                    hasHeader = true;
+                    cacheValid = true;
+                }
+                else
+                {
+                    foreach (var (line, node) in Jsonl.ReadRecords(mirrorPath))
+                    {
+                        if (!hasHeader) { hasHeader = true; continue; }
+                        Register(IdentityOf(line, node), seen, seenCounts);
+                    }
                 }
             }
 
             var toAppend = new List<string>();
+            // Identities of the appended records, one entry per line appended
+            // (excluding the header, which is not a record) — the cache batch.
+            var appended = new List<string>();
             if (!hasHeader)
                 toAppend.Add(MirrorFormat.Line("mirrorOf", Path.GetFullPath(transcript.Path)));
             var transcriptCounts = new Dictionary<string, int>();
@@ -55,19 +77,51 @@ internal static class MirrorFile
                     // uuid-less: mirror as many copies as the transcript holds.
                     int nth = transcriptCounts[identity] = transcriptCounts.GetValueOrDefault(identity) + 1;
                     if (nth > seenCounts.GetValueOrDefault(identity))
+                    {
                         toAppend.Add(line);
+                        appended.Add(identity);
+                    }
                 }
                 else if (seen.Add(identity))
                 {
                     toAppend.Add(line);
+                    appended.Add(identity);
                 }
             }
 
             if (toAppend.Count == 0)
+            {
+                // No-op pass over a mirror whose cache was missing or stale: heal
+                // it now so the next pass skips the full read we just paid.
+                if (!cacheValid && hasHeader)
+                    SeenCache.TryRewrite(mirrorPath, mirrorLength, seen, seenCounts);
                 return true;
+            }
 
             // Durable: the mirror-first invariant is only real once it's on disk.
             Jsonl.WriteLinesDurably(mirrorPath, FileMode.Append, toAppend);
+
+            // Cache upkeep, AFTER the mirror bytes are durable. Post-loop `seen`
+            // is exactly the mirror's post-append uuid set (Add gates every
+            // append); h-multiplicities are max(mirror, transcript) per identity.
+            // A fresh mirror writes its cache here too: the identities are already
+            // in memory and the write is a fraction of the mirror append it rides
+            // on, whereas deferring it would make the NEXT pass re-parse the
+            // mirror this pass just wrote in full.
+            long newLength = new FileInfo(mirrorPath).Length;
+            if (cacheValid)
+            {
+                SeenCache.TryAppendBatch(mirrorPath, newLength, appended);
+            }
+            else
+            {
+                foreach ((string identity, int count) in transcriptCounts)
+                {
+                    if (count > seenCounts.GetValueOrDefault(identity))
+                        seenCounts[identity] = count;
+                }
+                SeenCache.TryRewrite(mirrorPath, newLength, seen, seenCounts);
+            }
             return true;
         }
         catch
@@ -213,11 +267,30 @@ internal static class MirrorFile
                 if (JsonNode.Parse(headerLine) is not JsonObject header) continue;
                 string? mirrorOf = header["claudinine"]?["mirrorOf"].GetString();
                 if (mirrorOf is not null && !File.Exists(mirrorOf))
+                {
                     File.Delete(mirror);
+                    SeenCache.TryDelete(mirror);
+                }
             }
             catch
             {
                 // Unreadable mirror: leave it for a human.
+            }
+        }
+
+        // Orphaned seen-caches: their mirror is gone (deleted above in a previous
+        // sweep that crashed between the two deletes, or by an older version that
+        // did not know about sidecars). A cache without its mirror is pure noise.
+        foreach (string cache in SeenCache.CacheFiles(dir))
+        {
+            try
+            {
+                if (!File.Exists(SeenCache.MirrorPathOf(cache)))
+                    File.Delete(cache);
+            }
+            catch
+            {
+                // Best-effort, same as the rest of the sweep.
             }
         }
     }

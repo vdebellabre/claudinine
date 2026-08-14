@@ -1251,6 +1251,44 @@ the tail sessions matter.
 Not optimizable, for completeness: the transcript read itself, the two fsyncs
 (durability is the point), and the environment (spawn + scan).
 
+### Applied: the seen-cache sidecar (`<mirror>.jsonl.seen`)
+
+The structural fix above, shipped. `SeenCache` persists the mirror's identity
+multiset next to it, keyed by the mirror's byte length: `u:`/`h:` lines plus a
+`len:` marker after every batch, valid only when the FINAL line matches the
+mirror's current length. Any out-of-band mirror write, torn append, or unknown
+content fails validation and the pass falls back to the full read — which then
+rewrites the cache. Deleting the cache costs one full re-read and nothing else.
+It is derived state, never fsynced; durability stays in the mirror.
+
+One design point settled during review: a **fresh mirror writes its cache in the
+same pass** rather than deferring to a heal on pass 2. The identities are already
+in memory, the write rides on the (much larger) mirror append, and deferring
+would make the next prompt re-parse the mirror the cold pass just wrote — worst
+exactly when the mirror is biggest (first pass over a legacy session, first
+subagent sweep).
+
+Verified byte-identical on the corpus: 174/174 transcripts and 174/174 mirror
+bodies (header line excluded — it carries the workspace-specific transcript
+path) equal between baseline and seen-cache binaries, through one cold + three
+steady passes each. 281/281 tests, including cache-vs-no-cache equivalence,
+out-of-band invalidation, torn-cache fallback, and GC of orphaned sidecars.
+
+Interleaved A/B, `aot --steady 3 --event UserPromptSubmit`, full corpus, three
+rounds each side, fresh AOT builds of HEAD vs HEAD+cache:
+
+| | baseline | seen-cache |
+|---|---:|---:|
+| mean | 22.5–23.0 | **17.6–17.7 ms (−22%)** |
+| median | 17.8–18.1 | 15.7 ms (−13%) |
+| p95 | 44.8–45.7 | **24.9–25.4 ms (−44%)** |
+| max (15.6 MB session) | 99.6–115.6 | **57.0–58.8 ms (−45%)** |
+
+No overlap between the sides in any round. The median barely moves because the
+spawn+scan floor dominates small sessions; the tail halves because the mirror
+re-parse WAS the tail. The remaining ~58 ms on the biggest steady session is
+transcript load, not mirror — the mirror stage is now O(appended batch).
+
 ### Measurement trap: freshly built binaries pay read-scans the shipped one doesn't
 
 First stagebench run (scans NOT neutralized) showed steady load=22.8 /
