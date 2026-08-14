@@ -982,3 +982,71 @@ Reading older entries: `run --warmup [-n N]` = today's `profile --full [-n N]`;
 bare `aot` = today's `aot --full`; `aot --steady` unchanged. VS launch profile
 is now just `profile --full`. Smoke-tested all four verb×mode combinations
 (steady premise held 10/10 in-process, 3/3 subprocess); 275/275 tests pass.
+
+## 2026-08-14 — headless CPU profile via dotnet-trace: GC waits are 40% of the pass
+
+First profile taken without the VS GUI: `dotnet-trace collect -- <bench exe>
+profile --full` (EventPipe sampling, ~1 kHz), converted to speedscope and
+analyzed per-thread with a script. Environment: JIT bench build, **server GC**
+(the bench csproj still sets it — remember the shipped binary is workstation),
+21 passes over the full corpus, main thread 32.5 s attributed.
+
+### Method trap: the raw report is unusable
+
+`dotnet-trace report topN` mixes ALL threads and EventPipe samples blocked
+threads too, so the finalizer and GC-poll threads' idle waits (~70% of samples)
+drown the main thread — the naive top-5 is `GC.RunFinalizers`, `PollGCWorker`,
+finalizers, and looks like a GC catastrophe it isn't. Convert to speedscope and
+attribute per-thread (skipping the synthetic `CPU_TIME`/`UNMANAGED_CODE_TIME`
+leaves) before believing anything. Script kept in the session scratchpad;
+trivially re-writable.
+
+### Where the main thread's time goes (share of 32.5 s, inclusive)
+
+- **~40% parked at GC poll points** (`Thread.PollGCWorker` as self time) — the
+  thread waiting for GCs it triggered, 22% of it while allocating inside
+  `JsonObject.InitializeDictionary` under `TranscriptRecord.TryParse`. This is
+  the "pass is GC-bound" conclusion measured directly rather than inferred from
+  A/B, and it pins the allocation flood to load-parse node materialization.
+- **Load parse ~32%**: `TryParseText` 32.5% = `TranscriptRecord.TryParse` 29.4%
+  (of which `InitializeDictionary` 16% direct, memmove 4.4%, zeroing 2.4%) plus
+  the line split 5.6%.
+- **Rules ~50%** (GC waits included): tool-result-age 11.3% (Minify 4.8%),
+  chain-collapse 10.7%, read-supersession 9.2%, system-reminder-dedup 5.2%,
+  image-strip 4.4%, mega-block-trim 3.8%, everything else ≤2%.
+- `TryComputeRewrite` 8.6%, `GetUnescapedString` 5.6% (+4.7% buffer zeroing
+  under it), UTF-16 validation 3.7%.
+
+### Two new findings, both actionable
+
+**1. The `GetStringMemo` ConditionalWeakTable is now a top-ten cost center.**
+It shows up three ways: 7.1% of the main thread inside `GetStringMemo` itself
+(5.0% of that from system-reminder-dedup alone — the memo IS that rule's cost),
+`Monitor.Enter_Slowpath` at 6.6% self (CWT's internal lock on every add,
+contending with the finalizer thread), and **4.6 s of finalizer-thread time
+finalizing CWT containers** across the run. The memo's ~12% win was real, but
+CWT is an expensive way to get it: a per-pass `Dictionary<JsonNode, string>`
+with a reference-equality comparer, dropped after each file, has the same
+lifetime semantics (tree dies with the pass) with no lock, no GC handles, no
+finalizable containers. Worth an interleaved A/B; the payload-only split stays.
+
+**2. The Minify exception probe is no longer a rounding error.** The 2026-08-13
+entry dismissed the ~50 `JsonException`/pass at ~0. At full scale it is
+`ThrowJsonReaderException` → `EH.DispatchEx` 1.7% plus
+`ResourceManager.GetFirstResourceSet` 1.6% (exception-message resource lookups,
+which also take a lock) — ~3% combined. The `Utf8JsonReader` probe already
+suggested there would erase it.
+
+Unattributed curiosity, parked: 1.8 s of `DynamicResolver+DestroyScout`
+finalizers (Reflection.Emit debris) on the finalizer thread. All our regexes
+are `[GeneratedRegex]`, so the source is somewhere in the framework; finalizer
+thread only, does not gate anything.
+
+### Caveats
+
+Server-GC JIT in one long process is NOT the shipped shape (AOT, workstation
+GC, one ~50 ms process per file); the 40% GC share is inflated by 21
+back-to-back full-corpus passes churning the whole 189 MB corpus. Use the
+ranking and the two findings, not the absolute percentages. The earlier
+interleaved A/B evidence says allocation pressure hurts in every shape, so the
+interventions above should transfer — but verify each with `aot`, as always.
