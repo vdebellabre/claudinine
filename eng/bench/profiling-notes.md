@@ -354,3 +354,80 @@ dominated by a handful of outliers.
 reported, not applied. Verifying before flipping it: confirm with `PerfView` that
 GC pause time actually drops, and re-check the in-process `run` number, which may
 legitimately prefer server GC.
+
+## 2026-08-14 (settled) — Speed vs Size vs default, all confounds removed
+
+Local AOT publish works after all. The blocker was never the linker: ILCompiler
+shells out to `vswhere.exe` (in `C:\Program Files (x86)\Microsoft Visual Studio\Installer`),
+which is not on the default PATH in a non-VS shell. Prepend it and
+`dotnet publish -c Release -r win-x64` succeeds from `src/Claudinine`:
+
+    export PATH="/c/Program Files (x86)/Microsoft Visual Studio/Installer:$PATH"
+
+That makes proper A/B possible: same ILCompiler (10.0.11), same commit, one variable.
+
+### `Balanced` does not exist — the default IS `Size`
+
+Publishing with no `OptimizationPreference` and with `Size` produced
+**byte-identical binaries** (SHA-256 `1ef0ac19…`, 3,058,176 bytes both). So there is
+no three-way choice; omitting the property is exactly equivalent to `Size`.
+
+### Speed vs Size: indistinguishable
+
+Workstation GC baked into both, three interleaved full-corpus rounds
+(`--event UserPromptSubmit`), medians in ms:
+
+| round | Speed | Size |
+|---|---:|---:|
+| 1 | 53.1 | 54.1 |
+| 2 | 53.1 | 53.2 |
+| 3 | 61.2 | 54.7 |
+
+Startup is equal too (40 × `version`: Speed 15.7 ms median, Size 16.0 ms). The only
+robust difference is **size: 3.61 MB vs 2.92 MB**. Per-tier runs flip direction
+between rounds (`main` tier: Speed 74.9 then 56.6; Size 58.5 then 79.0), which is
+variance on the few 10 MB+ files, not codegen.
+
+**Conclusion: keep `Size`.** It is the ILCompiler default, ~0.7 MB smaller, and
+equal on speed. `Speed` buys nothing measurable on this workload.
+
+This also corrects the 2026-08-14 entry above, which read Speed as ~15 ms slower.
+That comparison was confounded — the two binaries differed in ILCompiler version
+and in code, not just the flag. Held constant, the flag does nothing.
+
+### Server GC: the finding stands, but the earlier method was invalid
+
+The earlier GC numbers came from toggling `DOTNET_gcServer` on a binary with
+`ServerGarbageCollection=true` baked in. That is unreliable: the csproj flag is
+genuinely embedded (workstation build 3,058,176 bytes vs server build 3,328,512 —
+different binaries), so the env var was fighting an embedded setting. On a clean
+workstation-GC binary, toggling the env var changed nothing (medians 49.2 / 50.2 /
+49.0 vs 49.9 / 49.8 / 48.5) — the var was not taking effect.
+
+Redone honestly: two binaries differing **only** in `ServerGarbageCollection`, one
+discarded warm-up round (round 1 is a cold-cache outlier, ~106 ms vs ~63 warm),
+then interleaved rounds. Medians in ms:
+
+| round | workstation | server |
+|---|---:|---:|
+| agent r1 | 51.2 | 58.7 |
+| agent r2 | 50.3 | 58.0 |
+| agent r3 | 48.9 | 56.4 |
+| agent r4 | 47.8 | 56.2 |
+| agent r5 | 48.7 | 56.2 |
+| main r1 | 63.7 | 71.1 |
+| main r2 | 60.2 | 72.1 |
+| main r3 | 60.7 | 69.0 |
+
+**Workstation wins every warm round in both tiers, with no overlap between the
+ranges** — ~8 ms / ~15% at the median, and better mean and p95 on `main` too. The
+conclusion from the previous entry survives a valid test.
+
+Recommended csproj change, still **not applied** (it reverses a documented
+decision, and the in-process `run` path may legitimately prefer server GC):
+
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+
+Worth noting the asymmetry before flipping it: server GC was chosen from an
+in-process measurement (174 files in one process), which is the one shape
+production never has — every hook invocation is a fresh ~50 ms process.
