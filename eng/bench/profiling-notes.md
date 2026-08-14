@@ -1302,3 +1302,37 @@ from a just-built harness are inflated on this machine — neutralize by
 pre-reading the touched files, or compare stages relatively.** The
 scan-neutralized stagebench steady totals (~4 ms + spawn at the median) DO
 reconcile with variant C.
+
+## 2026-08-14 — read-layer refactor, stage 1: the JsonView seam (no perf change)
+
+Groundwork for the "JsonElement read-layer refactor" named as the remaining
+lever above. Commit `6d7eff7`: every read of a record's JSON outside the
+Transcript layer now goes through `JsonView` (a readonly struct wrapping the
+JsonNode backing) — rules, RuleHelpers, AgeIndex, PreviewRenderer, GetVerb,
+MirrorFile all read via `rec.View` / `rec.CurrentView`; clones for mutation
+come only from `TranscriptRecord.CloneCurrentNode()`. Mutable `JsonObject`
+survives ONLY on the write path (clones + `Replacement`), which stays
+JsonObject in stage 2 by design.
+
+Deliberately NOT a performance change: same parse, same node graph, one struct
+wrapper on reads. Validated as behavior-identical, not just compiling:
+
+- 281/281 tests.
+- Full-corpus A/B (baseline = clean worktree at `9ca432d`, new = the port;
+  both framework-dependent builds, AotVerb's exact hook protocol, one cold +
+  two steady `UserPromptSubmit` passes per file): **174/174 transcripts
+  byte-identical after every pass, 174/174 mirror bodies identical** (header
+  excluded), zero steady churn, zero nonzero exits. Driver: session scratchpad
+  `ab_identity.py`, trivially re-writable from AotVerb.Fire.
+
+Stage 2 — the actual perf change — is now confined to the Transcript layer:
+swap JsonView's backing to `JsonDocument`/`JsonElement` (parse per line, keep
+documents alive for the pass, dispose at end), materialize a `JsonObject` only
+in `CloneCurrentNode` (`JsonObject.Create(element.Clone())`), rekey or rehome
+the `GetStringMemo` (reference identity disappears with element structs — memo
+at (record, block) level or measure whether it still pays), and re-run the
+exact same A/B. Watch: element property access is a linear scan, not a
+dictionary hit — 16 rules re-walk every record, so interleave-A/B the swap
+before believing it. `SerializedLength()`/`ToCompactJson()`/`TryParse` on the
+view are the other spots whose element implementations must preserve output
+bytes (anchor-input threshold, minify).
