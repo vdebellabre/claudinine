@@ -1336,3 +1336,75 @@ dictionary hit — 16 rules re-walk every record, so interleave-A/B the swap
 before believing it. `SerializedLength()`/`ToCompactJson()`/`TryParse` on the
 view are the other spots whose element implementations must preserve output
 bytes (anchor-input threshold, minify).
+
+## 2026-08-14 — read-layer refactor, stage 2: JsonElement backing (SHIPPED)
+
+The lever itself, commit `f81c2d6`. Thanks to the stage-1 seam the swap touched
+exactly three files plus the memo: `TranscriptRecord` now holds the line's
+`JsonDocument.Parse` root element (`Root`; the document is kept alive by the
+element's internal reference and never disposed — a live element must not
+outlive its document, and the process is per-invocation), identity fields read
+via `TryGetProperty` with the same wrong-type-throws strictness `GetValue<string>`
+had, `JsonView` grew the element read path beside the node path (replacement
+clones and mirror parses stay node-backed), and `CloneCurrentNode` materializes
+via `JsonObject.Create(Root)` — mutation-safe lazily, no deep clone, the
+"build JsonObject only on rewrite" half of the original design.
+
+### The element-side memo is load-bearing — measured, don't remove it
+
+First cut shipped WITHOUT a payload memo (elements have no reference identity
+to key one on). In-process `profile --full` REGRESSED the per-file median ~25%
+(2.4 → 3.0 ms): 16 rules re-decoded the same payloads every pass, exactly the
+2026-08-13 finding all over again. `profile --steady` (parse-dominated, light
+reads) already WON (~-8% mean/iter), which is what isolated the loss to the
+read side. Fix: `Json.GetStringMemo(JsonElement)` keyed on the RAW UTF-8 value
+bytes (`JsonMarshal.GetRawUtf8Value`, .NET 9+; hash samples length + first/last
+16 bytes, equality is full memcmp). Equal raw bytes decode to the same string,
+so a hit is correct by construction — and identical payloads repeated ACROSS
+records (re-injected reminders, duplicated file bodies) now decode once per
+pass, which the reference-keyed node memo structurally could not do. The
+payload-only split still stands: small-field reads (`type`, ids) go through
+plain `AsString`.
+
+### Validation
+
+Byte-identity A/B against stage 1 (same driver/protocol as the stage-1 entry),
+run twice — after the backing swap alone AND after the memo: **174/174
+transcripts byte-identical across one cold + two steady passes, 174/174 mirror
+bodies identical, zero churn, zero nonzero exits**, both times. 281/281 tests.
+The serialization-parity worries (SerializedLength's default-escaped length,
+ToCompactJson's relaxed writer, TryParse of the literal `null`) all held —
+JsonNode's own writers funnel element-backed values through the same
+`JsonElement.WriteTo`, so the two paths were never actually different machinery.
+
+### Measured effect — the win lives in the tail, as the profile predicted
+
+In-process JIT bench (server GC, the shape that absorbs allocations best):
+`--full` parity-to-slightly-better (baseline 1452/1477/1457 vs 1390/1364/1483
+ms/iter across three interleaved rounds), `--steady` ~-8%.
+
+Production shape (passbench, Native AOT, workstation GC, both sides published
+the same day and interleaved, 5 fresh processes × 12 iterations, medians;
+`check=` line counts equal on every file):
+
+| file | base iter1 | new iter1 | base warm | new warm |
+|---|---:|---:|---:|---:|
+| 222 KB (p25) | 2.6 | 2.6 | 1.2 | 1.2 |
+| 450 KB (median) | 4.1 | **3.7** | 2.5 | 2.3 |
+| 1.1 MB (p75) | 9.5 | 9.3 | 7.2 | 6.6 |
+| 2.9 MB (p90) | 29.4 | **22.6 (−23%)** | 24.1 | **20.1** |
+| 15.6 MB (max) | 206.6 | **150.3 (−27%)** | 203.1 | **153.3 (−25%)** |
+
+Allocation flood scales with record count, so the saving does too: invisible
+at p25 (the pass is ~2 ms, spawn+scan dominate the invocation anyway), −10% at
+the median, −23/−27% on the sessions where hook latency is actually felt. This
+is the cold-pass/big-session lever the 2026-08-14 dotnet-trace profile pointed
+at (`InitializeDictionary` under `TryParse` + GC waits), now cashed.
+
+Traps for the next instance: (1) the element memo above; (2) `MarkPreserved`
+reads `rec.Root` directly with GetString's throw-on-alien strictness —
+deliberately NOT the never-throw view, a preserved-uuid entry we cannot read
+must kill the pass, not silently unprotect a record; (3) if anything ever
+starts disposing JsonDocuments, every element AND every element-backed
+Replacement dies with them — today nothing disposes, keep it that way or
+introduce explicit pass-scoped ownership first.
