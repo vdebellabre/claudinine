@@ -1408,3 +1408,56 @@ must kill the pass, not silently unprotect a record; (3) if anything ever
 starts disposing JsonDocuments, every element AND every element-backed
 Replacement dies with them — today nothing disposes, keep it that way or
 introduce explicit pass-scoped ownership first.
+
+## 2026-08-14 (docs refresh) — re-measured every published number
+
+After the JsonView/JsonElement read layer, the seen-cache sidecar, the payload
+memo and the exact-economics gate, all figures quoted in `README.md`,
+`docs/session-file-changes.md` and the benchmarks README were re-measured
+against a binary published from HEAD (738948c, 2.99 MB, workstation GC, Size).
+
+**Effectiveness** (`compare.py`, full corpus, rx=aggressive) — the exact-economics
+gate is the only change here, and it moved the totals slightly:
+
+| | before | after |
+|---|---:|---:|
+| all sessions, tokens | 68.9% | **69.1%** |
+| all sessions, bytes | 77.4% | **77.5%** |
+| main transcripts, tokens | 64.9% | **65.2%** |
+| median per-file | 74.7% | **74.8%** |
+
+Subagent transcripts (81.2% / 82.1%), the win count (167/174, 5 ties, 2 losses)
+and cozempic's whole column are unchanged. 0 errors, 0 non-idempotent.
+
+**Latency** (`steady.py`, serial, 174 files × 3 timed passes):
+
+| | before (08-13) | after |
+|---|---:|---:|
+| steady median | 18.9 ms | **17.5 ms** |
+| steady p90 | 40.7 ms | **24.1 ms** |
+| steady max | 114 ms | **52.7 ms** |
+| cold median | 80.5 ms | 81.8 ms |
+| cold max | 833 ms | 832 ms |
+
+The median barely moved; **the p90 and the max nearly halved**. That is exactly
+the shape the JsonElement entry predicted — the allocation saving scales with
+record count, so it is invisible on small files and large on the tail. The
+worst per-prompt pass is now 0.21% of the 25 s budget, down from 0.46%.
+
+The cold column did not improve, and should not be read as a regression: it is
+dominated by mirroring the whole file to the sidecar (I/O), not by the parse
+work the optimizations targeted.
+
+**In-process pass** (`profile --full`): ~2.7 s → **1.34 s** per corpus iteration,
+per-file median 2.7 ms, p95 39 ms, max 110 ms (the 14.9 MB session), 141 MB/s.
+The benchmarks README's `-n 20` rationale was restated against the new figure
+(~27 s of measured CPU, not ~44 s).
+
+Unchanged and re-verified rather than assumed: startup 11.3 ms (`version` × 25),
+binary 2.99 MB, top-ten sessions 27.6% of corpus tokens, 285/285 tests green.
+
+**Trap for the next refresh:** `compare.py` prints a per-file time too, and the
+old docs cited it for the cold pass. It runs files under a `ProcessPoolExecutor`,
+so those timings carry contention — its cold median reads ~120 ms against
+`steady.py`'s 81.8 ms for the same work. Quote `steady.py` for any latency claim;
+`compare.py` wall clock is only good for the tool-vs-tool ratio.

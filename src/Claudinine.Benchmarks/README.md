@@ -58,12 +58,12 @@ never hang on it.
 
 ### Why the default is `-n 20`
 
-One pass over the whole corpus is only ~2.7 s of CPU — **too thin to profile**.
-A ~1 kHz sampling profiler collects a few thousand samples from that, and since
-`chain-collapse` alone takes roughly half of them, every cheap rule lands inside
-the noise band and their relative ranking is not trustworthy.
+One pass over the whole corpus is only ~1.3 s of CPU — **too thin to profile**.
+A ~1 kHz sampling profiler collects barely a thousand samples from that, and
+since `chain-collapse` alone takes roughly half of them, every cheap rule lands
+inside the noise band and their relative ranking is not trustworthy.
 
-20 iterations give ~44 s of measured CPU (~44k samples), enough that the small
+20 iterations give ~27 s of measured CPU (~27k samples), enough that the small
 rules are statistically solid. The corpus is read into memory once before the
 measured region, so extra iterations are pure compute and add no disk time to
 the profile. Pass `-n 1` for a quick single pass — the CLI prints a

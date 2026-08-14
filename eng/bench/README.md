@@ -98,8 +98,17 @@ Each file is copied twice, once per tool, into separate work dirs so neither too
 sees the other's output. Both are measured with the same ruler: cl100k_base over
 payload text — text and thinking blocks, tool_result content, tool_use input —
 with the JSON envelope excluded, since that is not what the model is billed for.
-Byte percentages understate the token saving by roughly 3.5x through envelope
-dilution, so the token column is the one that supports a context claim.
+The two columns answer different questions and must not be substituted for each
+other: bytes are the disk measure over the whole file, tokens are what the model
+actually reads back. They are currently close in aggregate (77.5% vs 69.1%), but
+that is a coincidence of this corpus, not a conversion factor — per file the
+ratio has a median of 0.99x and swings either way. Only the **token** column
+supports a context claim.
+
+(An earlier revision of this file said byte percentages understate the token
+saving "by roughly 3.5x". That was true of the pre-API-ruler measurement, where
+`toolUseResult` duplication inflated the byte side; it has not been true since
+the ruler was corrected, and it is not a rule of thumb to reuse.)
 
 Two guards worth knowing about:
 

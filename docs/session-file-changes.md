@@ -151,11 +151,14 @@ Stated plainly, because they are real:
 - **Hooks run on every prompt.** Measured over the 174-session corpus
   (`eng/bench/steady.py`), the steady-state `UserPromptSubmit` pass — the one a
   user actually waits for, over a transcript already compacted and mirrored — is
-  **18.9 ms median, 40.7 ms p90, 114 ms worst**, process startup included. That
-  is 0.46% of the 25 s hook budget at worst. The cold whole-file pass, which
-  happens once at SessionStart over an untouched transcript, is 80.5 ms median
-  and 833 ms worst; that is the number `eng/bench/compare.py` reports, and it is
-  the one to cite for a first run rather than for per-prompt cost.
+  **17.5 ms median, 24.1 ms p90, 52.7 ms worst**, process startup included. That
+  is 0.21% of the 25 s hook budget at worst. The cold whole-file pass, which
+  happens once at SessionStart over an untouched transcript, is 81.8 ms median,
+  205 ms p90 and 832 ms worst; that is the one to cite for a first run rather
+  than for per-prompt cost. Both columns come from the same serial
+  `eng/bench/steady.py` run — `compare.py` also prints a per-file time, but it
+  runs files in parallel, so its timings carry contention and are not a latency
+  measurement.
 - **Session-directory GC deletes orphans.** At SessionStart, `<uuid>/` sidecar
   directories whose `<uuid>.jsonl` transcript is gone are removed, guarded by a
   strict lowercase-hex uuid match, a 24-hour grace period on the newest write
@@ -163,7 +166,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet run --project Claudinine.Tests` — 275 tests, covering each
+- `cd src && dotnet run --project Claudinine.Tests` — 285 tests, covering each
   rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.
