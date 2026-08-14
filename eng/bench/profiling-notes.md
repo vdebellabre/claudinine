@@ -706,3 +706,49 @@ floor-bound already. The cold pass (~59 ms median, ~84 ms mean) is where the ~48
 of real work lives, and that is where the `TryGetValue` decode traffic from the
 first profile pays off. **Optimization effort belongs in the cold pass, not in
 startup.**
+
+### Follow-up: 11 ms is not AOT startup, it is this machine's spawn path
+
+11 ms did look wrong — published AOT startup is usually 1-3 ms — so it was worth
+decomposing rather than accepting. It is not AOT, and not our binary.
+
+**1. The time is real, not harness overhead.** A binary that self-reports
+`GetProcessTimes` creation timestamp → `Main` measures ~9.7 ms median internally,
+with no external timer involved.
+
+**2. But it burns no CPU.** Same measurement, reading kernel and user CPU at entry:
+
+    wall (create -> Main)   kernel CPU   user CPU
+    median   9.67 ms          0.00 ms     0.00 ms
+
+Zero CPU on both counters. The process is not initializing during those 9.7 ms, it
+is **blocked**. That rules out AOT runtime init, static constructors, and image
+loading as the cause — all of those would burn user CPU.
+
+**3. It is not .NET at all.** Spawning `C:\Windows\System32\where.exe` — a plain
+native Win32 binary, nothing to do with .NET — from the same harness:
+
+| target | median | min |
+|---|---:|---:|
+| `where.exe` (native Win32) | **47.21** | 44.94 ms |
+| empty AOT exe | 12.04 | 10.90 ms |
+| `claudinine.exe version` | **11.33** | 10.52 ms |
+
+Our AOT binary is **4× faster to spawn than a Microsoft-shipped native exe** on this
+machine. Whatever the ~10 ms floor is, AOT is already at the good end of it.
+
+**4. Fixed per launch, not a caching artifact.** 200 back-to-back launches: first-20
+median 8.66 ms, last-20 median 8.66 ms — perfectly flat, no warm-up trend. Location
+moves it slightly (temp 9.14 ms vs user profile 8.24 ms). Consistent with a
+per-launch filter driver (Defender real-time monitoring is enabled; it is the only
+AV present) rather than anything cacheable. The earlier fresh-copy-vs-warm-copy test
+was the wrong probe for this: a per-launch hook charges every launch equally, so
+identical timings there did not exonerate it.
+
+**Conclusion unchanged, reasoning corrected.** Nothing to optimize in the binary —
+managed startup is ~0 and the AOT image already spawns faster than native system
+exes here. The ~10 ms is environmental (OS + security filter), it would be lower on
+a machine without real-time scanning, and it is not something the plugin can or
+should try to fix. The earlier note framed this as "the Windows process-creation
+floor"; more precisely it is *this machine's* floor, and a CI runner or a
+Defender-excluded path would likely show less.
