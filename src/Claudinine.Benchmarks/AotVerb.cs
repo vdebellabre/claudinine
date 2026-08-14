@@ -277,6 +277,9 @@ internal static class AotVerb
         var candidates = new List<string>();
         foreach (string dir in new[]
         {
+            // Where the bench publish profile drops it — first because it is the
+            // one built to be measured, and it sits beside the corpus it runs on.
+            Path.Combine(root, "bench", "bin"),
             Path.Combine(root, "publish"),
             Path.Combine(root, "src", "Claudinine", "bin", "Release"),
         })
@@ -320,10 +323,13 @@ internal static class AotVerb
         """
         No Native AOT binary found.
 
-        Publish one first (needs the "Desktop development with C++" workload for
-        the platform linker — without it ILCompiler fails at the link step):
+        Publish one first — the bench profile drops it in bench/bin/, which is
+        where this verb looks before anywhere else:
 
-          dotnet publish src/Claudinine/Claudinine.csproj -c Release -r win-x64 -o publish/aot
+          dotnet publish src/Claudinine/Claudinine.csproj -c Release -r win-x64 -o bench/bin
+
+        AOT linking needs a working platform linker ("Desktop development with
+        C++"); without it ILCompiler fails at the link step rather than here.
 
         Or point at one built elsewhere — a release archive download works, and is
         the closest thing to what users actually run:

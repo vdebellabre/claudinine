@@ -11,9 +11,12 @@
 		<RootNamespace>Claudinine</RootNamespace>
 
 		<PublishAot>true</PublishAot>
-		<InvariantGlobalization>true</InvariantGlobalization>
+		<PublishTrimmed>true</PublishTrimmed>
 		<StripSymbols>true</StripSymbols>
+		<TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
 		<OptimizationPreference>Speed</OptimizationPreference>
+		
+		<InvariantGlobalization>true</InvariantGlobalization>
 		<JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
 		<!-- The pass is GC-bound, not CPU-bound: parsing a transcript allocates a
 		     JsonNode graph per record, and workstation GC's small gen0 budget

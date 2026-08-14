@@ -244,3 +244,53 @@ is ~3.0 MB, while the framework-dependent apphost of the identical name in
 `bin/Release/net10.0/` is ~162 KB. Timing the apphost would measure a `dotnet`
 launch, not the shipped artifact — the reason auto-detection ignores anything
 under 1 MB and there is no JIT fallback.
+
+## 2026-08-14 — AOT binary from the bench publish profile
+
+`bench/bin/claudinine.exe` (bench publish profile, `PublishDir=bench/bin`) is now
+the first place `aot` looks, ahead of `publish/` and `src/.../bin/Release`.
+Candidates are still ordered newest-first and still filtered to >1 MB, so a
+framework-dependent apphost of the same name can never be timed by mistake.
+
+Full corpus, `--event UserPromptSubmit`, 174 files / 189.2 MB:
+
+| | new (`bench/bin`, Speed) | previous (`publish/win-x64`, Size) |
+|---|---:|---:|
+| mean | 96.4 ms | 77.1 ms |
+| median | 66.8 ms | 51.8 ms |
+| p95 | 262.7 ms | 198.9 ms |
+| max | 543.5 ms | 416.4 ms |
+| floor | 43.3 ms | 39.1 ms |
+| start only (`version` × 30) | 15.7 ms | 12.4 ms |
+| size | 3.87 MB | 2.90 MB |
+
+**The Speed-optimized binary measured slower than the Size-optimized one.**
+Counter-intuitive, so it was checked before being believed: two interleaved A/B
+rounds over the same 60-file subset (cancels machine drift) gave NEW 53.1 / 53.7 ms
+median against OLD 47.0 / 48.0 ms. The gap reproduces.
+
+Startup accounts for only part of it — ~3.3 ms of a ~15 ms median regression. The
+remainder is in the pass itself.
+
+Attribution is **not** established, and the difference is not necessarily
+`OptimizationPreference` at all. Confounds, all changing at once between the two
+binaries:
+
+- `OptimizationPreference` Size → Speed
+- ILCompiler 10.0.10 → 10.0.11 (different codegen entirely)
+- the old binary predates the server-GC and code-quality commits
+
+Bisecting locally is currently blocked: `dotnet publish` still fails at the link
+step from the command line (`vswhere.exe` not found, MSB3073 code 123), even though
+publishing from inside Visual Studio succeeds — VS supplies the environment the
+batch files cannot find. To attribute this properly, publish `Speed` and `Size`
+from VS into two directories and run `aot --exe` against each, holding ILCompiler
+constant.
+
+Two csproj properties in the current publish setup are no-ops worth removing:
+
+- `PublishTrimmed` — ILCompiler errors if you try to disable it: "PublishTrimmed
+  is implied by native compilation and cannot be disabled."
+- `PublishReadyToRun` (in `FolderProfile.pubxml`) — R2R pre-JITs managed IL, which
+  a Native AOT publish does not emit. Both output directories contain only
+  `claudinine.exe` + `.pdb`, confirming it was ignored.
