@@ -752,3 +752,41 @@ a machine without real-time scanning, and it is not something the plugin can or
 should try to fix. The earlier note framed this as "the Windows process-creation
 floor"; more precisely it is *this machine's* floor, and a CI runner or a
 Defender-excluded path would likely show less.
+
+### Correction: the endpoint agent is Cortex XDR, not Defender
+
+The section above attributed the per-launch block to Defender real-time monitoring.
+Wrong. Defender is **not** the active engine on this machine — Palo Alto Cortex XDR
+is. `Get-MpPreference`'s `DisableRealtimeMonitoring: False` reports Defender's
+*setting*, not whether Defender is the engine actually enforcing anything, and
+`root/SecurityCenter2` listed only "Windows Defender" because XDR's filter driver
+does not register there the way an AV product does.
+
+This does not change the measurements or the conclusion — a process-creation filter
+driver blocks the same way whoever ships it, and the zero-CPU-against-9.7 ms-wall
+signature stands. It does change the attribution, and it means the "a Defender
+exclusion might shave the floor" remark is moot: any exclusion would have to be
+configured in XDR, which is centrally managed.
+
+Because the floor is an artifact of this machine's endpoint agent, the local numbers
+cannot serve as the AOT baseline. `.github/workflows/startup-baseline.yml` (throwaway,
+`workflow_dispatch` only) measures `claudinine version` against an empty AOT binary
+and a native exe on all six shipped RIDs, on clean runners with no endpoint agent.
+
+Local reference for comparison, win-x64, 40 timed spawns after 20 warm-up:
+
+| target | min | median | p90 |
+|---|---:|---:|---:|
+| `claudinine version` | 10.29 | 11.34 | 11.97 ms |
+| empty AOT exe | 9.17 | 9.97 | 10.54 ms |
+| `where.exe` (native Win32) | 43.07 | 45.14 | 49.09 ms |
+
+Two bugs the local dry run caught before spending six runners on them, both worth
+remembering for any future cross-platform probe workflow:
+
+- A probe project directory named `nul` makes MSBuild fail with **MSB1025** on
+  Windows — reserved DOS device name. Renamed to `tinyexe`.
+- `File.Exists("publish/win-x64/claudinine.exe")` succeeds while
+  `Process.Start` on the same relative forward-slash path throws
+  **Win32Exception(2) "file not found"**: `CreateProcess` will not take it. The
+  harness now calls `Path.GetFullPath` before spawning.
