@@ -71,9 +71,20 @@ static int Usage()
                   which `run` and `bench` (warm, in-process, JIT) both exclude.
                   Operates on a throwaway copy; never touches bench/corpus.
 
+                  By default this is the COLD pass: every invocation gets a
+                  pristine, uncompacted transcript. That is the worst case — a
+                  fresh or resumed session. Use --steady for the common case.
+
                     --exe PATH           binary to time (default: newest AOT
-                                         publish found under publish/ or bin/)
+                                         publish found under bench/bin, publish/
+                                         or src/.../bin/Release)
                     --event NAME         only UserPromptSubmit, or SessionStart
+                    --steady [N]         steady state instead of cold: warm each
+                                         file once (untimed), then time N passes
+                                         over the settled file (default 3).
+                                         Matches eng/bench/steady.py. Several
+                                         times faster than cold — not the same
+                                         number, do not compare the two.
                     --iterations, -n N   repeat the corpus N times (default 1)
                     --limit N            only the N smallest files
                     --only main|agent    restrict to one corpus half

@@ -41,6 +41,7 @@ internal static class AotVerb
         int limit = int.MaxValue, iterations = 1;
         string? evt = null;
         bool verbose = false, keepWorkspace = false;
+        int steadyRepeat = 0; // 0 = cold mode (pristine input per invocation)
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -60,6 +61,16 @@ internal static class AotVerb
                     break;
                 case "--iterations" or "-n" when i + 1 < args.Length:
                     iterations = int.Parse(args[++i], CultureInfo.InvariantCulture);
+                    break;
+                case "--steady":
+                    // Optional count; defaults to 3 like steady.py's --repeat.
+                    steadyRepeat = i + 1 < args.Length && int.TryParse(
+                        args[i + 1], CultureInfo.InvariantCulture, out int r) ? (i++, r).r : 3;
+                    if (steadyRepeat < 1)
+                    {
+                        Console.Error.WriteLine("--steady needs a repeat count of 1 or more");
+                        return 1;
+                    }
                     break;
                 case "--verbose" or "-v":
                     verbose = true;
@@ -129,14 +140,26 @@ internal static class AotVerb
         {
             foreach ((string name, string what) in events)
             {
-                Console.WriteLine($"=== {name} — {what}");
+                string mode = steadyRepeat > 0
+                    ? $"STEADY STATE — file already compacted, median of {steadyRepeat} pass(es)"
+                    : what;
+                Console.WriteLine($"=== {name} — {mode}");
                 var results = new List<Invocation>();
-                for (int iter = 0; iter < iterations; iter++)
+                if (steadyRepeat > 0)
                 {
                     foreach (var file in files)
-                        results.Add(TimeOne(exe, file, name, workspace, iter));
+                        results.Add(TimeSteady(exe, file, name, workspace, steadyRepeat));
+                    Report(results, 1, verbose, steady: true);
                 }
-                Report(results, iterations, verbose);
+                else
+                {
+                    for (int iter = 0; iter < iterations; iter++)
+                    {
+                        foreach (var file in files)
+                            results.Add(TimeOne(exe, file, name, workspace, iter));
+                    }
+                    Report(results, iterations, verbose);
+                }
                 Console.WriteLine();
             }
             return 0;
@@ -154,6 +177,51 @@ internal static class AotVerb
         string Name, long InputBytes, long OutputBytes, double Ms, int ExitCode);
 
     /// <summary>
+    /// Steady state: what a user waits for on prompt N, once prompts 1..N-1 have
+    /// already been compacted. Warms the copy with one UNTIMED pass so the file
+    /// reaches the state a live session is in, then times <paramref name="repeat"/>
+    /// passes over that settled file and returns the median.
+    ///
+    /// This is the same method as eng/bench/steady.py, and it answers a different
+    /// question from the default cold mode — see the note in Report(). The cold
+    /// number is the worst case (a fresh session or a resumed one); this is the
+    /// common case. Both are real; quoting one for the other is the trap.
+    /// </summary>
+    private static Invocation TimeSteady(
+        string exe, FileInfo source, string hookEvent, string workspace, int repeat)
+    {
+        string cell = Path.Combine(workspace, "steady", Path.GetRandomFileName());
+        string projects = Path.Combine(cell, "projects");
+        Directory.CreateDirectory(projects);
+        string transcript = Path.Combine(projects, source.Name);
+        source.CopyTo(transcript);
+        string pluginData = Path.Combine(cell, "plugin-data");
+
+        // Warm-up, not timed: brings the file to rest and populates the mirror.
+        var warm = Fire(exe, transcript, source.Name, hookEvent, pluginData);
+        if (warm.ExitCode != 0)
+            return warm;
+
+        long settled = new FileInfo(transcript).Length;
+        var samples = new List<double>(repeat);
+        int exit = 0;
+        for (int i = 0; i < repeat; i++)
+        {
+            var s = Fire(exe, transcript, source.Name, hookEvent, pluginData);
+            samples.Add(s.Ms);
+            if (s.ExitCode != 0) exit = s.ExitCode;
+        }
+
+        // If the file kept shrinking, it was never at rest and the median is
+        // measuring more compaction rather than steady-state work. Same guard
+        // steady.py applies; surfaced as a negative OutputBytes delta by Report.
+        long finalSize = new FileInfo(transcript).Length;
+        samples.Sort();
+        return new Invocation(
+            source.Name, settled, finalSize, samples[samples.Count / 2], exit);
+    }
+
+    /// <summary>
     /// One hook invocation, timed. The copy and the mirror-dir setup happen
     /// OUTSIDE the stopwatch — only the subprocess is measured, which is exactly
     /// the span the app waits on.
@@ -168,7 +236,14 @@ internal static class AotVerb
         Directory.CreateDirectory(projects);
         string transcript = Path.Combine(projects, source.Name);
         source.CopyTo(transcript);
+        return Fire(exe, transcript, source.Name, hookEvent, Path.Combine(cell, "plugin-data"));
+    }
 
+    /// <summary>Spawn the binary once against an existing transcript and time it.</summary>
+    private static Invocation Fire(
+        string exe, string transcript, string name, string hookEvent, string pluginData)
+    {
+        long before = new FileInfo(transcript).Length;
         var psi = new ProcessStartInfo(exe)
         {
             RedirectStandardInput = true,
@@ -178,13 +253,13 @@ internal static class AotVerb
         };
         psi.ArgumentList.Add("hook");
         // Mirrors and load stamps land here, never in the user's real pool.
-        psi.Environment["CLAUDE_PLUGIN_DATA"] = Path.Combine(cell, "plugin-data");
+        psi.Environment["CLAUDE_PLUGIN_DATA"] = pluginData;
 
         string payload = JsonSerializer.Serialize(new Dictionary<string, string>
         {
             ["hook_event_name"] = hookEvent,
             ["transcript_path"] = transcript,
-            ["session_id"] = Path.GetFileNameWithoutExtension(source.Name),
+            ["session_id"] = Path.GetFileNameWithoutExtension(name),
         });
 
         var sw = Stopwatch.StartNew();
@@ -199,16 +274,18 @@ internal static class AotVerb
 
         long after = new FileInfo(transcript).Length;
         if (stderr.Length > 0)
-            Console.Error.WriteLine($"  [stderr] {source.Name}: {stderr.Trim()}");
+            Console.Error.WriteLine($"  [stderr] {name}: {stderr.Trim()}");
         _ = stdout;
 
-        var result = new Invocation(
-            source.Name, source.Length, after, sw.Elapsed.TotalMilliseconds, proc.ExitCode);
-        TryDeleteDirectory(cell);
-        return result;
+        // The cell is NOT deleted here: steady mode fires repeatedly against the
+        // same transcript and mirror pool. Callers own the workspace and it is
+        // removed wholesale when the run ends.
+        return new Invocation(
+            name, before, after, sw.Elapsed.TotalMilliseconds, proc.ExitCode);
     }
 
-    private static void Report(List<Invocation> all, int iterations, bool verbose)
+    private static void Report(
+        List<Invocation> all, int iterations, bool verbose, bool steady = false)
     {
         // Steady state is the last iteration: the first pays OS file-cache misses
         // on 189 MB of corpus, which is a disk measurement, not a code one.
@@ -237,11 +314,27 @@ internal static class AotVerb
         Console.WriteLine($"  median      : {Percentile(ms, 0.50),9:N1} ms");
         Console.WriteLine($"  p95         : {Percentile(ms, 0.95),9:N1} ms");
         Console.WriteLine($"  min / max   : {ms[0]:N1} / {ms[^1]:N1} ms");
-        Console.WriteLine($"  bytes       : {Corpus.Human(inBytes)} -> {Corpus.Human(outBytes)}"
-            + (inBytes > 0
-                ? $"  ({100.0 * (inBytes - outBytes) / inBytes:N1}% smaller — sanity only,"
-                    + " eng/bench/compare.py is the token authority)"
-                : ""));
+        if (steady)
+        {
+            // In steady mode the file is already compacted before timing starts, so
+            // a byte reduction here is not "how well it compacts" — it means the
+            // file was NOT at rest and the timed passes did real work. Same premise
+            // steady.py asserts. Flag it rather than print a meaningless ratio.
+            int churned = last.Count(r => r.OutputBytes != r.InputBytes);
+            Console.WriteLine($"  at rest     : {last.Count - churned}/{last.Count} file(s)"
+                + (churned > 0
+                    ? $"  WARNING: {churned} still shrinking — those medians include"
+                        + " real compaction, not steady-state work"
+                    : "  (none shrank further — the steady-state premise holds)"));
+        }
+        else
+        {
+            Console.WriteLine($"  bytes       : {Corpus.Human(inBytes)} -> {Corpus.Human(outBytes)}"
+                + (inBytes > 0
+                    ? $"  ({100.0 * (inBytes - outBytes) / inBytes:N1}% smaller — sanity only,"
+                        + " eng/bench/compare.py is the token authority)"
+                    : ""));
+        }
         if (failed.Count > 0)
         {
             Console.WriteLine($"  NONZERO EXIT: {failed.Count} invocation(s)");
@@ -256,6 +349,14 @@ internal static class AotVerb
         // the two invites optimizing the wrong half.
         Console.WriteLine($"  floor       : {ms[0],9:N1} ms on the smallest session"
             + " (pass + process start; compare `claudinine version` for start alone)");
+
+        if (steady)
+        {
+            Console.WriteLine();
+            Console.WriteLine("  This is the COMMON case: prompt N with 1..N-1 already compacted.");
+            Console.WriteLine("  Run without --steady for the COLD case (fresh/resumed session,");
+            Console.WriteLine("  untouched transcript) — several times larger. Both are real.");
+        }
     }
 
     private static double Percentile(List<double> sorted, double p)
@@ -292,6 +393,12 @@ internal static class AotVerb
             // An AOT binary is self-contained and large; a framework-dependent
             // apphost of the same name is ~140 KB and would measure nothing.
             .Where(f => f.Length > 1_000_000)
+            // Skip the ILCompiler intermediate under obj/.../native/. It is a real
+            // AOT binary, so the size filter waves it through, but it is whatever
+            // the last `dotnet publish` happened to compile — including one-off
+            // experiments with properties overridden on the command line. Newest
+            // -first then silently benchmarks a binary nobody chose to ship.
+            .Where(f => f.Directory?.Name is not "native")
             .OrderByDescending(f => f.LastWriteTimeUtc)
             .Select(f => f.FullName)
             .FirstOrDefault();

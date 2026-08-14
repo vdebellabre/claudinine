@@ -595,3 +595,55 @@ worth it.
 General rule this establishes: these switches trade binary size for diagnosability
 and buy **no throughput** on this workload. Size is not a constraint here, so the
 default answer is no.
+
+## 2026-08-14 — reconciling `aot` (~50-80 ms) with steady.py (~16-19 ms)
+
+Not a discrepancy. The two harnesses measure different passes, and both are right.
+
+`eng/bench/steady.py` fires `SessionStart` once as an **untimed warm-up**, then times
+`UserPromptSubmit` over the now-compacted file — it even asserts the size stopped
+changing, because if the file is still shrinking the "at rest" premise is false.
+That is prompt N with 1..N-1 already done: one turn of new work.
+
+`aot` gave every invocation a **pristine, uncompacted** copy (AotVerb invariant 2),
+so it could only ever measure the cold pass — a fresh or resumed session mirroring
+the whole file from scratch.
+
+Same corpus half, same binary, both numbers from steady.py's own output:
+
+| pass | median |
+|---|---:|
+| steady (`UserPromptSubmit`, file at rest) | 16.2 ms |
+| cold (`SessionStart`, untouched) | 78.8 ms |
+
+The cold figure lines up with `aot`'s 83.6 ms mean, so nothing was mismeasured —
+`aot` simply had no steady-state mode. **Added `--steady [N]`**: warm each copy once
+untimed, then time N passes over the settled file and take the median.
+
+| harness | agent tier median |
+|---|---:|
+| `steady.py --only agent --repeat 3` | 16.2 ms |
+| `aot --only agent --steady 3` | **16.3 ms** |
+
+Agreement to 0.1 ms, with 77/77 and 174/174 files verified still at rest. Full
+corpus steady: mean 22.5 ms, median 17.6 ms, p95 44.7 ms, floor 14.4 ms.
+
+**Which number to quote.** Steady state is what a user waits for on almost every
+prompt, so ~17 ms is the honest headline. Cold (~59 ms median, ~84 ms mean) is the
+worst case, paid once per session start or resume. Recall that `claudinine version`
+alone is ~12-15 ms: in steady state process startup is most of the cost, so
+optimizing the pass has little left to win there. The decode work identified in the
+first profile pays off in the COLD pass, which is where the remaining time is.
+
+In steady mode the report replaces the byte-reduction line with an `at rest` count —
+a byte delta there would mean the premise broke, not that compaction went well.
+
+### Detection trap found and fixed while doing this
+
+Newest-first picked `src/Claudinine/bin/Release/net10.0/win-x64/native/claudinine.exe`
+— the ILCompiler intermediate, which is a genuine AOT binary and so passed the
+>1 MB apphost filter. It was the 2,763,776-byte **rejected** trimming experiment
+(`StackTraceSupport=false` + `UseSystemResourceKeys=true`) from the section above,
+left behind by a command-line publish. The verb was silently benchmarking a binary
+that was deliberately not shipped. `FindAotBinary` now skips any directory named
+`native`.
