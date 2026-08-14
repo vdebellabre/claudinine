@@ -114,19 +114,22 @@ internal sealed class ToolResultAgeRule : ICompactionRule
     /// <summary>Mid-age: JSON minification (only if it meaningfully shrinks), then diff collapse.</summary>
     internal static string Minify(string content)
     {
-        try
+        if (MayBeJson(content))
         {
-            var node = JsonNode.Parse(content);
-            if (node is not null)
+            try
             {
-                string minified = node.ToJsonString(Json.Compact);
-                if (minified.Length < content.Length * 0.85)
-                    return minified;
+                var node = JsonNode.Parse(content);
+                if (node is not null)
+                {
+                    string minified = node.ToJsonString(Json.Compact);
+                    if (minified.Length < content.Length * 0.85)
+                        return minified;
+                }
             }
-        }
-        catch (JsonException)
-        {
-            // not JSON — fall through
+            catch (JsonException)
+            {
+                // structurally invalid despite the JSON-shaped start — fall through
+            }
         }
 
         if (!content.Contains('\0') && DiffCollapse.LooksLikeUnifiedDiff(content))
@@ -137,6 +140,66 @@ internal sealed class ToolResultAgeRule : ICompactionRule
         }
 
         return content;
+    }
+
+    /// <summary>
+    /// False only when <see cref="JsonNode.Parse(string, JsonNodeOptions?, JsonDocumentOptions)"/>
+    /// is GUARANTEED to throw, so gating on it cannot change what gets minified.
+    /// Exists because the common path here is plain text (command output, file
+    /// contents, diffs), and detecting that by exception was measurable: ~3% of a
+    /// full pass in exception dispatch plus exception-message resource lookups.
+    /// Structural and string starts still go to the parser — only it can judge
+    /// those — but bare literals and numbers are validated exactly, which is what
+    /// keeps diffs (leading '-') off the exception path.
+    /// </summary>
+    private static bool MayBeJson(string content)
+    {
+        ReadOnlySpan<char> s = content.AsSpan().Trim();
+        if (s.IsEmpty)
+            return false;
+        return s[0] switch
+        {
+            '{' or '[' or '"' => true,
+            't' => s.SequenceEqual("true"),
+            'f' => s.SequenceEqual("false"),
+            'n' => s.SequenceEqual("null"),
+            '-' or >= '0' and <= '9' => IsJsonNumber(s),
+            _ => false,
+        };
+    }
+
+    /// <summary>Exact JSON number grammar: -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?</summary>
+    private static bool IsJsonNumber(ReadOnlySpan<char> s)
+    {
+        int i = 0;
+        if (s[i] == '-')
+            i++;
+        if (i >= s.Length || s[i] is < '0' or > '9')
+            return false;
+        if (s[i] == '0')
+            i++;
+        else
+            while (i < s.Length && s[i] is >= '0' and <= '9')
+                i++;
+        if (i < s.Length && s[i] == '.')
+        {
+            i++;
+            if (i >= s.Length || s[i] is < '0' or > '9')
+                return false;
+            while (i < s.Length && s[i] is >= '0' and <= '9')
+                i++;
+        }
+        if (i < s.Length && s[i] is 'e' or 'E')
+        {
+            i++;
+            if (i < s.Length && s[i] is '+' or '-')
+                i++;
+            if (i >= s.Length || s[i] is < '0' or > '9')
+                return false;
+            while (i < s.Length && s[i] is >= '0' and <= '9')
+                i++;
+        }
+        return i == s.Length;
     }
 
     /// <summary>
