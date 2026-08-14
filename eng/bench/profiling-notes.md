@@ -846,3 +846,52 @@ honest control: 0.71 ms on linux-x64.
 Workflow deleted after recording: `.github/workflows/startup-baseline.yml` was
 throwaway by construction (`workflow_dispatch` only, never referenced by ci/cd).
 To re-run it, recover from git history — commit 6db28d4 on develop, or PR #7 on main.
+
+### Why Windows is ~4-6x slower to spawn (mechanism, partly inferred)
+
+Recorded because the numbers above otherwise look like an unexplained anomaly. The
+architectural reasons are well established; the exact split for THIS binary is not
+instrumented — see the caveat at the end.
+
+**Linux has `fork()`, Windows does not.** A Linux child starts as a copy-on-write
+page-table clone of the parent: no address space built from scratch, no image parsed.
+`execve` then swaps the image in. Process creation is the core Unix idiom (every
+shell pipeline forks), so it has been the optimized path for decades.
+
+`CreateProcess` builds everything from nothing each time: process object, address
+space, PE image mapping, import resolution, PEB/TEB setup, then loader
+initialization walking `DllMain` for every dependency. Windows' design assumption is
+few long-lived processes with threads for concurrency, so this was never the hot
+path.
+
+**Loader work is real even for Native AOT.** The shipped binary imports 11 DLLs
+(read out of its import table): `KERNEL32`, `ADVAPI32`, `ole32`, `bcrypt`, and seven
+`api-ms-win-crt-*` shims. Each is mapped, import-resolved and initialized per
+launch. The empty AOT exe pays essentially the same set, which is exactly why it
+also costs ~10 ms while our delta over it is only ~1 ms.
+
+**Creation is not purely in-kernel.** `CSRSS` (the Win32 subsystem process) is
+notified for each new process, and the kernel dispatches
+`PsSetCreateProcessNotifyRoutine` callbacks — the AV/EDR hook. Even with no
+third-party agent, Windows registers its own consumers (Defender platform, ETW,
+AppLocker/WDAC, AppCompat). Cross-process IPC plus callback dispatch inside the
+creation path explains wall-time-with-no-CPU: the child is blocked while work
+happens in components whose CPU is charged elsewhere.
+
+Three cross-checks from the CI data that support this reading:
+
+- `where.exe` costs **83.61 ms** on a clean win-x64 runner. It is a small native
+  binary, so the ~73 ms over an empty AOT exe is not image size — it is PATH
+  traversal through Windows' I/O stack (filter drivers over NTFS).
+- **osx-arm64's empty AOT is 20.92 ms, worse than Windows.** So this is not
+  "Windows slow, Unix fast": macOS pays `dyld` plus code-signature validation,
+  amplified by runner virtualization. **Linux is the outlier on the fast side.**
+- ARM64 is slower than x64 on both Windows (12.67 vs 10.16) and macOS — runner
+  hardware and emulation, unrelated to OS design.
+
+**Caveat, deliberately not resolved:** this explains a measurement with mechanism
+that was not instrumented here. Attributing the ~10 ms to specific components would
+need ETW on a clean Windows box (`perfview /threadTime` with the `PROC_THREAD` and
+`LOADER` providers) to separate loader time from callback dispatch. That is a
+Windows-internals question, not a Claudinine one, and it does not change the
+actionable split: ~10 ms belongs to the platform, ~1 ms to this code.
