@@ -110,9 +110,33 @@ public sealed class LoadStampTests : IDisposable
         LoadStamp.Write(deadPath);
         File.Delete(deadPath);
 
+        // Stamps are colocated now; the structural sweep is what reaps them.
+        MirrorFile.CollectGarbageColocated(MirrorLocator.ClaudinineDirFor(livePath));
+        MirrorFile.CollectGarbageColocated(MirrorLocator.ClaudinineDirFor(deadPath));
+
+        await Assert.That(File.Exists(
+            Path.Combine(MirrorLocator.ClaudinineDirFor(livePath), liveStem + ".load"))).IsTrue();
+        await Assert.That(File.Exists(
+            Path.Combine(MirrorLocator.ClaudinineDirFor(deadPath), deadStem + ".load"))).IsFalse();
+    }
+
+    [Test]
+    public async Task LegacyCollectGarbageStillReapsPoolStamps()
+    {
+        // Stamps written by pre-colocation versions sit in the flat pools with a
+        // header path; the legacy header-based sweep remains their only GC.
+        string deadStem = NewStem();
+        string deadTarget = Path.Combine(_dir, deadStem + ".jsonl");
+        Directory.CreateDirectory(_mirrorDir);
+        var header = new JsonObject
+        {
+            ["claudinine"] = new JsonObject { ["v"] = "1", ["loadStampOf"] = deadTarget },
+        };
+        File.WriteAllText(Path.Combine(_mirrorDir, deadStem + ".load"),
+            header.ToJsonString() + "\n", new UTF8Encoding(false));
+
         LoadStamp.CollectGarbage(_mirrorDir);
 
-        await Assert.That(File.Exists(Path.Combine(_mirrorDir, liveStem + ".load"))).IsTrue();
         await Assert.That(File.Exists(Path.Combine(_mirrorDir, deadStem + ".load"))).IsFalse();
     }
 }

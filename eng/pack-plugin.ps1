@@ -1,21 +1,37 @@
 #!/usr/bin/env pwsh
-# Packages the plugin as a zip for `archive`-source distribution, and prints
-# the SHA-256 that marketplace.json must pin.
+# Packages the plugin for distribution, and prints the SHA-256 that
+# marketplace.json must pin (CLI archive) or that release notes record.
+#
+# Two artifacts from one canonical layout (executables live in libexec/, never
+# in a top-level bin/ -- the claude.ai plugin validator refuses any hosted
+# plugin shipping bin/, because bin/ is auto-added to the Bash tool's PATH
+# without appearing on the admin approval surface):
+#
+#   default        claudinine-<v>.zip     CLI `archive`-source install. Adds a
+#                                         bin/ with 2-line forwarders to
+#                                         ../libexec so the human verbs stay on
+#                                         PATH (`claudinine version`, ...).
+#   -Hosted        claudinine-<v>.plugin  claude.ai account upload. Identical
+#                                         minus bin/ -- no PATH entry at all;
+#                                         retrieval goes through the per-session
+#                                         launcher the compactor writes (see
+#                                         src/Claudinine/Mirror/Launcher.cs).
 #
 # The archive carries only what an installed plugin needs at runtime: the
 # manifest, the hooks, the commands, the shims, and the six native binaries.
 # Source and tests are deliberately excluded -- they are what makes a git clone
 # of this repo heavy, which is the whole reason this archive exists.
 #
-# Layout inside the zip (contents at the root, not wrapped in a folder):
+# Layout inside the archive (contents at the root, not wrapped in a folder):
 #   .claude-plugin/plugin.json
 #   hooks/hooks.json
 #   commands/*.md
 #   README.md
-#   bin/claudinine, bin/claudinine.cmd, bin/<rid>/claudinine[.exe]
+#   libexec/claudinine, libexec/claudinine.cmd, libexec/<rid>/claudinine[.exe]
+#   bin/claudinine, bin/claudinine.cmd          (CLI zip only, forwarders)
 #
 # Usage:
-#   eng/pack-plugin.ps1 -BinRoot <dir> [-OutDir <dir>]
+#   eng/pack-plugin.ps1 -BinRoot <dir> [-OutDir <dir>] [-Hosted]
 #
 # -BinRoot is required: a directory holding one subdirectory per RID (the CI
 # artifact download layout). The binaries are not committed, and Native AOT
@@ -25,7 +41,8 @@
 [CmdletBinding()]
 param(
     [string] $BinRoot,
-    [string] $OutDir
+    [string] $OutDir,
+    [switch] $Hosted
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,7 +81,7 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 try {
     New-Item -ItemType Directory -Force -Path (Join-Path $stage '.claude-plugin') | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $stage 'hooks') | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $stage 'bin') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $stage 'libexec') | Out-Null
 
     Copy-Item $manifestPath (Join-Path $stage '.claude-plugin/plugin.json')
     Copy-Item (Join-Path $repo 'hooks/hooks.json') (Join-Path $stage 'hooks/hooks.json')
@@ -78,16 +95,24 @@ try {
         Copy-Item $commandsSrc (Join-Path $stage 'commands') -Recurse
     }
     # The shims are hand-written source (eng/shims/), not build output; they land
-    # at bin/ in the archive, which is where hooks.json invokes them from.
-    Copy-Item (Join-Path $repo 'eng/shims/claudinine') (Join-Path $stage 'bin/claudinine')
-    Copy-Item (Join-Path $repo 'eng/shims/claudinine.cmd') (Join-Path $stage 'bin/claudinine.cmd')
+    # at libexec/ in the archive, which is where hooks.json invokes them from.
+    Copy-Item (Join-Path $repo 'eng/shims/claudinine') (Join-Path $stage 'libexec/claudinine')
+    Copy-Item (Join-Path $repo 'eng/shims/claudinine.cmd') (Join-Path $stage 'libexec/claudinine.cmd')
 
     foreach ($rid in $rids) {
         $exe = if ($rid.StartsWith('win-')) { 'claudinine.exe' } else { 'claudinine' }
         $src = Join-Path $BinRoot (Join-Path $rid $exe)
         if (-not (Test-Path $src)) { throw "missing binary for ${rid}: $src" }
-        New-Item -ItemType Directory -Force -Path (Join-Path $stage "bin/$rid") | Out-Null
-        Copy-Item $src (Join-Path $stage "bin/$rid/$exe")
+        New-Item -ItemType Directory -Force -Path (Join-Path $stage "libexec/$rid") | Out-Null
+        Copy-Item $src (Join-Path $stage "libexec/$rid/$exe")
+    }
+
+    # bin/ is CLI-archive-only PATH convenience for the human verbs; the hosted
+    # bundle MUST NOT carry it (validator refusal, see header).
+    if (-not $Hosted) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $stage 'bin') | Out-Null
+        Copy-Item (Join-Path $repo 'eng/shims/bin-forward') (Join-Path $stage 'bin/claudinine')
+        Copy-Item (Join-Path $repo 'eng/shims/bin-forward.cmd') (Join-Path $stage 'bin/claudinine.cmd')
     }
 
     # Resolve to an absolute path: the zip CLI below runs with the staging dir as
@@ -95,7 +120,10 @@ try {
     # outright, as `zip` exit 15 "cannot open output file").
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
     $OutDir = (Resolve-Path $OutDir).Path
-    $zip = Join-Path $OutDir "claudinine-$version.zip"
+    # The account upload expects the `.plugin` extension; the marketplace
+    # `archive` source expects a zip. Same format, different name.
+    $ext = if ($Hosted) { 'plugin' } else { 'zip' }
+    $zip = Join-Path $OutDir "claudinine-$version.$ext"
     if (Test-Path $zip) { Remove-Item $zip -Force }
 
     # `zip` preserves the Unix executable bit; Compress-Archive does not store
@@ -108,12 +136,16 @@ try {
     if ($useZipCli) {
         Push-Location $stage
         try {
-            # Executable bits for the shim and every POSIX binary.
-            & chmod '+x' 'bin/claudinine'
+            # Executable bits for the shims and every POSIX binary.
+            & chmod '+x' 'libexec/claudinine'
             foreach ($rid in $rids | Where-Object { -not $_.StartsWith('win-') }) {
-                & chmod '+x' "bin/$rid/claudinine"
+                & chmod '+x' "libexec/$rid/claudinine"
             }
-            $entries = @('.claude-plugin', 'hooks', 'bin', 'README.md')
+            $entries = @('.claude-plugin', 'hooks', 'libexec', 'README.md')
+            if (-not $Hosted) {
+                & chmod '+x' 'bin/claudinine'
+                $entries += 'bin'
+            }
             if (Test-Path 'commands') { $entries += 'commands' }
             & zip -q -r -X $zip @entries
             if ($LASTEXITCODE -ne 0) { throw "zip failed with exit code $LASTEXITCODE" }

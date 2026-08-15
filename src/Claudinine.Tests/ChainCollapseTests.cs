@@ -73,7 +73,8 @@ public sealed class ChainCollapseTests : IDisposable
             .Single(x => x["tool_use_id"]?.GetValue<string>() == ids[0])["content"]!
             .GetValue<string>();
         await Assert.That(carrier).StartsWith("[claudinine: this turn originally ran 5 separate tool calls");
-        await Assert.That(carrier).Contains("claudinine get test-session --ref");
+        // Launcher-form retrieval command: `sh "<abs>/run.sh" get <sid> …`.
+        await Assert.That(carrier).Contains("/claudinine/run.sh\" get test-session --ref");
         await Assert.That(carrier).Contains("REPORT of past actions");
         await Assert.That(carrier.Split("] Bash(").Length - 1).IsEqualTo(5); // one preview line per call
         await Assert.That(carrier).Contains("(note) note after call 2");

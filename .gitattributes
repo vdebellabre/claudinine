@@ -1,10 +1,10 @@
-# The POSIX shim must stay LF and executable regardless of the committer's OS.
-bin/claudinine text eol=lf
+# The POSIX shims must stay LF and the cmd twins CRLF regardless of the
+# committer's OS: pack-plugin.ps1 copies them into the archive verbatim, so a
+# CRLF checkout of a #!/bin/sh script would ship a broken shebang.
+eng/shims/claudinine text eol=lf
+eng/shims/bin-forward text eol=lf
 *.sh text eol=lf
-bin/claudinine.cmd text eol=crlf
-
-# Released Native AOT binaries are committed under bin/<rid>/.
-bin/*/claudinine binary
-bin/*/claudinine.exe binary
+eng/shims/claudinine.cmd text eol=crlf
+eng/shims/bin-forward.cmd text eol=crlf
 
 * text=auto

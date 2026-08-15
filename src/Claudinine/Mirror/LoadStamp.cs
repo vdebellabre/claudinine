@@ -31,7 +31,7 @@ internal static class LoadStamp
     {
         try
         {
-            string dir = MirrorLocator.MirrorsDirectory();
+            string dir = MirrorLocator.ClaudinineDirFor(transcriptPath);
             Directory.CreateDirectory(dir);
             string stem = Path.GetFileNameWithoutExtension(transcriptPath);
             string stampPath = Path.Combine(dir, stem + ".load");
@@ -66,16 +66,16 @@ internal static class LoadStamp
     /// <summary>
     /// The most recent stamp for this transcript, as uuid → bytes-at-load, or
     /// null when no readable stamp exists (session predates the feature, or the
-    /// write failed). Probes every known mirror dir for the same reason mirror
-    /// reads do — the statusline runs without CLAUDE_PLUGIN_DATA — and when a
-    /// cross-context session has several, the newest is the last load.
+    /// write failed). Probes the colocated dir plus every legacy mirror dir —
+    /// pre-colocation sessions stamped into the flat pools — and when a session
+    /// has several stamps, the newest is the last load.
     /// </summary>
     public static Dictionary<string, long>? Read(string transcriptPath)
     {
         string stem = Path.GetFileNameWithoutExtension(transcriptPath);
         string? newest = null;
         DateTime newestTime = DateTime.MinValue;
-        foreach (string dir in MirrorLocator.SearchDirectories())
+        foreach (string dir in MirrorLocator.SearchDirectoriesFor(transcriptPath))
         {
             var candidate = new FileInfo(Path.Combine(dir, stem + ".load"));
             if (candidate.Exists && candidate.LastWriteTimeUtc > newestTime)

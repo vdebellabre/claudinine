@@ -173,6 +173,81 @@ public sealed class CarrierHeaderDedupTests : IDisposable
     }
 
     [Test]
+    public async Task StaleLauncherPathIsRehealedAfterAMove()
+    {
+        // An absolute launcher path goes stale exactly when the tree moves
+        // (cloud↔local, home rename) — and the colocated mirror moved WITH the
+        // transcript, so retrieval must keep working at the new location.
+        string path = BuildTwoTurnSession(out string firstId, out _);
+        Compactor.Run(path);
+        string staleLauncher = Launcher.HeaderPathFor(path);
+
+        string movedDir = Path.Combine(_dir, "moved");
+        Directory.CreateDirectory(movedDir);
+        string movedPath = Path.Combine(movedDir, "test-session.jsonl");
+        File.Move(path, movedPath);
+        Directory.Move(
+            Path.Combine(_dir, "test-session"),
+            Path.Combine(movedDir, "test-session"));
+
+        Compactor.Run(movedPath);
+
+        string first = CarrierContent(Load(movedPath), firstId);
+        await Assert.That(first).Contains($"sh \"{Launcher.HeaderPathFor(movedPath)}\" get test-session");
+        await Assert.That(first).DoesNotContain(staleLauncher);
+
+        // And the heal is a fixpoint: the next pass changes nothing.
+        string afterHeal = File.ReadAllText(movedPath);
+        Compactor.Run(movedPath);
+        await Assert.That(File.ReadAllText(movedPath)).IsEqualTo(afterHeal);
+    }
+
+    [Test]
+    public async Task LegacyCommandBlockIsUpgradedToTheLauncherForm()
+    {
+        // Pre-launcher (0.1.x/0.2.x) headers spell bare `claudinine get` — dead
+        // on a hosted install where nothing is on PATH. The kept full header's
+        // command block is regenerated in the launcher form; everything outside
+        // the block stays byte-identical.
+        string body = "[aaaa1111] Bash(cmd one) -> 500b :: preview one";
+        var b = new TranscriptBuilder().UserPrompt("old work");
+        b.ToolCall("Bash", new JsonObject { ["command"] = "one" }, LegacyFullHeader(2) + body);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        string content = records.SelectMany(r =>
+                (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
+            .Select(x => x["content"])
+            .OfType<JsonValue>()
+            .Select(v => v.TryGetValue<string>(out string? s) ? s : "")
+            .Single(c => c.Contains("RETRIEVAL — "));
+        await Assert.That(content).Contains($"sh \"{Launcher.HeaderPathFor(path)}\" get test-session --ref REF --grep");
+        await Assert.That(content).DoesNotContain("  claudinine get test-session");
+        // Outside the command block: untouched.
+        await Assert.That(content).StartsWith("[claudinine: this turn originally ran 2 separate tool calls.");
+        await Assert.That(content).Contains("If the file discussed still exists on disk");
+        await Assert.That(content).Contains("preview one");
+    }
+
+    [Test]
+    public async Task HealNeverTouchesATailCarrier()
+    {
+        // The file's final record is never replaced (TryRewrite would refuse the
+        // whole pass); a session ending exactly at the full carrier heals later.
+        var b = new TranscriptBuilder().UserPrompt("old work");
+        b.ToolCall("Bash", new JsonObject { ["command"] = "one" },
+            LegacyFullHeader(2) + "[aaaa1111] Bash(cmd one) -> 500b :: preview one");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        await Assert.That(File.ReadAllText(path)).Contains("  claudinine get test-session --ref REF");
+    }
+
+    [Test]
     public async Task SlimmingASingleCallCarrierKeepsTheSingularPhrase()
     {
         // The economics gate admits single-call turns, so "1 tool call" carriers exist.

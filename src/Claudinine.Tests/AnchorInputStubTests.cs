@@ -8,10 +8,16 @@ public sealed class AnchorInputStubTests : IDisposable
     private static readonly string Output = "tool output " + new string('o', 2000);
     private static readonly string BigCommand = "python - <<'EOF'\n" + new string('x', 600) + "\nEOF";
 
+    private readonly string _project;
+
     public AnchorInputStubTests()
     {
+        // _dir doubles as the fake HOME so `get` can resolve the session through
+        // its home seam (colocated mirrors are found by globbing
+        // <home>/.claude/projects/*/*/claudinine).
         _dir = Path.Combine(Path.GetTempPath(), "claudinine-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_dir);
+        _project = Path.Combine(_dir, ".claude", "projects", "proj");
+        Directory.CreateDirectory(_project);
         Environment.SetEnvironmentVariable("CLAUDE_PLUGIN_DATA", Path.Combine(_dir, "plugin-data"));
     }
 
@@ -39,7 +45,7 @@ public sealed class AnchorInputStubTests : IDisposable
         for (int i = 1; i < 3; i++)
             b.ToolCall("Bash", new JsonObject { ["command"] = $"echo step {i}" }, Output + i);
         b.AssistantText("done");
-        return b.WriteTo(_dir);
+        return b.WriteTo(_project);
     }
 
     [Test]
@@ -76,7 +82,8 @@ public sealed class AnchorInputStubTests : IDisposable
         string refArg = pointer.Split("--ref ")[1].Split(' ')[0];
 
         // GetVerb writes to Console, which TUnit captures per test.
-        int rc = GetVerb.Run(["test-session", "--ref", refArg, "--full"]);
+        int rc = GetVerb.Run(["test-session", "--ref", refArg, "--full"],
+            Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"), _dir);
         await Assert.That(rc).IsEqualTo(0);
 
         // The mirror still has the pristine use record: full original command.

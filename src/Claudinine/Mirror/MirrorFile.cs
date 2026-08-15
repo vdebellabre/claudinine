@@ -22,7 +22,16 @@ internal static class MirrorFile
     {
         try
         {
-            mirrorPath ??= MirrorLocator.PathFor(transcript.Path);
+            if (mirrorPath is null)
+            {
+                mirrorPath = MirrorLocator.PathFor(transcript.Path);
+                // First touch after the colocation change: pull the session's
+                // flat-pool mirror into the canonical location before appending,
+                // so the whole history gains the transcript's durability, not
+                // just the records from today on.
+                if (!File.Exists(mirrorPath))
+                    MigrateLegacyMirror(mirrorPath, transcript.Path);
+            }
             Directory.CreateDirectory(Path.GetDirectoryName(mirrorPath)!);
 
             // Identity: uuid when present; identical uuid-less lines (repeated
@@ -146,11 +155,12 @@ internal static class MirrorFile
         try
         {
             string mirrorPath = MirrorLocator.PathFor(transcript.Path);
-            var sources = MirrorLocator.ParentMirrorFiles(parentSessionId, mirrorPath);
+            var sources = MirrorLocator.ParentMirrorFiles(
+                parentSessionId, mirrorPath, transcript.Path);
             if (sources.Count == 0)
                 return false;
 
-            Directory.CreateDirectory(MirrorLocator.MirrorsDirectory());
+            Directory.CreateDirectory(Path.GetDirectoryName(mirrorPath)!);
             var seen = new HashSet<string>();
             bool hasHeader = false;
             if (File.Exists(mirrorPath))
@@ -213,7 +223,7 @@ internal static class MirrorFile
         try
         {
             var sources = MirrorLocator.ParentMirrorFiles(
-                sessionId, MirrorLocator.PathFor(transcript.Path));
+                sessionId, MirrorLocator.PathFor(transcript.Path), transcript.Path);
             if (sources.Count == 0)
                 return null;
             var uuids = new HashSet<string>();
@@ -230,6 +240,74 @@ internal static class MirrorFile
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// One-time move of a session's flat-pool mirror to the colocated path.
+    /// The largest legacy copy wins (cross-context resume can have left several;
+    /// the rest stay behind as read fallbacks until legacy GC reaps them). The
+    /// header's mirrorOf is rewritten to the CURRENT transcript path — after a
+    /// machine or home-dir move the recorded absolute path is stale, and the
+    /// legacy sweep deletes mirrors whose target is gone. Copy-then-delete with
+    /// a temp file: a crash at any point leaves either no colocated mirror
+    /// (retried next pass) or a duplicate pair (reads dedup by uuid) — never a
+    /// loss. The seen-cache is NOT carried over: the header rewrite changes the
+    /// byte length it is keyed on, so the first pass at the new path rebuilds it.
+    /// Failures propagate to TryAppendMissing's catch: no migration, no append,
+    /// no compaction this pass.
+    /// </summary>
+    private static void MigrateLegacyMirror(string mirrorPath, string transcriptPath)
+    {
+        string stem = Path.GetFileNameWithoutExtension(transcriptPath);
+        string? source = null;
+        long sourceLength = 0;
+        foreach (string dir in MirrorLocator.SearchDirectories())
+        {
+            var candidate = new FileInfo(Path.Combine(dir, stem + ".jsonl"));
+            if (candidate.Exists && candidate.Length > sourceLength)
+            {
+                source = candidate.FullName;
+                sourceLength = candidate.Length;
+            }
+        }
+        if (source is null)
+            return;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(mirrorPath)!);
+        string tmp = mirrorPath + Jsonl.TempSuffix;
+        Jsonl.WriteLinesDurably(tmp, FileMode.Create, MigratedLines(source, transcriptPath));
+        File.Move(tmp, mirrorPath, overwrite: true);
+        Dbg.Log($"migrated legacy mirror {source} -> {mirrorPath}");
+
+        try
+        {
+            SeenCache.TryDelete(source);
+            File.Delete(source);
+        }
+        catch
+        {
+            // The colocated copy is canonical either way; a lingering legacy
+            // copy is read-deduped now and reaped when the transcript dies.
+        }
+    }
+
+    private static IEnumerable<string> MigratedLines(string source, string transcriptPath)
+    {
+        bool first = true;
+        foreach ((string line, var node) in Jsonl.ReadRecords(source))
+        {
+            if (first)
+            {
+                first = false;
+                if (node?["claudinine"] is JsonObject meta && meta["mirrorOf"] is not null)
+                {
+                    meta["mirrorOf"] = Path.GetFullPath(transcriptPath);
+                    yield return node.ToJsonString(Json.Compact);
+                    continue;
+                }
+            }
+            yield return line;
         }
     }
 
@@ -292,6 +370,68 @@ internal static class MirrorFile
             {
                 // Best-effort, same as the rest of the sweep.
             }
+        }
+    }
+
+    /// <summary>
+    /// Structural sweep of one colocated claudinine dir: delete mirrors, skip
+    /// markers and load stamps whose transcript is gone, plus orphaned
+    /// seen-caches. Deliberately ignores the header paths the legacy sweep
+    /// trusts: colocated trees move whole (cloud snapshot/restore, cross-device
+    /// sync, home renames), which makes recorded absolute paths stale exactly
+    /// when the mirror matters most — sibling existence is the only truthful
+    /// liveness test here. The session's own death is SessionDirGc's job (the
+    /// whole sidecar dir goes); this sweep exists for files orphaned INSIDE a
+    /// living session, e.g. a deleted subagent transcript's mirror.
+    /// </summary>
+    internal static void CollectGarbageColocated(string claudinineDir)
+    {
+        try
+        {
+            if (!Directory.Exists(claudinineDir))
+                return;
+            string sessionDir = Path.GetDirectoryName(Path.GetFullPath(claudinineDir))!;
+            string sid = Path.GetFileName(sessionDir);
+            string projectDir = Path.GetDirectoryName(sessionDir)!;
+            foreach (string file in Directory.EnumerateFiles(claudinineDir))
+            {
+                try
+                {
+                    string ext = Path.GetExtension(file);
+                    if (ext is not (".jsonl" or ".skip" or ".load"))
+                        continue; // .seen below; temp files and unknowns left alone
+                    string stem = Path.GetFileNameWithoutExtension(file);
+                    string transcript = string.Equals(stem, sid, StringComparison.OrdinalIgnoreCase)
+                        ? Path.Combine(projectDir, stem + ".jsonl")
+                        : Path.Combine(sessionDir, "subagents", stem + ".jsonl");
+                    if (!File.Exists(transcript))
+                    {
+                        File.Delete(file);
+                        if (ext == ".jsonl")
+                            SeenCache.TryDelete(file);
+                    }
+                }
+                catch
+                {
+                    // Per-file best effort, same as the legacy sweep.
+                }
+            }
+            foreach (string cache in SeenCache.CacheFiles(claudinineDir))
+            {
+                try
+                {
+                    if (!File.Exists(SeenCache.MirrorPathOf(cache)))
+                        File.Delete(cache);
+                }
+                catch
+                {
+                    // Best-effort.
+                }
+            }
+        }
+        catch
+        {
+            // An unreadable dir must not disturb the session it belongs to.
         }
     }
 

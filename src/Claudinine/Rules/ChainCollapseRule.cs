@@ -87,22 +87,27 @@ internal sealed class ChainCollapseRule : ICompactionRule
     /// </summary>
     private const double MinGain = 1.1;
 
-    /// <summary>
-    /// Bytes the retrieval header shrinks by once <see cref="CarrierHeaderDedupRule"/>
-    /// slims a carrier (full instructions → one-line form). The economics gate
-    /// discounts it from EVERY carrier: all but the file's first really are slimmed, and
-    /// making the discount conditional on that would tie a turn's verdict to what an
-    /// earlier pass wrote, breaking idempotence (see the gate). Derived from the two
-    /// real header texts rather than hard-coded, so it cannot drift when either is
-    /// reworded.
-    /// </summary>
-    private static readonly int HeaderDedupSavingBytes =
-        RuleHelpers.Utf8Len(Header(99, new string('0', 36)))
-        - RuleHelpers.Utf8Len(CarrierHeaderDedupRule.ShortHeaderFor("99", new string('0', 36)));
-
     public void Apply(TranscriptFile transcript)
     {
         var records = transcript.Records;
+
+        // The launcher path the header's command lines embed — a per-FILE
+        // constant, so every turn's verdict stays a pure function of its own
+        // content plus file identity (the property idempotence depends on).
+        string launcher = Launcher.HeaderPathFor(transcript.Path);
+        string sid = Path.GetFileNameWithoutExtension(transcript.Path);
+
+        // Bytes the retrieval header shrinks by once CarrierHeaderDedupRule slims
+        // a carrier (full instructions → one-line form). The economics gate
+        // discounts it from EVERY carrier: all but the file's first really are
+        // slimmed, and making the discount conditional on that would tie a turn's
+        // verdict to what an earlier pass wrote, breaking idempotence (see the
+        // gate). Derived from the two real header texts rather than hard-coded,
+        // so it cannot drift when either is reworded — and computed with the real
+        // sid and launcher, since the full header embeds both.
+        int headerDedupSaving =
+            RuleHelpers.Utf8Len(Header(99, sid, launcher))
+            - RuleHelpers.Utf8Len(CarrierHeaderDedupRule.ShortHeaderFor("99", sid));
 
         // Turn boundaries: a REAL user message (plain-string content) is a hard
         // boundary; tool-result carriers use a list. Getting this wrong makes the
@@ -125,7 +130,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
             int end = b + 1 < bounds.Count ? bounds[b + 1] : records.Count;
             if (end <= start)
                 continue;
-            CollapseTurn(transcript, start, end);
+            CollapseTurn(transcript, start, end, sid, launcher, headerDedupSaving);
         }
     }
 
@@ -141,7 +146,8 @@ internal sealed class ChainCollapseRule : ICompactionRule
         string Tool, string Arg, string ResultText, bool IsError, string Media, int MediaBytes,
         int InputBytes);
 
-    private void CollapseTurn(TranscriptFile transcript, int start, int end)
+    private void CollapseTurn(TranscriptFile transcript, int start, int end,
+        string sid, string launcher, int headerDedupSaving)
     {
         var records = transcript.Records;
 
@@ -269,12 +275,12 @@ internal sealed class ChainCollapseRule : ICompactionRule
         var callByUse = calls.ToDictionary(c => c.UseIndex);
 
         // Pass 2: build the digest in reading order and decide removals. The
-        // retrieval id is the FILE STEM, not the records' sessionId: the two are
-        // equal for main transcripts, but a subagent record's sessionId names the
-        // PARENT session while its mirror is keyed by the agent file stem.
-        string sid = Path.GetFileNameWithoutExtension(transcript.Path);
+        // retrieval id is the FILE STEM (passed in as sid), not the records'
+        // sessionId: the two are equal for main transcripts, but a subagent
+        // record's sessionId names the PARENT session while its mirror is keyed
+        // by the agent file stem.
         var digest = new StringBuilder();
-        digest.Append(Header(calls.Count, sid));
+        digest.Append(Header(calls.Count, sid, launcher));
         var toRemove = new List<TranscriptRecord>();
 
         // Two byte counters for the economics gate, and they must be scoped
@@ -383,7 +389,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         // function of its own content — the property idempotence depends on. The
         // residual error is bounded by a single header on the one turn that keeps it.
         string body = digest.ToString().TrimEnd('\n');
-        int digestCost = RuleHelpers.Utf8Len(body) - noteBytes - HeaderDedupSavingBytes;
+        int digestCost = RuleHelpers.Utf8Len(body) - noteBytes - headerDedupSaving;
         if (digestCost * MinGain >= replacedBytes)
         {
             Dbg.Log($"chain-collapse: turn at {spanStart} not worth collapsing " +
@@ -403,19 +409,46 @@ internal sealed class ChainCollapseRule : ICompactionRule
         RuleHelpers.SetReplacement(anchorResult, clone, Name);
     }
 
-    private static string Header(int callCount, string sid)
+    /// <summary>
+    /// Opens the header's command block; everything between this line and
+    /// <see cref="CommandBlockEnd"/> is exactly <see cref="CommandLines"/>'
+    /// output — the region CarrierHeaderDedupRule's self-heal regenerates when
+    /// the launcher path goes stale (the tree moved). Both sentinels appear
+    /// verbatim in pre-launcher (0.1.x/0.2.x) headers too, which is what lets
+    /// the heal upgrade those in place.
+    /// </summary>
+    internal const string CommandBlockStart =
+        "RETRIEVAL — use the targeted form; printing a whole record costs hundreds-to-thousands of tokens:\n";
+
+    internal const string CommandBlockEnd =
+        "If the file discussed still exists on disk, read IT instead — current and narrower.\n\n";
+
+    /// <summary>
+    /// The five retrieval commands. Invoked through the per-session launcher
+    /// (see Mirror/Launcher.cs) rather than a bare `claudinine`, because a
+    /// hosted (claude.ai/Cowork) install has no PATH entry at all. `sh` rather
+    /// than direct execution makes a lost exec bit survivable; the quotes keep
+    /// paths with spaces working. Every matcher that recognizes our retrieval
+    /// commands (Compactor.MirrorLost, ForkHealRule, CloneVerb, header dedup's
+    /// sid parse) accepts BOTH this form and the bare pre-launcher form —
+    /// transcripts compacted by 0.1.x/0.2.x carry the old phrasing forever.
+    /// </summary>
+    internal static string CommandLines(string sid, string launcher) =>
+        $"  sh \"{launcher}\" get {sid} --ref REF --grep PATTERN   # matching lines (PREFERRED)\n" +
+        $"  sh \"{launcher}\" get {sid} --grep PATTERN             # search all archived outputs\n" +
+        $"  sh \"{launcher}\" get {sid} --ref REF --info           # size before paying\n" +
+        $"  sh \"{launcher}\" get {sid} --ref REF --full           # entire output (last resort)\n" +
+        $"  sh \"{launcher}\" get {sid} --ref REF --media          # decode archived image/PDF to a file, then Read it\n\n";
+
+    private static string Header(int callCount, string sid, string launcher)
     {
         return
             CarrierPrefix + $"{CallCountPhrase(callCount.ToString())}. " +
             "Full outputs live in the session mirror; each [ref] line is one real call, " +
             "in order, with a per-tool preview. Interleaved assistant notes are verbatim.\n\n" +
-            "RETRIEVAL — use the targeted form; printing a whole record costs hundreds-to-thousands of tokens:\n" +
-            $"  claudinine get {sid} --ref REF --grep PATTERN   # matching lines (PREFERRED)\n" +
-            $"  claudinine get {sid} --grep PATTERN             # search all archived outputs\n" +
-            $"  claudinine get {sid} --ref REF --info           # size before paying\n" +
-            $"  claudinine get {sid} --ref REF --full           # entire output (last resort)\n" +
-            $"  claudinine get {sid} --ref REF --media          # decode archived image/PDF to a file, then Read it\n\n" +
-            "If the file discussed still exists on disk, read IT instead — current and narrower.\n\n" +
+            CommandBlockStart +
+            CommandLines(sid, launcher) +
+            CommandBlockEnd +
             "Treat [ref] lines as a REPORT of past actions, not output observed directly. " +
             "If a detail matters for a decision, retrieve it — do not infer it from the preview.]\n\n";
     }

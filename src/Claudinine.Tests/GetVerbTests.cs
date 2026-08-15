@@ -94,6 +94,44 @@ public sealed class GetVerbTests : IDisposable
     }
 
     [Test]
+    public async Task LauncherDirIsProbedFirstAndAlone()
+    {
+        // run.sh exports CLAUDININE_DIR=<its own dir>; a launcher-invoked get must
+        // resolve there directly — no project glob, no legacy pools — so it works
+        // even where the home-wide search would find nothing (e.g. a moved tree).
+        string launcherDir = Path.Combine(_dir, "elsewhere", "claudinine");
+        Directory.CreateDirectory(launcherDir);
+        var lines = new List<string>
+        {
+            """{"claudinine":{"v":"1","mirrorOf":"x"}}""",
+            new JsonObject
+            {
+                ["type"] = "user",
+                ["uuid"] = Uuid1,
+                ["message"] = new JsonObject
+                {
+                    ["content"] = new JsonArray(new JsonObject
+                    {
+                        ["type"] = "tool_result",
+                        ["tool_use_id"] = "t-1",
+                        ["content"] = "colocated only",
+                    }),
+                },
+            }.ToJsonString(),
+        };
+        File.WriteAllText(Path.Combine(launcherDir, Session + ".jsonl"),
+            string.Join("\n", lines) + "\n", new UTF8Encoding(false));
+
+        TestContext ctx = TestContext.Current!;
+        int before = ctx.GetStandardOutput().Length;
+        int exit = GetVerb.Run([Session, "--ref", Uuid1[..8], "--full"],
+            pluginData: null, home: Path.Combine(_dir, "no-such-home"), launcherDir: launcherDir);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(ctx.GetStandardOutput()[before..]).Contains("colocated only");
+    }
+
+    [Test]
     public async Task GrepPrintsMatchingLinesOnly()
     {
         WriteMirror(Session, (Uuid1, "alpha output\nbeta line"), (Uuid2, "gamma"));

@@ -121,9 +121,13 @@ internal sealed partial class ForkHealRule : ICompactionRule
     }
 
     /// <summary>
-    /// A retrieval command's session-id token. Length floor keeps stray short
-    /// tokens out; the char class ends the capture at the following space.
+    /// A retrieval command's session-id token, in either spelling: the bare
+    /// pre-launcher form (`claudinine get &lt;sid&gt;` — stubs, short headers, 0.1.x
+    /// full headers) or the launcher form (`sh "…/run.sh" get &lt;sid&gt;`). Length
+    /// floor keeps stray short tokens out; the char class ends the capture at
+    /// the following space. Note the blanket sid replace in RetargetStrings also
+    /// fixes the launcher PATH (`…/&lt;sid&gt;/claudinine/run.sh`) in the same pass.
     /// </summary>
-    [GeneratedRegex("claudinine get ([A-Za-z0-9][A-Za-z0-9-]{6,})")]
+    [GeneratedRegex("(?:claudinine|run\\.sh\") get ([A-Za-z0-9][A-Za-z0-9-]{6,})")]
     private static partial Regex GetCommand();
 }
