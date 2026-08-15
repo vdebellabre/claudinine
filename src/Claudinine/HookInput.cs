@@ -35,6 +35,10 @@ internal sealed class HookInput
     /// <summary>PreCompact: manual | auto.</summary>
     [JsonPropertyName("trigger")]
     public string? Trigger { get; set; }
+
+    /// <summary>SubagentStop: the finished agent's own transcript file.</summary>
+    [JsonPropertyName("agent_transcript_path")]
+    public string? AgentTranscriptPath { get; set; }
 }
 
 /// <summary>

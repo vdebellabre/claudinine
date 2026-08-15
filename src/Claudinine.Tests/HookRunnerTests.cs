@@ -142,6 +142,52 @@ public sealed class HookRunnerTests : IDisposable
         await Assert.That(PassStamp.IsFresh(path, TimeSpan.FromSeconds(120))).IsTrue();
     }
 
+    // SubagentStop compacts the one file the event names, on the spot, and
+    // never touches the live session transcript it fired under.
+
+    [Test]
+    public async Task SubagentStopCompactsTheNamedAgentFile()
+    {
+        string session = new TranscriptBuilder().UserPrompt("hi").AssistantText("ok").WriteTo(_dir);
+        string agent = AgentTranscript();
+        byte[] sessionBefore = File.ReadAllBytes(session);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"SubagentStop","transcript_path":"{{session.Replace("\\", "\\\\")}}","agent_transcript_path":"{{agent.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(agent)).Contains("[claudinine");
+        await Assert.That(File.ReadAllBytes(session)).IsEquivalentTo(sessionBefore);
+    }
+
+    [Test]
+    public async Task SubagentStopWithoutAgentPathExitsZero()
+    {
+        string session = new TranscriptBuilder().UserPrompt("hi").AssistantText("ok").WriteTo(_dir);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"SubagentStop","transcript_path":"{{session.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubagentStopOnFrozenSessionMirrorsWithoutCompacting()
+    {
+        string session = new TranscriptBuilder().UserPrompt("hi").AssistantText("ok").WriteTo(_dir);
+        string agent = AgentTranscript();
+        string colocated = MirrorLocator.ClaudinineDirFor(session);
+        Directory.CreateDirectory(colocated);
+        File.WriteAllText(Path.Combine(colocated, "test-session.skip"), "frozen\n");
+        byte[] agentBefore = File.ReadAllBytes(agent);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"SubagentStop","transcript_path":"{{session.Replace("\\", "\\\\")}}","agent_transcript_path":"{{agent.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllBytes(agent)).IsEquivalentTo(agentBefore);
+        await Assert.That(File.Exists(MirrorLocator.PathFor(agent))).IsTrue();
+    }
+
     private string CompactableTranscript()
     {
         var b = new TranscriptBuilder();
@@ -152,5 +198,21 @@ public sealed class HookRunnerTests : IDisposable
         }
         b.AssistantText("done");
         return b.WriteTo(_dir);
+    }
+
+    /// <summary>A finished agent run under the session's subagents/ dir —
+    /// corpus-sized outputs, so the collapse economics gate fires.</summary>
+    private string AgentTranscript()
+    {
+        var b = new TranscriptBuilder(sidechain: true).UserPrompt("agent task");
+        for (int i = 0; i < 4; i++)
+        {
+            b.BashRead($"sed -n '1,5p' file{i}.txt", out _, "tool output " + new string('o', 2000));
+            b.AssistantText($"note {i}");
+        }
+        b.AssistantText("agent final report");
+        return b.WriteTo(
+            Path.Combine(_dir, "test-session", "subagents"),
+            "agent-abc123def456abc12.jsonl");
     }
 }

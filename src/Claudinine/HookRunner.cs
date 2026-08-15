@@ -103,6 +103,26 @@ internal static class HookRunner
                             EndMarker.Consume(input.TranscriptPath);
                     }
                     break;
+
+                case "SubagentStop":
+                    // The one file the event names, on the spot: subagent
+                    // transcripts are the best-compacting file type, and the
+                    // boundary sweeps alone leave a Workflow's agent files fat
+                    // for the whole session. Fires when the agent has finished
+                    // writing, so mid-turn is safe — only the agent's own file
+                    // is touched, never the live session transcript. The
+                    // boundary sweeps still run: they are the repair path for
+                    // agents whose SubagentStop was missed, and idempotence
+                    // makes the overlap free.
+                    if (input.AgentTranscriptPath is not null
+                        && File.Exists(input.AgentTranscriptPath))
+                    {
+                        if (skipped || SkipMarkers.IsCompactionSkipped(input.AgentTranscriptPath))
+                            Compactor.MirrorOnly(input.AgentTranscriptPath);
+                        else
+                            Compactor.Run(input.AgentTranscriptPath);
+                    }
+                    break;
             }
 
             return 0;

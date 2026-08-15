@@ -31,8 +31,9 @@ pointer in the transcript.
 Two locations, both belonging to this plugin or the session it is compacting:
 
 1. **The session transcript**, rewritten in place (details below). Subagent
-   transcripts (`<session>/subagents/agent-*.jsonl`) get the same treatment,
-   swept at SessionEnd and SessionStart.
+   transcripts (`<session>/subagents/agent-*.jsonl`) get the same treatment —
+   each one individually the moment its agent finishes (SubagentStop), plus a
+   sweep at SessionEnd and SessionStart as repair for missed events.
 2. **A per-session mirror**, colocated with the session inside its own sidecar
    directory: `<project>/<session-id>/claudinine/<session-id>.jsonl` (for a
    subagent transcript, `<session-id>/claudinine/agent-<id>.jsonl`) — next to
@@ -199,7 +200,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet run --project Claudinine.Tests` — 320 tests, covering each
+- `cd src && dotnet run --project Claudinine.Tests` — 323 tests, covering each
   rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.

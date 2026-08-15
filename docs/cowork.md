@@ -119,11 +119,15 @@ interactive sessions, where the per-prompt pass already runs, do not pay twice p
 joins the wake boundary from O1 (a pending `.end` marker bypasses the throttle), covering autonomous
 resumes that never see a prompt — verified end-to-end locally with the real binary.
 
-**O3 · Subagent compaction is boundary-bound.** `CompactSubagents` runs only at
-`SessionStart`/`SessionEnd`, so a Workflow's agent files stay fat until the session ends — and
-subagent transcripts are the best-compacting file type (82% on the corpus). `SubagentStop` hands over
-`agent_transcript_path` directly: compact that one file on the spot, no enumeration, cost
-proportional to one agent's output.
+**O3 · Subagent compaction is boundary-bound — FIXED in-tree.** `CompactSubagents` ran only at
+`SessionStart`/`SessionEnd`, so a Workflow's agent files stayed fat until the session ended — and
+subagent transcripts are the best-compacting file type (82% on the corpus). `SubagentStop` is now
+registered and compacts exactly the file the event names (`agent_transcript_path`), on the spot: no
+enumeration, cost proportional to one agent's output, and the live session transcript is never
+touched mid-turn. Skip markers are honoured with the same session-or-file logic as the boundary
+sweeps, which still run as the repair path for agents whose `SubagentStop` was missed. Verified
+end-to-end locally (agent file 11.9 KB → 4.2 KB at the event, mirror + sidecars in the session's
+`claudinine/` dir, session transcript byte-identical).
 
 **O4 · `PreCompact` never observed firing naturally.** It was invoked synthetically for timing only.
 Cowork forces autocompact lower (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80`), so it should fire *more* than
