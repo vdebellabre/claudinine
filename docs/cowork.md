@@ -115,7 +115,7 @@ written → consumed → no replay on the next prompt). *Still to verify on clou
 teardown + wake, the `.load` stamp matches the file as `SessionEnd` left it and the first prompt
 consumes the `.end`.
 
-**O2 · No `Stop` trigger — FIXED in-tree.** Autonomous stretches — scheduled tasks, `/loop`, Workflow
+**O2 · No `Stop` trigger — FIXED, validated on cloud (2026-08-15 test run).** Autonomous stretches — scheduled tasks, `/loop`, Workflow
 runs, Monitors — pass dozens of turns with no user prompt, so `UserPromptSubmit` never fires and
 nothing compacts. `Stop` is the per-turn boundary that always fires; it is now registered and runs
 the same steady pass under a min-interval guard: every completed pass (any event) touches a
@@ -124,7 +124,7 @@ interactive sessions, where the per-prompt pass already runs, do not pay twice p
 joins the wake boundary from O1 (a pending `.end` marker bypasses the throttle), covering autonomous
 resumes that never see a prompt — verified end-to-end locally with the real binary.
 
-**O3 · Subagent compaction is boundary-bound — FIXED in-tree.** `CompactSubagents` ran only at
+**O3 · Subagent compaction is boundary-bound — FIXED, validated on cloud (2026-08-15 test run).** `CompactSubagents` ran only at
 `SessionStart`/`SessionEnd`, so a Workflow's agent files stayed fat until the session ended — and
 subagent transcripts are the best-compacting file type (82% on the corpus). `SubagentStop` is now
 registered and compacts exactly the file the event names (`agent_transcript_path`), on the spot: no
@@ -211,9 +211,26 @@ claude.ai account-import route (marketplaces disabled, Linux-only artifact) alon
 silicon), unknown `$HOME`, unknown plugin source and marketplace availability, unknown whether
 `~/.claude` persists across sessions. Everything above was measured in cloud only.
 
-**O13 · No corpus-scale Cowork numbers.** One session with 9 digests is a smoke test. Run
-`eng/bench/` over real Cowork transcripts — Workflow-heavy ones especially — using the corpus metric,
-not bytes.
+**O13 · No corpus-scale Cowork numbers — MEASURED (2026-08-15 test run).** Real Cowork transcripts,
+genuine cl100k ruler:
+
+| population   | n | baseline           | bytes | tokens | non-idempotent |
+|--------------|---|--------------------|-------|--------|----------------|
+| subagent     | 5 | 0.8 MB / 0.12 M tok | 82.2% | 88.2%  | 0 |
+| main session | 1 | 0.5 MB / 0.04 M tok | 50.4% | 52.3%  | 0 |
+
+Per-file wins 5/5 on the subagent population (median 84.7%), and both populations land where the CLI
+corpus predicted (82% agent / ~52.5% live-context) — Cowork transcripts compact like CLI ones; the
+shapes differ but the ratios hold. Honest caveats: n=6 is a smoke corpus, not the 95-file snapshot,
+and the main-session baseline is reconstructed (mirror originals + the tail records not yet
+mirrored) because a live session's mirror can never cover its own tail — `curate.py` correctly
+refuses it, so that number is labelled mirror+tail, not a stock curate run. The run also surfaced
+three bench defects, all fixed in-tree the same day: `curate.py` now probes the colocated
+`claudinine/` mirror dir (it only knew the legacy flat pools, so on any current install every
+compacted session skipped as "no mirror"), excludes `**/claudinine/**` from the transcript scan (a
+colocated mirror is a baseline, not a candidate), and the ruler self-seeds tiktoken's cache from the
+npm `gpt-tokenizer` package when the openaipublic CDN is blocked (hash-checked against tiktoken's own
+expected_hash — identical encoder or refusal, see `eng/bench/ruler.py`).
 
 **O14 · Fork/clone under Cowork resume.** `ForkHealRule`'s parent-genuineness test has not been
 exercised against whatever Cowork does on resume, cross-device continuation, or a scheduled task
