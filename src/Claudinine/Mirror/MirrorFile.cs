@@ -383,6 +383,12 @@ internal static class MirrorFile
     /// liveness test here. The session's own death is SessionDirGc's job (the
     /// whole sidecar dir goes); this sweep exists for files orphaned INSIDE a
     /// living session, e.g. a deleted subagent transcript's mirror.
+    ///
+    /// PassLock files are reaped too — a Workflow-heavy session otherwise
+    /// accumulates one inert `.lock` per long-reaped agent. Deleting one that is
+    /// somehow still HELD is safe: Windows refuses (sharing violation, caught
+    /// per-file), and on Unix the unlink race only matters for a pass over this
+    /// stem — whose transcript is gone, making any such pass a no-op.
     /// </summary>
     internal static void CollectGarbageColocated(string claudinineDir)
     {
@@ -398,7 +404,7 @@ internal static class MirrorFile
                 try
                 {
                     string ext = Path.GetExtension(file);
-                    if (ext is not (".jsonl" or ".skip" or ".load"))
+                    if (ext is not (".jsonl" or ".skip" or ".load" or ".lock"))
                         continue; // .seen below; temp files and unknowns left alone
                     string stem = Path.GetFileNameWithoutExtension(file);
                     string transcript = string.Equals(stem, sid, StringComparison.OrdinalIgnoreCase)

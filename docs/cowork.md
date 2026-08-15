@@ -40,7 +40,9 @@ account pipeline preserves **executable bits** (`755` packed → `-rwxr-xr-x` ma
 
 **Runtime.** `libexec/claudinine version` runs; the shim resolves `linux-x64` correctly; linkage is
 `libm`/`libc`/`ld-linux` only, so glibc 2.39 has no floor problem. Hook cost is **14–17 ms** per
-event on cloud hardware (dev box: 18 ms), against hook timeouts of 25–60 s.
+event on cloud hardware (dev box: 18 ms), against hook timeouts of 30–60 s (`UserPromptSubmit` and
+`Stop` were raised 25 → 60: the wake pass — subagent sweep plus three GC sweeps — runs under them,
+and it is heaviest exactly when a Workflow-heavy session was just torn down).
 
 **Retrieval without PATH.** `claudinine` is *not* resolvable in the Bash tool — the bare form returns
 `command not found`, exit 127. (Claude Code appends `<pluginRoot>/bin` to PATH unconditionally, even
@@ -84,7 +86,7 @@ Extra `last-prompt` records are `MetadataKeepLastRule` (`last-prompt`, `custom-t
 keep-last, uuid-less so nothing can reference them. `tool-results/` cannot be reaped by GC today:
 `SessionDirGc` deletes a `<sid>/` dir only when `<sid>.jsonl` is gone and nothing was touched for
 24 h, and `CollectGarbageColocated` is scoped to `<sid>/claudinine/` and only acts on
-`.jsonl`/`.skip`/`.load`/`.seen`.
+`.jsonl`/`.skip`/`.load`/`.lock`/`.seen`.
 
 ---
 
@@ -102,13 +104,16 @@ and never again — while re-reads happen repeatedly within one session's life.
 
 *The fix as shipped* (hooks are per-invocation processes, so "once per host process" lives on disk):
 `SessionEnd` writes a `<stem>.end` marker into the colocated `claudinine/` dir; a `UserPromptSubmit`
-that finds it is the first prompt after a teardown and consumes it, replaying the start work —
-`LoadStamp.Write` *before* the pass mutates (same invariant as `SessionStart`), the subagent sweep,
-and the housekeeping trio. A real `SessionStart` consumes the marker too, so a CLI resume never
-double-runs. Crash teardowns that skip `SessionEnd` stay uncovered; `SessionStart` remains the repair
-path there. Verified end-to-end locally (marker written → consumed → `.load` re-stamped → no replay
-on the next prompt). *Still to verify on cloud:* after a real idle teardown + wake, the first prompt
-leaves a fresh `.load` stamp and no `.end`.
+that finds it is the first prompt after a teardown and consumes it, replaying the start work — the
+subagent sweep and the housekeeping trio. The load stamp is *not* re-written at the wake: `SessionEnd`
+stamps the file at rest at the end of its own pass, which is byte-for-byte what the next re-hydration
+will load — exact where a wake-time stamp was a guess, and a `Stop` wake would be a full turn late
+(the whole autonomous turn is appended before the hook fires). A real `SessionStart` consumes the
+marker too, so a CLI resume never double-runs. Crash teardowns that skip `SessionEnd` stay uncovered;
+`SessionStart` remains the repair path there. Wake mechanics verified end-to-end locally (marker
+written → consumed → no replay on the next prompt). *Still to verify on cloud:* after a real idle
+teardown + wake, the `.load` stamp matches the file as `SessionEnd` left it and the first prompt
+consumes the `.end`.
 
 **O2 · No `Stop` trigger — FIXED in-tree.** Autonomous stretches — scheduled tasks, `/loop`, Workflow
 runs, Monitors — pass dozens of turns with no user prompt, so `UserPromptSubmit` never fires and
@@ -137,7 +142,11 @@ Try-acquire only, skip on busy: the holder is running the same idempotent pass. 
 different stems and never contend; a boundary sweep skips an agent file whose own `SubagentStop` is
 mid-pass; the `.end` teardown marker is written outside the lock so a busy lock can never lose a
 teardown. Cross-process enforcement verified locally (pass skipped while a foreign process held the
-lock, compacted normally after release).
+lock, compacted normally after release). Two scope notes: `.lock` files whose transcript is gone are
+reaped by the colocated sweep (a Workflow-heavy session would otherwise accumulate dozens for
+long-reaped agents), and the lock's guarantee does not extend to the cross-session GC sweeps that run
+inside it — those touch trees whose own hooks hold their own locks, tolerable because they act only
+on long-dead targets.
 
 **O4 · `PreCompact` never observed firing naturally.** It was invoked synthetically for timing only.
 Cowork forces autocompact lower (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80`), so it should fire *more* than

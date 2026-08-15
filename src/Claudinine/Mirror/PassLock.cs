@@ -15,8 +15,9 @@ namespace Claudinine.Mirror;
 /// the lock is the open handle, not the file's existence, which sidesteps the
 /// unlink/re-create race where a deleted-while-held path lets a third process
 /// lock a fresh inode alongside the original holder. The stale `.lock` file is
-/// inert (the colocated GC ignores unknown extensions) and dies with the
-/// session dir under SessionDirGc.
+/// inert; the colocated GC reaps it once its transcript is gone (safe: a pass
+/// over a gone transcript is a no-op, so the unlink race has no victim), and
+/// the session dir takes the rest under SessionDirGc.
 /// </summary>
 internal static class PassLock
 {

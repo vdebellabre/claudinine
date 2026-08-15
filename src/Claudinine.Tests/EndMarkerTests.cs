@@ -84,6 +84,25 @@ public sealed class EndMarkerTests : IDisposable
         await Assert.That(File.Exists(MarkerPathFor(path))).IsTrue();
     }
 
+    // The teardown stamp: the file at rest after the SessionEnd pass is exactly
+    // what the next re-hydration loads, so SessionEnd writes the load stamp and
+    // the wake path writes none (a Stop wake fires a full turn late).
+    [Test]
+    public async Task SessionEndHook_WritesLoadStamp()
+    {
+        string path = new TranscriptBuilder()
+            .UserPrompt("hello").AssistantText("hi").WriteTo(_dir);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"SessionEnd","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        string stamp = Path.Combine(
+            MirrorLocator.ClaudinineDirFor(path),
+            Path.GetFileNameWithoutExtension(path) + ".load");
+        await Assert.That(File.Exists(stamp)).IsTrue();
+    }
+
     [Test]
     public async Task UserPromptSubmitHook_WithoutMarker_WritesNoLoadStamp()
     {
@@ -101,8 +120,8 @@ public sealed class EndMarkerTests : IDisposable
     }
 
     // A live session's pending marker must survive the colocated sweep: the
-    // sweep acts only on .jsonl/.skip/.load/.seen, and this pins that contract
-    // for the .end extension.
+    // sweep acts only on .jsonl/.skip/.load/.lock/.seen, and this pins that
+    // contract for the .end extension.
     [Test]
     public async Task ColocatedGc_LeavesPendingMarkerAlone()
     {

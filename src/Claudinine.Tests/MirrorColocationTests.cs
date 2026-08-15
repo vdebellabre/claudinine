@@ -208,6 +208,26 @@ public sealed class MirrorColocationTests : IDisposable
     }
 
     [Test]
+    public async Task ColocatedSweepReapsOrphanedLockFiles()
+    {
+        string transcript = BuildCompactableSession();
+        string sessionDir = Path.Combine(_project, "test-session");
+        string claudinine = Path.Combine(sessionDir, "claudinine");
+        Directory.CreateDirectory(claudinine);
+        Directory.CreateDirectory(Path.Combine(sessionDir, "subagents"));
+        File.WriteAllText(Path.Combine(sessionDir, "subagents", "agent-live.jsonl"), "{}\n");
+        File.WriteAllText(Path.Combine(claudinine, "test-session.lock"), "");
+        File.WriteAllText(Path.Combine(claudinine, "agent-live.lock"), "");
+        File.WriteAllText(Path.Combine(claudinine, "agent-dead.lock"), "");
+
+        MirrorFile.CollectGarbageColocated(claudinine);
+
+        await Assert.That(File.Exists(Path.Combine(claudinine, "test-session.lock"))).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(claudinine, "agent-live.lock"))).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(claudinine, "agent-dead.lock"))).IsFalse();
+    }
+
+    [Test]
     public async Task ColocatedSweepIgnoresHeaderPathsEntirely()
     {
         // Cross-device sync scenario: the whole tree moved, every mirrorOf header

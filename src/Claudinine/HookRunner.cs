@@ -83,12 +83,6 @@ internal static class HookRunner
                             return 0;
                         }
 
-                        // The re-hydration loaded the file as it stands right now:
-                        // re-stamp before the pass mutates anything — the same
-                        // invariant as the SessionStart stamp above.
-                        if (wake)
-                            LoadStamp.Write(input.TranscriptPath);
-
                         if (skipped) Compactor.MirrorOnly(input.TranscriptPath);
                         else Compactor.Run(input.TranscriptPath);
                         PassStamp.Touch(input.TranscriptPath);
@@ -101,6 +95,16 @@ internal static class HookRunner
                             // them clean at rest, SessionStart repairs after a crash.
                             CompactSubagents(input.TranscriptPath, skipped);
                         }
+                        if (input.HookEventName == "SessionEnd")
+                        {
+                            // The file at rest after this pass is byte-for-byte
+                            // what the next re-hydration will load (Cowork resumes
+                            // from the transcript with no SessionStart), so stamp
+                            // it here rather than at the wake: a Stop wake fires
+                            // after a whole autonomous turn was appended, and
+                            // stamping then would overstate what was loaded.
+                            LoadStamp.Write(input.TranscriptPath);
+                        }
                         if (input.HookEventName == "SessionStart" || wake)
                         {
                             // Housekeeping rides the start boundary, off the
@@ -108,6 +112,12 @@ internal static class HookRunner
                             // this session's own claudinine dir (orphaned subagent
                             // mirrors and markers); other sessions' dirs are their
                             // own hooks' business, or SessionDirGc's when they die.
+                            // NOTE: this transcript's PassLock does NOT protect the
+                            // other trees CollectGarbage and SessionDirGc touch —
+                            // those sessions' hooks hold only their own locks.
+                            // Tolerable because both act only on long-dead targets
+                            // (transcript gone, plus 24 h of quiet for SessionDirGc),
+                            // never a live pass's working set.
                             MirrorFile.CollectGarbage();
                             MirrorFile.CollectGarbageColocated(
                                 MirrorLocator.ClaudinineDirFor(input.TranscriptPath));
