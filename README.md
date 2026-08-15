@@ -21,6 +21,8 @@ Across 174 real sessions, transcripts shrank from **189 MB to 43 MB** on disk. T
 
 Claudinine is a Claude Code plugin. Run `/plugin install claudinine` in Claude Code, and that is the whole setup — the hooks register themselves and compaction starts with your next prompt. There is nothing to configure.
 
+On claude.ai (Cowork), plugin marketplaces are disabled, so `/plugin install` is not the route. Instead, download `claudinine-<version>.plugin` from the [latest release](https://github.com/vdebellabre/claudinine/releases/latest) and import it in claude.ai's plugin settings. It installs account-wide and registers in your Cowork sessions automatically — including sessions already running. That artifact ships Linux binaries only (the only kind a Cowork session can execute); CLI installs on Windows and macOS use the marketplace or the full zip.
+
 ## How it works
 
 Whenever it is invoked, Claudinine runs one pass over the whole session transcript: copy full content to the sidecar, then compact. This pass is idempotent — re-running it has no effect — so the same pass is safe to run at every hook point. There are six active hooks:
@@ -37,6 +39,8 @@ This behavior is what allows Claudinine to be run through hooks only, without an
 Every rewrite is validated before an atomic swap, and any failed check leaves the original untouched. See [docs/session-file-changes.md](docs/session-file-changes.md) for exactly what is modified, why, and what the safety guarantees are.
 
 Compaction cannot touch the live in-memory context of a running session — Claude Code loads the transcript once and works from memory. The benefit therefore arrives every time you resume a session.
+
+On Cowork that moment comes more often than in the CLI, not less: cloud sessions are torn down when idle and re-hydrated from the transcript on the next activity, so one session pays the reload repeatedly within its life — each time from the compacted file. What shrinks there is the long tail: when the cloud container is eventually reclaimed, the transcript and its side file go together, so the archive does not outlive the session the way a local one does.
 
 One small native binary per platform, no runtime, published for x64/arm64 on Windows, macOS and Linux.
 

@@ -115,9 +115,21 @@ then resumed to see what came back:
 
 Removal is therefore an allowlist, not a blocklist: any event not *proven* inert
 (`SessionStart`, `PreToolUse`, or anything a future version introduces) is kept.
-`QueueHistoryCollapseRule` applies the same standard differently — it replays the
-enqueue/dequeue history internally and only drops it when every queue provably
-ends empty; anything the replay cannot account for fails the whole file closed.
+
+`QueueHistoryCollapseRule` applies the same standard differently, and since it is
+the one record class removed outright rather than digested, its exact contract is
+worth spelling out. `queue-operation` records are the app's queued-message
+history (messages typed while a turn was still running). The rule replays every
+`enqueue`/`dequeue`/`remove` in file order, tracking one queue per `sessionId`
+(resumed sessions can interleave several), and removes the operations **only when
+every queue provably ends empty** — a non-empty queue means a message is still
+pending delivery. Removal is all-or-nothing by necessity, not caution: dequeues
+are positional and carry no content, so after deleting any prefix of the history
+the remaining operations no longer replay to the same state, and no partial
+removal can be proven safe. A trailing queue operation is always skipped as
+possibly mid-flight (the pass converges next time), and anything the replay does
+not understand — an unknown operation, a dequeue on an empty queue, a remove that
+misses — keeps the whole file's queue history untouched.
 
 These removals shrink the file on disk. They are not counted in Claudinine's
 published token figures, which measure only `message.content` — the benchmark
@@ -191,7 +203,7 @@ Stated plainly, because they are real:
   (`eng/bench/steady.py`), the steady-state `UserPromptSubmit` pass — the one a
   user actually waits for, over a transcript already compacted and mirrored — is
   **17.5 ms median, 24.1 ms p90, 52.7 ms worst**, process startup included. That
-  is 0.21% of the 25 s hook budget at worst. The cold whole-file pass, which
+  is under 0.1% of the 60 s hook budget at worst. The cold whole-file pass, which
   happens once at SessionStart over an untouched transcript, is 81.8 ms median,
   205 ms p90 and 832 ms worst; that is the one to cite for a first run rather
   than for per-prompt cost. Both columns come from the same serial
@@ -205,7 +217,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet run --project Claudinine.Tests` — 329 tests, covering each
+- `cd src && dotnet run --project Claudinine.Tests` — 330+ tests, covering each
   rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.

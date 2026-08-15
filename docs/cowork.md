@@ -154,28 +154,40 @@ in the CLI — and on an ephemeral host it is the clearest in-session win. Confi
 
 ### 2. Small corrections
 
-**O5 · One `system` record present in the mirror, absent from live.** The only unexplained removal.
-Check `HookSuccessStripRule` and `StopHookSummaryStripRule` first.
+**O5 · One `system` record present in the mirror, absent from live — SETTLED by code reading.** Not
+unexplained: the only rule in the catalog that removes a `system` record outright is
+`StopHookSummaryStripRule`, and only a zero-signal `stop_hook_summary` (no output, no errors, no
+additional context, no prevented continuation, no stop reason) qualifies — boundary-preserved and
+`compact_boundary` records are protected. `HookSuccessStripRule` touches only `attachment` records.
+One such record lands after nearly every turn, so exactly this diff is expected in any session.
 
-**O6 · Document the `queue-operation` behaviour** in `session-file-changes.md` — the reasoning exists
-only in the rule's doc-comment, and it is the one record class removed outright rather than digested.
+**O6 · Document the `queue-operation` behaviour — DONE.** `session-file-changes.md` now spells out
+the full contract: per-`sessionId` replay, all-or-nothing removal only when every queue provably ends
+empty, why partial removal is unsound (positional content-less dequeues), the trailing-op skip, and
+fail-closed on anything the replay does not understand.
 
-**O7 · Regression test** asserting no GC path can ever select `<sid>/tool-results/**`. Safe today by
-construction; it should stay safe by test.
+**O7 · Regression test — DONE.** `NoGcPathTouchesALiveSessionsToolResults` (MirrorColocationTests)
+runs all three GC paths — legacy-pool sweep, colocated sweep, SessionDirGc — over a live session with
+`tool-results/` and `workflows/` content aged past the grace window, with reapable bait proving the
+sweeps ran hot, and asserts the app's sidecars survive.
 
-**O8 · `version` reports `1.0.0`.** Per the csproj comment that is the SDK default for a build off
-develop — so this is not a product bug, but it does mean the artifact under test was hand-packed. It
-also makes "which build is deployed" unanswerable from inside a session, which is worth fixing.
+**O8 · `version` reports `1.0.0` — FIXED and verified by CI.** The binaries were compiled before
+`set-version` ever ran (the compile job never saw `inputs.version`); fixed by passing
+`-p:Version={inputs.version}` to `dotnet publish`, with assertions at all four invocation points
+comparing `claudinine version` output to the dispatched version. The v0.1.20 release published
+2026-08-15 by the green main run carries the fix, so "which build is deployed" is now answerable
+from inside a session.
 
 ### 3. Packaging & release
 
-**O9 · The CI path — landed, awaiting a green run.** The `-Hosted` pack flag, the two artifacts (CLI
-zip keeps `bin/` forwarders for the human verbs; hosted `.plugin` omits `bin/`), the
-`test ! -e verify-hosted/bin` assertion that would have caught this class of failure, and release
-publication of both are all in `build.yml`/`cd.yml` and merged to main. The hosted verify step also
-asserts the Linux-only RID set *and the absence* of the four non-Linux ones, so a silent regression
-back to a fat bundle fails CI. Still unproven end to end: an actual upload of a CI-produced
-`.plugin`.
+**O9 · The CI path — GREEN.** The `-Hosted` pack flag, the two artifacts (CLI zip keeps `bin/`
+forwarders for the human verbs; hosted `.plugin` omits `bin/`), the `test ! -e verify-hosted/bin`
+assertion, and release publication of both are in `build.yml`/`cd.yml` and merged to main. The hosted
+verify step also asserts the Linux-only RID set *and the absence* of the four non-Linux ones, so a
+silent regression back to a fat bundle fails CI. The Publish release run on main (2026-08-15 13:21,
+run 31887005499) went green and published v0.1.20 with both assets — `claudinine-0.1.20.plugin` on
+the release IS CI-produced. Last remaining step: import that CI artifact into claude.ai to replace
+the hand-packed install (one manual action, same validator that already accepted the layout).
 
 **O10 · Bundle size against the sync limits — RESOLVED, measured.** The syncer enforces roughly
 4096 files / 25 MB per file / 64 MB total. Measured against the published 0.1.20 artifact: six RIDs
@@ -184,9 +196,10 @@ the caps. The hosted `.plugin` is now Linux-only regardless — **7.27 MB, a 64%
 other four binaries can never execute in a Cowork session. Per-RID: linux-arm64 3.72, linux-x64 3.53,
 osx-x64 3.47, osx-arm64 3.43, win-arm64 3.17, win-x64 3.01 MB.
 
-**O11 · Install route and README claims.** `/plugin install claudinine` is not the Cowork route;
-account import is. And the README's `claudinine restore-compaction-off <sid>` implies a PATH that
-hosted installs do not have — document the launcher form for Cowork users.
+**O11 · Install route and README claims — DONE.** The README's Install section now documents the
+claude.ai account-import route (marketplaces disabled, Linux-only artifact) alongside
+`/plugin install`, and the restore section shows the launcher form
+(`sh …/<sid>/claudinine/run.sh restore-compaction-off <sid>`) for hosted installs.
 
 ### 4. Coverage gaps
 
@@ -204,10 +217,9 @@ bound to a persistent session.
 
 ### 5. Docs
 
-**O15 · The Cowork caveat in the README needs to be right.** The draft version — "the container is
-ephemeral, so the resume benefit largely does not apply" — is wrong. Wake-from-idle re-hydration from
-the transcript happens repeatedly *within* one session's life (twice in one day on the probe
-session), so the re-read benefit applies **more often** in Cowork than in the CLI. What genuinely
-shrinks is the long-tail archive value: eventually the container is reclaimed and the transcript goes
-with it. The honest framing is: same per-re-read saving, more re-reads, shorter total lifetime — and
-`PreCompact` is a real in-session win on top.
+**O15 · The Cowork caveat in the README — DONE.** The README now carries the honest framing (in "How
+it works", after the resume-benefit paragraph): wake-from-idle re-hydration happens repeatedly within
+one session's life, so the re-read benefit applies *more often* in Cowork than in the CLI; what
+shrinks is the long-tail archive value, since the transcript and its side file die with the
+container. The wrong draft framing ("ephemeral, so the resume benefit largely does not apply") never
+shipped.
