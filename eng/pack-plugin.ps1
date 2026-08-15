@@ -16,10 +16,15 @@
 #                                         goes through the per-session launcher
 #                                         the compactor writes (see
 #                                         src/Claudinine/Mirror/Launcher.cs).
-#                                         Also carries only the two Linux RIDs:
-#                                         hosted sessions are Linux containers,
-#                                         so the win-*/osx-* binaries are dead
-#                                         weight. Pass -HostedRids to override.
+#                                         Carries ALL SIX RIDs: cloud sessions
+#                                         are Linux containers, but local
+#                                         ("On your computer") Cowork executes
+#                                         hooks on the DESKTOP HOST (measured
+#                                         2026-08-15 on Windows: Git Bash ran
+#                                         the shim, win-x64 was absent, every
+#                                         hook died exit 127), and the same
+#                                         account artifact feeds both modes.
+#                                         Pass -HostedRids to slim deliberately.
 #
 # The archive carries only what an installed plugin needs at runtime: the
 # manifest, the hooks, the commands, the shims, and the six native binaries.
@@ -68,24 +73,22 @@ if (-not $BinRoot) {
 if (-not (Test-Path $BinRoot)) { throw "BinRoot does not exist: $BinRoot" }
 $BinRoot = (Resolve-Path $BinRoot).Path
 
-# The hosted bundle ships only what its one execution environment can run.
-# claude.ai-hosted sessions (Cowork) are Linux containers, so the four non-Linux
-# binaries are dead weight there -- ~2/3 of the bundle. Both Linux RIDs stay:
-# the sandbox architecture is not something we control or have measured, the
-# shim already routes on `uname -m`, and an arm64 fleet with no arm64 binary is
-# a hard failure, not a slow path.
+# The hosted bundle carries all six RIDs. It briefly (0.1.20-0.1.21) shipped
+# Linux-only on the theory that claude.ai-hosted sessions are Linux containers
+# -- true for cloud, but the SAME account-uploaded .plugin feeds local
+# ("On your computer") Cowork, where hooks execute on the desktop host, not in
+# the Linux sandbox VM (measured 2026-08-15: Windows host, Git Bash invoked the
+# sh shim, `uname -s`=MINGW* routed to win-x64/claudinine.exe, absent, exit 127
+# on every hook -- docs/cowork.md O12). Full set is 20.34 MB unpacked against
+# a 64 MB sync cap (O10), so the cut bought little and broke a whole mode.
 #
-# -HostedRids exists to make that assumption reversible in one flag rather than
-# a re-edit: if an account-uploaded .plugin ever turns out to also feed a local
-# desktop install (see docs/cowork-compatibility.md A1), pass the full set.
+# -HostedRids remains as the deliberate-slimming override.
 $allRids = @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')
 # Split on commas: `pwsh -File script.ps1 -HostedRids a,b` passes ONE argument
 # ("a,b"), unlike an in-process call which binds two. CI invokes via -File, so
 # without this the whole list arrives as a single bogus RID name.
 $HostedRids = @($HostedRids | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
-$rids = if ($HostedRids) { $HostedRids }
-        elseif ($Hosted) { @('linux-x64', 'linux-arm64') }
-        else { $allRids }
+$rids = if ($HostedRids) { $HostedRids } else { $allRids }
 $unknown = $rids | Where-Object { $_ -notin $allRids }
 if ($unknown) { throw "unknown RID(s): $($unknown -join ', '); valid: $($allRids -join ', ')" }
 

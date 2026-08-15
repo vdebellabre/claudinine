@@ -5,8 +5,10 @@ Supersedes `cowork-compatibility.md`, `claudinine-cowork-report.md` and `cowork-
 **Verdict: functionally compatible, and the trigger model is now closed on cloud.** Claudinine
 installs, runs, compacts, and retrieves in Cowork cloud. Packaging was the only hard blocker and it is
 fixed (`libexec/`, launcher-based retrieval). All three trigger-model gaps (O1–O3) are shipped and
-validated against a real host; what remains is `PreCompact`, local mode, fork/clone, and one
-statusline accounting defect.
+validated against a real host. Local mode's blocker — hooks run on the desktop host, which the
+Linux-only bundle could not serve — is found and fixed in-tree, pending a release to validate (O12);
+what remains besides that is `PreCompact`, fork/clone, the local-mode retrieval namespace split, and
+one statusline accounting defect.
 
 Evidence comes from three live cloud sessions on 2026-08-15, `entrypoint: remote_cowork`: a
 diagnostic-probe session (`f4bcf08f…`, environment measurements) and a functional session
@@ -25,19 +27,23 @@ correctly — both stamps recorded the flat path — but any tooling that assume
 
 ## The host
 
-| | cloud ("In the cloud") | local ("On your computer") |
+| | cloud ("In the cloud") | local ("On your computer", measured 2026-08-15) |
 |---|---|---|
-| host | Firecracker VM, `x86_64`, Ubuntu glibc 2.39 | Linux VM inside the desktop app, host arch |
-| `$HOME` | `/root` (cwd `/home/claude`), hooks and Bash agree | untested |
+| entrypoint | `remote_cowork` | `local-agent` |
+| Claude Code | 2.1.233 / 2.1.42 | 2.1.229 |
+| host | Firecracker VM, `x86_64`, Ubuntu glibc 2.39 | **split**: Bash tool in a Linux VM (`/sessions/<name>`), hooks on the **desktop host** (Windows measured) |
+| `$HOME` | `/root` (cwd `/home/claude`), hooks and Bash agree | Bash: `/sessions/<name>` (home = cwd); hooks: the Windows profile |
+| session store | `~/.claude/projects/` in the container | host-side, per cowork-session: `%APPDATA%\Claude\local-agent-mode-sessions\<install>\<device>\local_<id>\.claude\projects\<slug>\` — VM sees it **read-only** at `<mnt>/.claude/` |
 | session life | server-side, survives desktop restarts; `SessionEnd` on idle, re-hydrates from transcript on next activity | untested |
-| plugin source | `~/.claude/plugins/synced/<name>/`, account-hosted install | untested |
+| plugin source | `~/.claude/plugins/synced/<name>/`, account-hosted install | host: `…\rpm\plugin_<id>\`; VM view: `<mnt>/.remote-plugins/plugin_<id>/` |
 | marketplaces | disabled (`SKIP_PLUGIN_MARKETPLACE=true`) | untested |
 
-Only Linux binaries ever execute in either mode. The `win-*`/`osx-*` RIDs are dead weight for Cowork,
-and the hosted `.plugin` no longer carries them (nor the Windows `.cmd` shim) — see *Packaging* below.
-Both Linux RIDs stay: cloud is `x86_64`, but local Cowork runs a Linux VM at **host arch**, so an
-Apple Silicon desktop needs `linux-arm64`. The shim routes on `uname -m`; a missing RID is a hard
-failure, not a slow path.
+**The "only Linux binaries ever execute" premise was wrong.** It held for cloud, but local Cowork
+executes hooks on the **desktop host** — the Linux VM exists (it is the Bash sandbox), hooks just
+don't run there (see O12 for the measurement). The hosted `.plugin` therefore carries **all six
+RIDs plus the `claudinine.cmd` twin** again; a Windows or macOS desktop resolves its native binary
+through the same shim. The shim routes on `uname -s`/`uname -m`; a missing RID is a hard failure,
+not a slow path — every hook dies exit 127.
 
 ---
 
@@ -241,7 +247,9 @@ comparing `claudinine version` output to the dispatched version. Correction to a
 here: v0.1.20 did NOT carry the fix — that pipeline change was still develop-local when 0.1.20 ran,
 so its binaries report `1.0.0` (and its green run proves nothing, since the assertions ship in the
 same commit). PR #10 synced the pipeline to main and v0.1.21 (2026-08-15) is the first release whose
-binaries report their real version, assertion-verified on every RID in the run log.
+binaries report their real version, assertion-verified on every RID in the run log — and
+independently confirmed on a real host the same day (the local-mode sandbox ran the shim and got
+`0.1.21`, see O12).
 
 **O16 · The statusline under-reports exactly the rules that save the most — NEW, measured
 2026-08-15.** `StatuslineVerb.Measure` prices a reload as, for each record **still present** in the
@@ -286,23 +294,28 @@ its own test over both shapes.
 
 ### 3. Packaging & release
 
-**O9 · The CI path — GREEN.** The `-Hosted` pack flag, the two artifacts (CLI zip keeps `bin/`
-forwarders for the human verbs; hosted `.plugin` omits `bin/`), the `test ! -e verify-hosted/bin`
-assertion, and release publication of both are in `build.yml`/`cd.yml` and merged to main. The hosted
-verify step also asserts the Linux-only RID set *and the absence* of the four non-Linux ones, so a
-silent regression back to a fat bundle fails CI. The Publish release run on main (2026-08-15 13:21,
+**O9 · The CI path — GREEN (assertions corrected 2026-08-15).** The `-Hosted` pack flag, the two
+artifacts (CLI zip keeps `bin/` forwarders for the human verbs; hosted `.plugin` omits `bin/`), the
+`test ! -e verify-hosted/bin` assertion, and release publication of both are in `build.yml`/`cd.yml`
+and merged to main. The hosted verify step originally asserted the Linux-only RID set *and the
+absence* of the four non-Linux ones — an assertion that turned out to actively enforce the O12
+blocker once local mode was measured, so it is now inverted: all six RIDs plus `claudinine.cmd`
+must be present, `bin/` must still be absent. The Publish release run on main (2026-08-15 13:21,
 run 31887005499) went green and published v0.1.20 with both assets — CI-produced, though still
 version-blind (see O8); v0.1.21 (run 31894149339) is the fully correct artifact, and it also carries
 the Fable-safeguards header fix every install needs. Last remaining step: import
 `claudinine-0.1.21.plugin` into claude.ai to replace the hand-packed install (one manual action,
 same validator that already accepted the layout).
 
-**O10 · Bundle size against the sync limits — RESOLVED, measured.** The syncer enforces roughly
-4096 files / 25 MB per file / 64 MB total. Measured against the published 0.1.20 artifact: six RIDs
-are 20.34 MB unpacked (largest single file 3.72 MB), so the fat bundle was never actually at risk of
-the caps. The hosted `.plugin` is now Linux-only regardless — **7.27 MB, a 64% cut** — because the
-other four binaries can never execute in a Cowork session. Per-RID: linux-arm64 3.72, linux-x64 3.53,
-osx-x64 3.47, osx-arm64 3.43, win-arm64 3.17, win-x64 3.01 MB.
+**O10 · Bundle size against the sync limits — RESOLVED, and the 64% cut REVERTED (2026-08-15).** The
+syncer enforces roughly 4096 files / 25 MB per file / 64 MB total. Measured against the published
+0.1.20 artifact: six RIDs are 20.34 MB unpacked (largest single file 3.72 MB), so the fat bundle was
+never actually at risk of the caps. On that size margin the hosted `.plugin` briefly went Linux-only
+(7.27 MB) on the premise that "the other four binaries can never execute in a Cowork session" — false
+for local mode, where hooks execute on the desktop host (O12), so the cut broke local mode outright
+and is reverted: the hosted bundle carries all six RIDs again. The size math above is what makes the
+revert free. Per-RID: linux-arm64 3.72, linux-x64 3.53, osx-x64 3.47, osx-arm64 3.43, win-arm64 3.17,
+win-x64 3.01 MB.
 
 **O11 · Install route and README claims — DONE.** The README's Install section now documents the
 claude.ai account-import route (marketplaces disabled, Linux-only artifact) alongside
@@ -311,9 +324,41 @@ claude.ai account-import route (marketplaces disabled, Linux-only artifact) alon
 
 ### 4. Coverage gaps
 
-**O12 · Local "on your computer" mode is entirely untested.** Different host arch (arm64 on Apple
-silicon), unknown `$HOME`, unknown plugin source and marketplace availability, unknown whether
-`~/.claude` persists across sessions. Everything above was measured in cloud only.
+**O12 · Local "on your computer" mode — BLOCKER FOUND AND FIXED IN-TREE (2026-08-15, first local
+run).** Windows desktop, entrypoint `local-agent`, Claude Code 2.1.229, plugin 0.1.21 account-import:
+installs, all six hooks register (`PreCompact` included), and the shim runs from the sandbox printing
+`0.1.21` — the first independent confirmation of O8 on a real host. But **every hook fires and dies,
+exit 127, on every boundary — nothing compacts in local mode on any 0.1.20/0.1.21 install.** Root
+cause from `hook_non_blocking_error` stderr: local Cowork runs hooks **on the Windows host**, not in
+the Linux VM — Claude Code invokes the sh shim through Git Bash (MSYS `/c/…` paths), `uname -s`
+returns `MINGW*`, the shim correctly resolves `libexec/win-x64/claudinine.exe` — which the O10 cut
+removed. The shim's own header comment anticipated exactly this path; the 64% bundle cut is what
+broke it. *Fixed in-tree:* the hosted `.plugin` packs all six RIDs plus `claudinine.cmd` again
+(`pack-plugin.ps1`, `-HostedRids` remains as a deliberate-slimming override), and O9's
+absence-assertion — which actively enforced the bug — now asserts presence of all six. Needs the next
+release + account re-import to validate.
+
+Findings from the same run, recorded for whoever validates next:
+
+- *The read-only mount was a red herring.* The VM sees the session store read-only
+  (`touch` → EROFS), which looked like a hard blocker — but hooks never run there. Host-side the
+  store is ordinary writable AppData; verified by direct inspection: flat transcript only, no
+  `<sid>/` dir at all, zero claudinine artifacts, 9 `hook_non_blocking_error` records
+  (SessionStart 1, UserPromptSubmit 4, Stop 4).
+- *Two id namespaces:* the cowork session id (`local_1ea9e2a1…`) and the Claude Code `sessionId`
+  (`e690121b…`) are unrelated; the store path embeds the former, the transcript stem is the latter.
+- *`cwd` lies about the project:* every record carries the outputs scratchpad as `cwd` with
+  `gitBranch: HEAD` — anything keying on `cwd` to find the repo lands in the wrong place.
+- *Record shapes present* (queue-operation 6, attachment 11, last-prompt 5, mode 2): every shape
+  O5/O6 describe, so those rules get exercised the moment hooks can run.
+- *Next decisive unknown — retrieval across the namespace split.* Once hooks run, claudinine
+  executes natively on Windows and bakes **Windows absolute paths** into launcher headers
+  (`sh "C:/Users/…/run.sh" get …`) — but the model's Bash tool runs in the VM, where that path does
+  not exist. The store IS visible from the VM (read-only suffices for `get`) and so is the plugin
+  dir, just under different roots (`<mnt>/.claude/…`, `<mnt>/.remote-plugins/…`), so a path
+  translation exists in principle; whether the launcher should emit both forms is design work, not
+  a patch. Until then, local-mode compaction will work but header-quoted retrieval commands will
+  not resolve from the sandbox.
 
 **O13 · No corpus-scale Cowork numbers — MEASURED (2026-08-15 test run).** Real Cowork transcripts,
 genuine cl100k ruler:
