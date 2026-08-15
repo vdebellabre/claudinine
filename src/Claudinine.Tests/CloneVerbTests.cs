@@ -173,7 +173,9 @@ public sealed class CloneVerbTests : IDisposable
         await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
         string cloneId = await CloneId();
-        string mirrorPath = Path.Combine(_mirrorDir, cloneId + ".jsonl");
+        // The clone's mirror is written to its own colocated dir, wherever the
+        // source mirror lived.
+        string mirrorPath = MirrorLocator.PathFor(TranscriptPath(cloneId));
         await Assert.That(File.Exists(mirrorPath)).IsTrue();
         JsonObject header = ReadRecords(mirrorPath)[0];
         await Assert.That(header["claudinine"]!["mirrorOf"]!.GetValue<string>()).IsEqualTo(Path.GetFullPath(TranscriptPath(cloneId)));
@@ -190,7 +192,7 @@ public sealed class CloneVerbTests : IDisposable
         await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
 
         string cloneId = await CloneId();
-        List<JsonObject> recs = ReadRecords(Path.Combine(_mirrorDir, cloneId + ".jsonl"));
+        List<JsonObject> recs = ReadRecords(MirrorLocator.PathFor(TranscriptPath(cloneId)));
         await Assert.That(recs[1]["uuid"]!.GetValue<string>()).IsEqualTo("abc12345");
         await Assert.That(recs[1]["sessionId"]!.GetValue<string>()).IsEqualTo(cloneId);
         await Assert.That(recs[1].ToJsonString()).Contains("original output");

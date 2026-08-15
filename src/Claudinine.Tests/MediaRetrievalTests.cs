@@ -11,6 +11,7 @@ namespace Claudinine.Tests;
 public sealed class MediaRetrievalTests : IDisposable
 {
     private readonly string _dir;
+    private readonly string _project;
 
     /// <summary>Recognizable non-trivial bytes for decode round-trip asserts.</summary>
     private static readonly byte[] Payload =
@@ -18,8 +19,12 @@ public sealed class MediaRetrievalTests : IDisposable
 
     public MediaRetrievalTests()
     {
+        // _dir doubles as the fake HOME: `get` resolves sids by globbing
+        // <home>/.claude/projects/*/*/claudinine, so transcripts live in a
+        // projects-shaped tree and the verb gets _dir through its home seam.
         _dir = Path.Combine(Path.GetTempPath(), "claudinine-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_dir);
+        _project = Path.Combine(_dir, ".claude", "projects", "proj");
+        Directory.CreateDirectory(_project);
         Environment.SetEnvironmentVariable("CLAUDE_PLUGIN_DATA", Path.Combine(_dir, "plugin-data"));
     }
 
@@ -45,11 +50,11 @@ public sealed class MediaRetrievalTests : IDisposable
     /// we read its capture rather than swapping the writer. Slicing from the
     /// pre-call length keeps repeat calls within one test from re-reporting.
     /// </summary>
-    private static string RunGet(string[] args, out int rc)
+    private string RunGet(string[] args, out int rc)
     {
         TestContext ctx = TestContext.Current!;
         int before = ctx.GetStandardOutput().Length;
-        rc = GetVerb.Run(args);
+        rc = GetVerb.Run(args, Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"), _dir);
         return ctx.GetStandardOutput()[before..];
     }
 
@@ -66,7 +71,7 @@ public sealed class MediaRetrievalTests : IDisposable
         b.RawImageMessage("m1", Payload);
         AgeBy(b, AgeIndex.MidAgeTurns + 1);
         b.AssistantText("done");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_project);
 
         Compactor.Run(path);
 
@@ -86,7 +91,7 @@ public sealed class MediaRetrievalTests : IDisposable
         b.RawDocumentMessage("d1", Payload);
         AgeBy(b, AgeIndex.MidAgeTurns + 1);
         b.AssistantText("done");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_project);
 
         Compactor.Run(path);
 
@@ -107,7 +112,7 @@ public sealed class MediaRetrievalTests : IDisposable
         b.ScreenshotToolCall(out _, Payload);
         AgeBy(b, AgeIndex.MidAgeTurns + 1);
         b.AssistantText("done");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_project);
 
         Compactor.Run(path);
 
@@ -124,7 +129,7 @@ public sealed class MediaRetrievalTests : IDisposable
         b.RawImageMessage("m1", Payload);
         AgeBy(b, AgeIndex.MidAgeTurns + 1);
         b.AssistantText("done");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_project);
         Compactor.Run(path);
 
         JsonObject stubbed = Load(path).Single(r =>
@@ -147,7 +152,7 @@ public sealed class MediaRetrievalTests : IDisposable
         b.ScreenshotToolCall(out _, Payload);
         b.ToolCall("Bash", new JsonObject { ["command"] = "echo ok" }, "ok");
         b.AssistantText("done");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_project);
 
         Compactor.Run(path);
 
@@ -176,7 +181,7 @@ public sealed class MediaRetrievalTests : IDisposable
         var b = new TranscriptBuilder().UserPrompt("plain work");
         b.ToolCall("Bash", new JsonObject { ["command"] = "echo hi" }, "hi there output");
         b.AssistantText("done");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_project);
         Compactor.Run(path);
 
         string resultUuid = Load(path).Single(r =>
@@ -196,7 +201,7 @@ public sealed class MediaRetrievalTests : IDisposable
         b.RawImageMessage("m1", Payload);
         AgeBy(b, AgeIndex.MidAgeTurns + 1);
         b.AssistantText("done");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_project);
 
         // Rewrite the image block into the pre-0.1.6 dead-end stub, as an old
         // version would have left it on disk.
@@ -230,7 +235,7 @@ public sealed class MediaRetrievalTests : IDisposable
         b.ToolCall("Bash", new JsonObject { ["command"] = "echo ok" }, "ok");
         AgeBy(b, AgeIndex.MidAgeTurns + 1);
         b.AssistantText("done");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_project);
 
         Compactor.Run(path);
         string afterFirst = File.ReadAllText(path);

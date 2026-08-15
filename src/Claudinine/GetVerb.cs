@@ -15,13 +15,20 @@ namespace Claudinine;
 /// </summary>
 internal static class GetVerb
 {
-    public static int Run(string[] args)
+    public static int Run(string[] args) =>
+        Run(args,
+            Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    /// <summary>Home seam for tests, same reason as CloneVerb: SpecialFolder
+    /// ignores env overrides, and sid resolution now globs home's projects.</summary>
+    internal static int Run(string[] args, string? pluginData, string home)
     {
         // Same top-level guard as clone: a mirror going away mid-read (GC race,
         // network share) should report and exit 1, not dump a stack trace.
         try
         {
-            return RunCore(args);
+            return RunCore(args, pluginData, home);
         }
         catch (Exception e)
         {
@@ -30,7 +37,7 @@ internal static class GetVerb
         }
     }
 
-    private static int RunCore(string[] args)
+    private static int RunCore(string[] args, string? pluginData, string home)
     {
         if (args.Length == 0)
         {
@@ -62,13 +69,14 @@ internal static class GetVerb
             return 1;
         }
 
-        var mirrorPaths = MirrorLocator.FindSessionMirrors(session);
+        var mirrorPaths = MirrorLocator.FindSessionMirrors(session, pluginData, home);
         if (mirrorPaths.Count == 0)
         {
-            var searched = MirrorLocator.SearchDirectories();
+            var searched = MirrorLocator.SearchDirectories(pluginData, home);
             Console.Error.WriteLine(
-                $"no mirror found for session '{session}' (searched: " +
-                (searched.Count == 0 ? "no mirror directory exists" : string.Join("; ", searched)) + ")");
+                $"no mirror found for session '{session}' (searched claudinine/ session dirs" +
+                " under ~/.claude/projects" +
+                (searched.Count == 0 ? "" : " and: " + string.Join("; ", searched)) + ")");
             return 1;
         }
 

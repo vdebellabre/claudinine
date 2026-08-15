@@ -33,11 +33,21 @@ Two locations, both belonging to this plugin or the session it is compacting:
 1. **The session transcript**, rewritten in place (details below). Subagent
    transcripts (`<session>/subagents/agent-*.jsonl`) get the same treatment,
    swept at SessionEnd and SessionStart.
-2. **A per-session mirror**, `<CLAUDE_PLUGIN_DATA>/mirrors/<session-id>.jsonl`
-   (for a subagent transcript, `mirrors/agent-<id>.jsonl`).
-   `CLAUDE_PLUGIN_DATA` is the documented writable per-plugin directory; if it is
-   unset the fallback is `~/.claudinine/mirrors`. The mirror is append-only and
-   holds the uncompacted content — it is what the transcript would have been.
+2. **A per-session mirror**, colocated with the session inside its own sidecar
+   directory: `<project>/<session-id>/claudinine/<session-id>.jsonl` (for a
+   subagent transcript, `<session-id>/claudinine/agent-<id>.jsonl`) — next to
+   the `subagents/`, `tool-results/` and `workflows/` directories Claude Code
+   itself keeps there. The mirror is append-only and holds the uncompacted
+   content — it is what the transcript would have been. Colocation is the
+   durability guarantee: anything that snapshots, syncs, backs up or deletes
+   the session carries its mirror with it. (Pre-0.2 versions kept mirrors in a
+   flat pool — `$CLAUDE_PLUGIN_DATA/mirrors` or `~/.claudinine/mirrors`; those
+   are still read, and a legacy mirror is migrated to the colocated path the
+   first time its session is touched.)
+
+If the transcript carries retrieval stubs pointing at its own mirror and no
+mirror can be found anywhere, the plugin fails closed: no compaction, no mirror
+writes, nothing — the loss stays visible instead of being papered over.
 
 Nothing else on disk is written. No network calls are made, ever: the binary has
 no HTTP client and no telemetry, and the plugin ships no MCP server. Nothing is

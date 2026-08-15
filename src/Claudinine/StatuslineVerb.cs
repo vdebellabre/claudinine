@@ -188,19 +188,16 @@ internal static class StatuslineVerb
     }
 
     /// <summary>
-    /// This session's mirror. Probes every known mirror directory rather than the
-    /// env-derived one: the statusline command is user-configured in settings.json
-    /// and does NOT inherit CLAUDE_PLUGIN_DATA, the same trap
-    /// <see cref="MirrorLocator.SearchDirectories()"/> documents for `get`.
-    /// Cross-context resume can leave a session with a mirror in more than one
-    /// dir; the largest is the most complete.
+    /// This session's mirror: the colocated dir first (canonical), then the
+    /// legacy pools for pre-migration sessions. A migration crash can leave a
+    /// copy in both; the largest is the most complete.
     /// </summary>
     private static string? FindMirror(string transcriptPath)
     {
         string sessionId = Path.GetFileNameWithoutExtension(transcriptPath);
         string? best = null;
         long bestLength = 0;
-        foreach (string dir in MirrorLocator.SearchDirectories())
+        foreach (string dir in MirrorLocator.SearchDirectoriesFor(transcriptPath))
         {
             var candidate = new FileInfo(Path.Combine(dir, sessionId + ".jsonl"));
             if (candidate.Exists && candidate.Length > bestLength)

@@ -239,7 +239,10 @@ public sealed class ForkHealTests : IDisposable
 
     private void WriteMirror(string sessionId, params (string Uuid, string Content)[] records)
     {
-        string dir = MirrorLocator.MirrorsDirectory();
+        // The parent's mirror goes into the LEGACY env pool deliberately: fork
+        // healing must keep finding pre-migration parents there.
+        string dir = Path.Combine(
+            Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA")!, "mirrors");
         Directory.CreateDirectory(dir);
         var lines = new List<string>
         {

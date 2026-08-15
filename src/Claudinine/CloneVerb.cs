@@ -73,13 +73,13 @@ internal static class CloneVerb
             if (title is not null)
                 Console.WriteLine($"  Title:      {title}");
 
-            string? sourceMirror = FindSourceMirror(sourceId, home);
+            string? sourceMirror = FindSourceMirror(sourceTranscript, sourceId, home);
             if (sourceMirror is not null)
             {
-                string candidate = Path.Combine(
-                    Path.GetDirectoryName(sourceMirror)!, targetId + ".jsonl");
+                string candidate = MirrorLocator.PathFor(targetTranscript);
                 if (!File.Exists(candidate))
                 {
+                    Directory.CreateDirectory(Path.GetDirectoryName(candidate)!);
                     targetMirror = candidate;
                     CloneMirror(sourceMirror, candidate, targetId, targetTranscript);
                 }
@@ -101,7 +101,19 @@ internal static class CloneVerb
             // headerless mirror is invisible to CollectGarbage forever.
             try { if (File.Exists(targetTranscript)) File.Delete(targetTranscript); }
             catch (Exception e) { Dbg.Log($"clone cleanup failed ({targetTranscript}): {e.Message}"); }
-            try { if (targetMirror is not null && File.Exists(targetMirror)) File.Delete(targetMirror); }
+            try
+            {
+                if (targetMirror is not null && File.Exists(targetMirror))
+                {
+                    File.Delete(targetMirror);
+                    // The clone owns its claudinine/ and session dirs too; both
+                    // are empty once the mirror is gone (non-recursive Delete
+                    // refuses anything else, which is exactly right).
+                    string claudinineDir = Path.GetDirectoryName(targetMirror)!;
+                    Directory.Delete(claudinineDir);
+                    Directory.Delete(Path.GetDirectoryName(claudinineDir)!);
+                }
+            }
             catch (Exception e) { Dbg.Log($"clone cleanup failed ({targetMirror}): {e.Message}"); }
             Console.Error.WriteLine($"clone failed: {ex.Message}");
             return 1;
@@ -202,9 +214,12 @@ internal static class CloneVerb
                 : null);
     }
 
-    /// <summary>The source session's mirror, from the first search dir that has one.</summary>
-    private static string? FindSourceMirror(string sourceId, string home)
+    /// <summary>The source session's mirror: colocated first, then the legacy pools.</summary>
+    private static string? FindSourceMirror(string sourceTranscript, string sourceId, string home)
     {
+        string colocated = MirrorLocator.PathFor(sourceTranscript);
+        if (File.Exists(colocated))
+            return colocated;
         foreach (string dir in MirrorLocator.SearchDirectories(
             Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"), home))
         {
@@ -220,7 +235,8 @@ internal static class CloneVerb
     /// transcript. That header field is load-bearing: MirrorFile.CollectGarbage deletes
     /// any mirror whose mirrorOf target is gone, so a verbatim copy would have the
     /// clone's mirror collected the moment the source transcript is archived.
-    /// Written next to the source mirror — the dir the writing hook actually uses.
+    /// Written to the clone's own colocated claudinine dir — the canonical path
+    /// the clone's hooks will use.
     /// </summary>
     private static void CloneMirror(
         string sourceMirror, string targetMirror, string targetId, string targetTranscript)

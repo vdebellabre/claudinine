@@ -30,8 +30,7 @@ internal static class HookRunner
             // A session frozen by `restore-compaction-off` keeps its mirror
             // fresh but is never compacted — an explicit restore must not be
             // silently undone. Global housekeeping (GC) still runs.
-            string sid = Path.GetFileNameWithoutExtension(input.TranscriptPath);
-            bool skipped = SkipMarkers.IsCompactionSkipped(sid);
+            bool skipped = SkipMarkers.IsCompactionSkipped(input.TranscriptPath);
 
             // Every event runs the same idempotent pass; they differ only in
             // which part of the file still has work in it. UserPromptSubmit is
@@ -56,8 +55,13 @@ internal static class HookRunner
                     if (input.HookEventName == "SessionStart")
                     {
                         // Housekeeping rides the once-per-session event, off the
-                        // per-prompt critical path.
+                        // per-prompt critical path. The colocated sweep covers
+                        // this session's own claudinine dir (orphaned subagent
+                        // mirrors and markers); other sessions' dirs are their
+                        // own hooks' business, or SessionDirGc's when they die.
                         MirrorFile.CollectGarbage();
+                        MirrorFile.CollectGarbageColocated(
+                            MirrorLocator.ClaudinineDirFor(input.TranscriptPath));
                         SessionDirGc.Run(input.TranscriptPath, input.SessionId);
                     }
                     break;
@@ -97,8 +101,7 @@ internal static class HookRunner
             {
                 try
                 {
-                    if (sessionSkipped
-                        || SkipMarkers.IsCompactionSkipped(Path.GetFileNameWithoutExtension(file)))
+                    if (sessionSkipped || SkipMarkers.IsCompactionSkipped(file))
                     {
                         Compactor.MirrorOnly(file);
                     }
