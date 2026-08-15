@@ -149,8 +149,23 @@ def classify(path: Path) -> dict:
 
 # ------------------------------------------------------------------ baselines
 
+def colocated_dir_for(transcript: Path) -> Path:
+    """Mirror of MirrorLocator.ClaudinineDirFor: the CANONICAL mirror location
+    since the 2026-08-15 colocation move. A session transcript
+    `<project>/<sid>.jsonl` maps to `<project>/<sid>/claudinine/`; a subagent
+    `<project>/<sid>/subagents/agent-*.jsonl` maps to its SESSION's dir. The
+    flat pools below are legacy, read-only, and drain over time — on a current
+    install most mirrors exist ONLY here, so skipping this probe silently
+    collapses the corpus to raw sessions (measured on Cowork: 0 of 12 kept)."""
+    d = transcript.parent
+    if d.name.lower() == "subagents":
+        return d.parent / "claudinine"
+    return d / transcript.stem / "claudinine"
+
+
 def mirror_search_dirs() -> list[Path]:
-    """Mirror the C# MirrorLocator.SearchDirectories() probe order."""
+    """Mirror the C# MirrorLocator.SearchDirectories() probe order (LEGACY flat
+    pools only — the colocated dir is per-transcript, see colocated_dir_for)."""
     dirs: list[Path] = []
     seen: set[str] = set()
 
@@ -172,12 +187,13 @@ def mirror_search_dirs() -> list[Path]:
     return dirs
 
 
-def find_mirror(stem: str, dirs: list[Path]) -> Path | None:
-    """Largest mirror for this stem across all known dirs (cross-context resume
-    can leave several; the longest is the most complete history)."""
+def find_mirror(transcript: Path, legacy_dirs: list[Path]) -> Path | None:
+    """Largest mirror for this transcript across the colocated dir and every
+    legacy pool (cross-context resume and pre-migration copies can leave
+    several; the longest is the most complete history)."""
     best: Path | None = None
-    for d in dirs:
-        c = d / f"{stem}.jsonl"
+    for d in [colocated_dir_for(transcript), *legacy_dirs]:
+        c = d / f"{transcript.stem}.jsonl"
         if c.is_file() and (best is None or c.stat().st_size > best.stat().st_size):
             best = c
     return best
@@ -347,7 +363,15 @@ def main() -> int:
     print(f"scanning {projects}")
     print(f"mirror dirs: {[str(d) for d in mirrors] or 'none found'}")
 
-    files = sorted(projects.rglob("*.jsonl"))
+    # Colocated `claudinine/` dirs hold mirrors and sidecars INSIDE the project
+    # tree; they are baselines, never candidates. Without this exclusion every
+    # mirror classifies as a compacted session and skips as "no mirror" — noisy,
+    # and one find_mirror hit away from measuring a mirror as a session.
+    # (relative_to: a store rooted under a dir named claudinine — this repo's own
+    # checkout, say — must not exclude the whole scan.)
+    files = sorted(f for f in projects.rglob("*.jsonl")
+                   if not any(p.lower() == "claudinine"
+                              for p in f.relative_to(projects).parts))
     # A subagent transcript lives in <session>/subagents/; keep the distinction so
     # the benchmark can report main and sidechain populations separately.
     print(f"{len(files)} .jsonl files found\n")
@@ -375,7 +399,7 @@ def main() -> int:
             # "both" is not fatal: if OUR mirror covers the session and is itself
             # clean, it predates cozempic's pass and is a valid baseline. The
             # mirror is the authority, so it is checked either way.
-            m = find_mirror(src.stem, mirrors)
+            m = find_mirror(src, mirrors)
             if m is None:
                 rec.update(decision="skip", reason=f"{info['tool']}-compacted, no mirror")
                 reasons["cln-no-mirror"] += 1

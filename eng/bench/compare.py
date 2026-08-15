@@ -50,9 +50,9 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import tiktoken
+from ruler import get_cl100k
 
-ENC = tiktoken.get_encoding("cl100k_base")
+ENC = get_cl100k()
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_CORPUS = REPO / "bench" / "corpus"

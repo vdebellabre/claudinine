@@ -15,6 +15,14 @@ internal sealed class AgeIndex
     internal const int MidAgeResults = 30;
     internal const int OldAgeResults = 100;
 
+    // Images age on a faster clock: a shared screenshot is typically discussed
+    // for 1-2 turns (user-calibrated 2026-08-15), and the stub keeps it
+    // retrievable via --media, so the cost of stripping early is a re-fetch,
+    // not a loss. Results threshold stays above one heavy turn's call count so
+    // an agentic vision loop doesn't lose its reference mid-turn-cluster.
+    internal const int ImageAgeTurns = 5;
+    internal const int ImageAgeResults = 15;
+
     private readonly int[] _turnsAgo;
     private readonly int[] _resultsAfter;
 
@@ -47,6 +55,9 @@ internal sealed class AgeIndex
 
     public bool IsMidAged(int pos) =>
         _turnsAgo[pos] >= MidAgeTurns || _resultsAfter[pos] >= MidAgeResults;
+
+    public bool IsImageAged(int pos) =>
+        _turnsAgo[pos] >= ImageAgeTurns || _resultsAfter[pos] >= ImageAgeResults;
 
     public bool IsOld(int pos) =>
         _turnsAgo[pos] >= OldAgeTurns || _resultsAfter[pos] >= OldAgeResults;

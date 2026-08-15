@@ -238,18 +238,18 @@ jobs:
           unzip -q -o "claudinine-${{ steps.pack.outputs.version }}.plugin" -d verify-hosted
           test ! -e verify-hosted/bin || { echo "hosted bundle contains a top-level bin/ -- the claude.ai validator will refuse it"; exit 1; }
           test -x verify-hosted/libexec/claudinine || { echo "shim not executable after extract"; exit 1; }
-          # Hosted sessions are Linux containers: both Linux RIDs must ship (the
-          # shim routes on `uname -m`, so a missing arm64 is a hard failure on an
-          # arm fleet), and the four non-Linux binaries must NOT -- they are 2/3
-          # of the bundle weight and unreachable there. Asserting the absence is
-          # the half that catches a silent regression back to a fat bundle.
-          for rid in linux-x64 linux-arm64; do
+          # ALL SIX RIDs must ship: cloud sessions are Linux, but the same
+          # account artifact feeds local ("On your computer") Cowork, where
+          # hooks execute on the desktop host -- a missing host RID kills every
+          # hook with exit 127 (measured 2026-08-15 on Windows, docs/cowork.md
+          # O12). A Linux-only hosted bundle is the regression to catch now.
+          for rid in linux-x64 linux-arm64 osx-x64 osx-arm64; do
             test -x "verify-hosted/libexec/$rid/claudinine" || { echo "$rid binary not executable"; exit 1; }
           done
-          for rid in win-x64 win-arm64 osx-x64 osx-arm64; do
-            test ! -e "verify-hosted/libexec/$rid" || { echo "hosted bundle carries $rid; it only ever runs on Linux"; exit 1; }
+          for rid in win-x64 win-arm64; do
+            test -f "verify-hosted/libexec/$rid/claudinine.exe" || { echo "$rid binary missing"; exit 1; }
           done
-          test ! -e verify-hosted/libexec/claudinine.cmd || { echo "hosted bundle carries the Windows shim with no win-* binary to route to"; exit 1; }
+          test -f verify-hosted/libexec/claudinine.cmd || { echo "hosted bundle missing the Windows shim for Git-Bash-less hosts"; exit 1; }
           test -f verify-hosted/.claude-plugin/plugin.json || { echo "manifest not at bundle root"; exit 1; }
           got="$(./verify-hosted/libexec/linux-x64/claudinine version)"
           if [ -n "${{ inputs.version }}" ] && [ "$got" != "${{ steps.pack.outputs.version }}" ]; then
