@@ -16,6 +16,5 @@
     "tokens",
     "performance",
     "native-aot"
-  ],
-  "hooks": "./hooks/hooks.json"
+  ]
 }
