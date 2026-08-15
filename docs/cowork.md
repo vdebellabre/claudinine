@@ -129,6 +129,16 @@ sweeps, which still run as the repair path for agents whose `SubagentStop` was m
 end-to-end locally (agent file 11.9 KB → 4.2 KB at the event, mirror + sidecars in the session's
 `claudinine/` dir, session transcript byte-identical).
 
+*Concurrency:* hooks fire in parallel — several agents' `SubagentStop`s land together while the
+session's own `Stop` runs — and two passes over the same transcript could interleave buffered mirror
+appends into corrupt lines. Every pass therefore runs under a per-transcript `PassLock`
+(`<stem>.lock`, exclusive handle: sharing violation on Windows, flock on Unix, OS-released on crash).
+Try-acquire only, skip on busy: the holder is running the same idempotent pass. Parallel agents lock
+different stems and never contend; a boundary sweep skips an agent file whose own `SubagentStop` is
+mid-pass; the `.end` teardown marker is written outside the lock so a busy lock can never lose a
+teardown. Cross-process enforcement verified locally (pass skipped while a foreign process held the
+lock, compacted normally after release).
+
 **O4 · `PreCompact` never observed firing naturally.** It was invoked synthetically for timing only.
 Cowork forces autocompact lower (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80`), so it should fire *more* than
 in the CLI — and on an ephemeral host it is the clearest in-session win. Confirm it actually fires.

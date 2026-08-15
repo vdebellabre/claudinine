@@ -61,7 +61,12 @@ Two locations, both belonging to this plugin or the session it is compacting:
    SessionStart, so the start-of-session work still runs once per hydration.
    A `<session-id>.pass` stamp records when a compaction pass last completed;
    only its mtime is read, by the Stop trigger's min-interval guard (see
-   below).
+   below). A `<stem>.lock` file per transcript backs the cross-process pass
+   lock: hooks can fire concurrently (parallel subagents finishing while the
+   session's own turn ends), so each pass holds its transcript's lock and a
+   contended hook simply skips — the holder is doing the same idempotent work.
+   The lock is the open file handle, not the file's existence: a crashed hook
+   releases it via the OS, and the leftover `.lock` file is inert.
 
 If the transcript carries retrieval stubs pointing at its own mirror and no
 mirror can be found anywhere, the plugin fails closed: no compaction, no mirror
@@ -200,7 +205,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet run --project Claudinine.Tests` — 323 tests, covering each
+- `cd src && dotnet run --project Claudinine.Tests` — 329 tests, covering each
   rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.
