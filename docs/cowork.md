@@ -2,13 +2,26 @@
 
 Supersedes `cowork-compatibility.md`, `claudinine-cowork-report.md` and `cowork-packaging-workorder.md`.
 
-**Verdict: functionally compatible.** Claudinine installs, runs, compacts, and retrieves in Cowork
-cloud. Packaging was the only hard blocker and it is fixed (`libexec/`, launcher-based retrieval).
-What remains is a trigger-model gap that costs most of the benefit on this host, plus coverage gaps.
+**Verdict: functionally compatible, and the trigger model is now closed on cloud.** Claudinine
+installs, runs, compacts, and retrieves in Cowork cloud. Packaging was the only hard blocker and it is
+fixed (`libexec/`, launcher-based retrieval). All three trigger-model gaps (O1–O3) are shipped and
+validated against a real host; what remains is `PreCompact`, local mode, fork/clone, and one
+statusline accounting defect.
 
-Evidence comes from two live cloud sessions on 2026-08-15, Claude Code `2.1.233`,
-`entrypoint: remote_cowork`: a diagnostic-probe session (`f4bcf08f…`, environment measurements) and a
-functional session (`2adf0db2…`, plugin `0.1.20` installed by plugin-file import).
+Evidence comes from three live cloud sessions on 2026-08-15, `entrypoint: remote_cowork`: a
+diagnostic-probe session (`f4bcf08f…`, environment measurements) and a functional session
+(`2adf0db2…`, plugin `0.1.20` by plugin-file import), both on Claude Code `2.1.233`; and a validation
+session (`a4fc865d…`, plugin **0.1.21**, Claude Code **`2.1.42`**) which exercised O1/O2/O3/O8/O13
+end-to-end. The version spread matters: cloud hosts are not homogeneous, and the newer-numbered build
+is not the one that ran last. The validation host also carried `CLAUDE_CODE_TRANSCRIPT_LOCAL_GC=1` and
+the feature flag `tengu_ccr_delta_rehydrate: true` — the transcript is server-authoritative and
+re-hydrated by delta, which is exactly the mechanism the `.load` stamp exists to price.
+
+**Transcript layout on this host.** The live transcript is a *flat* file at
+`<project>/<sid>.jsonl`, while `<project>/<sid>/` holds only the app's sidecars (`subagents/`,
+`tool-results/`, `ccr-tip.json`) and our colocated `claudinine/` dir. `MirrorLocator` handles this
+correctly — both stamps recorded the flat path — but any tooling that assumes the transcript lives
+*inside* the session dir will find nothing (this is what broke `curate.py`, see O13).
 
 ## The host
 
@@ -65,7 +78,9 @@ transcript ran 69% of its mirror equivalent after 9 digests — *bytes over whol
 metric* (BPE over `message.content` after the last compaction boundary), so it is not comparable to
 the 74.8% headline. Subagent sweep at `SessionEnd` worked: 11 records / 34,386 B → 7 / 19,835 B, with
 its own sidecar. Every line of live, mirror and subagent transcripts JSON-parses after 20+ passes; no
-dangling `parentUuid`, no orphaned `tool_result`, `tool_use`/`tool_result` pairing intact.
+orphaned `tool_result`, `tool_use`/`tool_result` pairing intact. No dangling `parentUuid` *introduced
+by a pass* — the validation session found two danglers that the host itself wrote and the mirror never
+saw, so this assertion has to be phrased as "no new danglers", not "none" (see O1).
 
 **Cowork record shapes.** `SendUserFile` (with `file_uuid`), device-bridge calls, subagent
 transcripts, and `tool-results/` offloads (433 KB → a `.txt` referenced by absolute path) all survive
@@ -94,7 +109,7 @@ keep-last, uuid-less so nothing can reference them. `tool-results/` cannot be re
 
 ### 1. Trigger model — where most of the remaining value is
 
-**O1 · `SessionStart` does not fire on wake-from-idle — FIXED in-tree, pending cloud verification.**
+**O1 · `SessionStart` does not fire on wake-from-idle — FIXED, validated on cloud (2026-08-15 test run).**
 Cowork sessions live server-side and survive desktop restarts. After `SessionEnd` on idle, the next
 activity resumes the session into a **new process** that re-hydrates from the transcript — observed
 at 13:27:32 (`resume_hydrate_ms` ≈ 1.0 s, pid 461 → 483, same session id). At that resume
@@ -111,9 +126,36 @@ will load — exact where a wake-time stamp was a guess, and a `Stop` wake would
 (the whole autonomous turn is appended before the hook fires). A real `SessionStart` consumes the
 marker too, so a CLI resume never double-runs. Crash teardowns that skip `SessionEnd` stay uncovered;
 `SessionStart` remains the repair path there. Wake mechanics verified end-to-end locally (marker
-written → consumed → no replay on the next prompt). *Still to verify on cloud:* after a real idle
-teardown + wake, the `.load` stamp matches the file as `SessionEnd` left it and the first prompt
-consumes the `.end`.
+written → consumed → no replay on the next prompt).
+
+*Cloud validation.* A real idle teardown was observed at **17:23:16** by a 2-second poller: the
+`claude` pid left the process table and, in the same tick, `SessionEnd` ran a full pass (mirror
+547,106 → 557,167 B) and wrote both `<stem>.end` and `<stem>.load`. After a 22-minute idle stretch a
+scheduled wake re-entered the session; by then the `.end` marker was gone and the start work had run.
+
+The load stamp is the part that had to be exact, and it is: the stamp holds **51 records / 121,159 B**
+and the re-hydrated transcript reproduces **51/51 byte-for-byte, 0 missing, 0 size drift**. Delta
+re-hydration therefore returns the file *as `SessionEnd` left it* — compacted — so the compaction
+survives the round trip and the watermark prices a reload exactly. (Beware when checking this by hand:
+count **bytes**, not characters. Measuring `len(str)` in Python reports 11 phantom mismatches of 4–18
+B on records containing em-dashes and arrows — an artefact of the ruler, not of the stamp.)
+
+Two honest limits on this run. First, `.load` was rewritten at **17:37**, 14 minutes after the
+teardown and with no prompt and no appended record in between — so the host tore down (or re-loaded)
+a second time during one idle stretch. Second, that means the wake path cannot be *isolated* from the
+evidence at hand: `SessionEnd` and `SessionStart` both write `.load`, and both `SessionStart` and the
+wake consume `.end`, so the marker's absence at 17:45 is consistent with either. What is proven is the
+outcome the fix exists to guarantee — teardown recorded, stamp exact against the re-hydrated file,
+marker consumed, start work not skipped. Isolating *which* boundary consumed it needs a host-side
+hook trace, not more file forensics.
+
+*Incidental, and worth knowing before trusting `parentUuid` chains on this host:* the live transcript
+carries **2 records whose `parentUuid` (`9f7ed389…`) is absent from the transcript** — and absent from
+the mirror too, which is the exoneration: the mirror is the union of everything claudinine ever saw,
+so a record it never saw is one it cannot have removed. The host itself wrote children of a parent it
+never persisted (17:08, the turn where a stale scheduled wake landed). Rules must tolerate dangling
+parents in Cowork transcripts rather than treat them as corruption, and integrity assertions phrased
+as "0 dangling `parentUuid`" will fail here through no fault of ours.
 
 **O2 · No `Stop` trigger — FIXED, validated on cloud (2026-08-15 test run).** Autonomous stretches — scheduled tasks, `/loop`, Workflow
 runs, Monitors — pass dozens of turns with no user prompt, so `UserPromptSubmit` never fires and
@@ -124,6 +166,15 @@ interactive sessions, where the per-prompt pass already runs, do not pay twice p
 joins the wake boundary from O1 (a pending `.end` marker bypasses the throttle), covering autonomous
 resumes that never see a prompt — verified end-to-end locally with the real binary.
 
+*Cloud validation — both halves.* **Fires:** an autonomous turn (subagent fan-out plus a long bash
+stretch) ended with the pass stamp 6 minutes stale; `Stop` ran and took the live transcript
+**285,170 → 35,865 B, 87.4% in one turn**, mirror keeping all 98 originals, result 18 records with 0
+dangling `parentUuid` and 0 unpaired `tool_use`/`tool_result`. That entire stretch had no user prompt
+in it and would have compacted **not at all** under the old model — this is the single largest
+measured win of the whole exercise. **Throttles:** a deliberately short turn ended ~35 s after the
+previous pass; `Stop` ran nothing and the stamp did not move until the next prompt arrived 3 minutes
+later. The 120 s guard behaves as designed on a real host, in both directions.
+
 **O3 · Subagent compaction is boundary-bound — FIXED, validated on cloud (2026-08-15 test run).** `CompactSubagents` ran only at
 `SessionStart`/`SessionEnd`, so a Workflow's agent files stayed fat until the session ended — and
 subagent transcripts are the best-compacting file type (82% on the corpus). `SubagentStop` is now
@@ -133,6 +184,15 @@ touched mid-turn. Skip markers are honoured with the same session-or-file logic 
 sweeps, which still run as the repair path for agents whose `SubagentStop` was missed. Verified
 end-to-end locally (agent file 11.9 KB → 4.2 KB at the event, mirror + sidecars in the session's
 `claudinine/` dir, session transcript byte-identical).
+
+*Cloud validation.* Two agents finished together and both files were compacted at the event, mid-turn,
+while the session transcript kept growing untouched: `agent-a965f68d` **51 records / 185,206 B →
+8 / 42,028 B** (chain-collapse folded 19 tool calls into one `[ref]` digest), with `isSidechain`
+intact on every record, 0 dangling `parentUuid`, 0 unpaired `tool_use`/`tool_result`, and every line
+still parsing. Retrieval through the launcher then worked exactly as the digest header spells it —
+`--info` (4,100 B / 74 lines), `--ref --grep`, and `--full` returning 74/74 lines. Across the five
+agent files this session produced, live totals **142,362 B against 801,817 B of mirrored originals
+(82.2%)**, and those ratios held byte-for-byte across the teardown in O1.
 
 *Concurrency:* hooks fire in parallel — several agents' `SubagentStop`s land together while the
 session's own `Stop` runs — and two passes over the same transcript could interleave buffered mirror
@@ -151,6 +211,9 @@ on long-dead targets.
 **O4 · `PreCompact` never observed firing naturally.** It was invoked synthetically for timing only.
 Cowork forces autocompact lower (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80`), so it should fire *more* than
 in the CLI — and on an ephemeral host it is the clearest in-session win. Confirm it actually fires.
+Still unobserved after the 2026-08-15 validation session: the hook is registered and the session ran
+long, but it never approached the 80% threshold — partly *because* `Stop` now keeps the transcript
+small, which is a pleasant irony and also means `PreCompact` may be rare in practice on this host.
 
 ### 2. Small corrections
 
@@ -179,6 +242,47 @@ here: v0.1.20 did NOT carry the fix — that pipeline change was still develop-l
 so its binaries report `1.0.0` (and its green run proves nothing, since the assertions ship in the
 same commit). PR #10 synced the pipeline to main and v0.1.21 (2026-08-15) is the first release whose
 binaries report their real version, assertion-verified on every RID in the run log.
+
+**O16 · The statusline under-reports exactly the rules that save the most — NEW, measured
+2026-08-15.** `StatuslineVerb.Measure` prices a reload as, for each record **still present** in the
+transcript, `buffer − size` (buffer = the `.load` size, else the mirror original). Records that a rule
+removed *outright* are therefore never counted — the loop only iterates over what is still in the
+file. The code comment justifies this for records "the transcript dropped entirely (pre-boundary
+history)", which is right for host-side drops, but chain-collapse and the dedup rules also work by
+**removing** records, and those bytes are genuinely reclaimable: the buffer still holds them, a
+reload would not.
+
+Measured on a synthetic session built from real material (a chain-collapsed agent file standing in
+for a session transcript, `.load` stamped with the fat originals as a reload would have delivered
+them):
+
+| | records | bytes |
+|---|---|---|
+| buffer as loaded (`.load`) | 50 | 185,005 |
+| transcript after the pass | 8 | 42,020 |
+| removed outright by rules | 42 | 148,005 |
+| **true reclaim on reload** | | **142,985** |
+| **what the statusline reports** | | **0 — it prints nothing** |
+
+The real session was correctly silent for an unrelated and benign reason (after O1's `SessionEnd`
+stamp, `.load` matched the file byte-for-byte, so nothing *was* reclaimable). The defect only surfaces
+mid-session, after rules drop records that were present at the last load — which on this host is the
+common case, since chain-collapse is the dominant rule in Cowork (87.4% of the O2 win came from it).
+
+Three caveats before anyone treats this as urgent. It is **cosmetic**: `Measure` feeds only the
+statusline hint, never a compaction decision, so no data is at risk. It is **invisible in Cowork** —
+the Cowork UI has no status line to render one. And it is **currently latent on the CLI too**: the
+plugin registers no `statusLine` anywhere since 2026-08-12 (there is no non-brittle way to point
+`statusLine.command` at a plugin binary — `${CLAUDE_PLUGIN_ROOT}` expands only in plugin hooks), so
+today `Measure` runs only for a user who wired the verb into their own settings by absolute path.
+Net: this costs nobody a number today; it is a prerequisite for re-enabling the statusline, not a
+live regression.
+
+The naive fix (count any `.load` uuid missing from live as fully reclaimed) over-reports the opposite
+way: a host-side `/compact` boundary mid-session also drops records that were in `.load`, and those
+are gone from the buffer too. Claudinine can tell the two apart — it knows which uuids *it* removed,
+from the mirror and the digest envelopes — so the fix is a discrimination, not a one-liner, and wants
+its own test over both shapes.
 
 ### 3. Packaging & release
 
@@ -234,7 +338,18 @@ expected_hash — identical encoder or refusal, see `eng/bench/ruler.py`).
 
 **O14 · Fork/clone under Cowork resume.** `ForkHealRule`'s parent-genuineness test has not been
 exercised against whatever Cowork does on resume, cross-device continuation, or a scheduled task
-bound to a persistent session.
+bound to a persistent session. Partially closed: the 2026-08-15 run drove five scheduled tasks bound
+to a persistent session (`send_later`) through teardown and re-hydration, and no fork ever appeared —
+resume continues the same session id and the same record chain, so `ForkHealRule` never had cause to
+engage. Cross-device continuation and an actual branch remain untested.
+
+*Operational note on scheduled tasks, which the design should account for:* each firing delivers a
+real `UserPromptSubmit` into the persistent session, which **resets the host's idle timer**. A session
+kept alive by a recurring schedule may therefore never reach `SessionEnd` at all — and firings can
+also arrive **out of order** relative to the work (a wake queued at 17:08 for 17:11 landed after a
+turn that had already done its job). Both push the same conclusion: `Stop` is the trigger doing the
+real work in Cowork, and the `.end`/`.load` machinery is a repair path for the teardowns that do
+happen, not the main mechanism.
 
 ### 5. Docs
 
