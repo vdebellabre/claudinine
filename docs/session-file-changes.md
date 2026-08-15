@@ -31,8 +31,9 @@ pointer in the transcript.
 Two locations, both belonging to this plugin or the session it is compacting:
 
 1. **The session transcript**, rewritten in place (details below). Subagent
-   transcripts (`<session>/subagents/agent-*.jsonl`) get the same treatment,
-   swept at SessionEnd and SessionStart.
+   transcripts (`<session>/subagents/agent-*.jsonl`) get the same treatment —
+   each one individually the moment its agent finishes (SubagentStop), plus a
+   sweep at SessionEnd and SessionStart as repair for missed events.
 2. **A per-session mirror**, colocated with the session inside its own sidecar
    directory: `<project>/<session-id>/claudinine/<session-id>.jsonl` (for a
    subagent transcript, `<session-id>/claudinine/agent-<id>.jsonl`) — next to
@@ -52,6 +53,20 @@ Two locations, both belonging to this plugin or the session it is compacting:
    claude.ai-hosted (Cowork) install puts nothing on PATH. They are safe to
    delete — the next pass rewrites them — and if the session tree moves, the
    header's launcher path self-heals on the next pass.
+
+   Between a session's teardown and its next start boundary the directory also
+   carries a transient `<session-id>.end` marker: written at SessionEnd,
+   consumed by the next SessionStart — or by the next prompt or turn end, on
+   hosts (Cowork cloud) that re-hydrate an idled session without firing
+   SessionStart, so the start-of-session work still runs once per hydration.
+   A `<session-id>.pass` stamp records when a compaction pass last completed;
+   only its mtime is read, by the Stop trigger's min-interval guard (see
+   below). A `<stem>.lock` file per transcript backs the cross-process pass
+   lock: hooks can fire concurrently (parallel subagents finishing while the
+   session's own turn ends), so each pass holds its transcript's lock and a
+   contended hook simply skips — the holder is doing the same idempotent work.
+   The lock is the open file handle, not the file's existence: a crashed hook
+   releases it via the OS, and the leftover `.lock` file is inert.
 
 If the transcript carries retrieval stubs pointing at its own mirror and no
 mirror can be found anywhere, the plugin fails closed: no compaction, no mirror
@@ -100,9 +115,21 @@ then resumed to see what came back:
 
 Removal is therefore an allowlist, not a blocklist: any event not *proven* inert
 (`SessionStart`, `PreToolUse`, or anything a future version introduces) is kept.
-`QueueHistoryCollapseRule` applies the same standard differently — it replays the
-enqueue/dequeue history internally and only drops it when every queue provably
-ends empty; anything the replay cannot account for fails the whole file closed.
+
+`QueueHistoryCollapseRule` applies the same standard differently, and since it is
+the one record class removed outright rather than digested, its exact contract is
+worth spelling out. `queue-operation` records are the app's queued-message
+history (messages typed while a turn was still running). The rule replays every
+`enqueue`/`dequeue`/`remove` in file order, tracking one queue per `sessionId`
+(resumed sessions can interleave several), and removes the operations **only when
+every queue provably ends empty** — a non-empty queue means a message is still
+pending delivery. Removal is all-or-nothing by necessity, not caution: dequeues
+are positional and carry no content, so after deleting any prefix of the history
+the remaining operations no longer replay to the same state, and no partial
+removal can be proven safe. A trailing queue operation is always skipped as
+possibly mid-flight (the pass converges next time), and anything the replay does
+not understand — an unknown operation, a dequeue on an empty queue, a remove that
+misses — keeps the whole file's queue history untouched.
 
 These removals shrink the file on disk. They are not counted in Claudinine's
 published token figures, which measure only `message.content` — the benchmark
@@ -168,11 +195,15 @@ Stated plainly, because they are real:
   matching, and fail-closed validation — but a format change could make the plugin
   inert until updated. It should not corrupt anything, and that is the design
   priority.
-- **Hooks run on every prompt.** Measured over the 174-session corpus
+- **Hooks run on every prompt, and on turn ends.** The turn-end (`Stop`) trigger
+  exists for autonomous stretches — scheduled tasks, loops, workflow runs — that
+  chain many turns with no prompt between them; a min-interval guard (one pass
+  per 120 s at most, tracked via the `.pass` stamp) keeps it from doubling the
+  per-prompt work in interactive sessions. Measured over the 174-session corpus
   (`eng/bench/steady.py`), the steady-state `UserPromptSubmit` pass — the one a
   user actually waits for, over a transcript already compacted and mirrored — is
   **17.5 ms median, 24.1 ms p90, 52.7 ms worst**, process startup included. That
-  is 0.21% of the 25 s hook budget at worst. The cold whole-file pass, which
+  is under 0.1% of the 60 s hook budget at worst. The cold whole-file pass, which
   happens once at SessionStart over an untouched transcript, is 81.8 ms median,
   205 ms p90 and 832 ms worst; that is the one to cite for a first run rather
   than for per-prompt cost. Both columns come from the same serial
@@ -186,7 +217,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet run --project Claudinine.Tests` — 308 tests, covering each
+- `cd src && dotnet run --project Claudinine.Tests` — 330+ tests, covering each
   rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.

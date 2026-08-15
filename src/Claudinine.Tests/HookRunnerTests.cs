@@ -60,14 +60,7 @@ public sealed class HookRunnerTests : IDisposable
     [Test]
     public async Task UserPromptSubmitCompactsAndExitsZero()
     {
-        var b = new TranscriptBuilder();
-        for (int i = 0; i < 8; i++)
-        {
-            b.UserPrompt($"look ({i})");
-            b.BashRead("sed -n '1,100p' src/foo.cs", out _, new string('x', 500));
-        }
-        b.AssistantText("done");
-        string path = b.WriteTo(_dir);
+        string path = CompactableTranscript();
 
         await Assert.That(Run($$"""
             {"hook_event_name":"UserPromptSubmit","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
@@ -75,4 +68,127 @@ public sealed class HookRunnerTests : IDisposable
 
         await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
     }
+
+    // Stop is the autonomous-stretch trigger (scheduled tasks, /loop, Workflow
+    // runs chain turns with no prompt between them): it compacts like
+    // UserPromptSubmit, but under a min-interval guard so an interactive
+    // session's per-prompt pass is not doubled at every turn end.
+
+    [Test]
+    public async Task StopCompactsWhenNoPassRanRecently()
+    {
+        string path = CompactableTranscript();
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"Stop","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
+    }
+
+    [Test]
+    public async Task StopSkipsWhenPassIsFresh()
+    {
+        string path = CompactableTranscript();
+        PassStamp.Touch(path);
+        byte[] before = File.ReadAllBytes(path);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"Stop","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllBytes(path)).IsEquivalentTo(before);
+    }
+
+    [Test]
+    public async Task StopRunsWhenStampIsStale()
+    {
+        string path = CompactableTranscript();
+        PassStamp.Touch(path);
+        string stamp = Path.Combine(
+            MirrorLocator.ClaudinineDirFor(path),
+            Path.GetFileNameWithoutExtension(path) + ".pass");
+        File.SetLastWriteTimeUtc(stamp, DateTime.UtcNow - TimeSpan.FromMinutes(10));
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"Stop","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
+    }
+
+    [Test]
+    public async Task UserPromptSubmitIgnoresFreshStamp()
+    {
+        string path = CompactableTranscript();
+        PassStamp.Touch(path);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"UserPromptSubmit","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
+    }
+
+    [Test]
+    public async Task CompletedPassTouchesStamp()
+    {
+        string path = CompactableTranscript();
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"UserPromptSubmit","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(PassStamp.IsFresh(path, TimeSpan.FromSeconds(120))).IsTrue();
+    }
+
+    // SubagentStop compacts the one file the event names, on the spot, and
+    // never touches the live session transcript it fired under.
+
+    [Test]
+    public async Task SubagentStopCompactsTheNamedAgentFile()
+    {
+        string session = new TranscriptBuilder().UserPrompt("hi").AssistantText("ok").WriteTo(_dir);
+        string agent = AgentTranscript();
+        byte[] sessionBefore = File.ReadAllBytes(session);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"SubagentStop","transcript_path":"{{session.Replace("\\", "\\\\")}}","agent_transcript_path":"{{agent.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(agent)).Contains("[claudinine");
+        await Assert.That(File.ReadAllBytes(session)).IsEquivalentTo(sessionBefore);
+    }
+
+    [Test]
+    public async Task SubagentStopWithoutAgentPathExitsZero()
+    {
+        string session = new TranscriptBuilder().UserPrompt("hi").AssistantText("ok").WriteTo(_dir);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"SubagentStop","transcript_path":"{{session.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubagentStopOnFrozenSessionMirrorsWithoutCompacting()
+    {
+        string session = new TranscriptBuilder().UserPrompt("hi").AssistantText("ok").WriteTo(_dir);
+        string agent = AgentTranscript();
+        string colocated = MirrorLocator.ClaudinineDirFor(session);
+        Directory.CreateDirectory(colocated);
+        File.WriteAllText(Path.Combine(colocated, "test-session.skip"), "frozen\n");
+        byte[] agentBefore = File.ReadAllBytes(agent);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"SubagentStop","transcript_path":"{{session.Replace("\\", "\\\\")}}","agent_transcript_path":"{{agent.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllBytes(agent)).IsEquivalentTo(agentBefore);
+        await Assert.That(File.Exists(MirrorLocator.PathFor(agent))).IsTrue();
+    }
+
+    private string CompactableTranscript() => Fixtures.CompactableTranscript(_dir);
+
+    private string AgentTranscript() => Fixtures.AgentTranscript(_dir);
 }

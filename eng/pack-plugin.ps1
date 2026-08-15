@@ -11,11 +11,15 @@
 #                                         bin/ with 2-line forwarders to
 #                                         ../libexec so the human verbs stay on
 #                                         PATH (`claudinine version`, ...).
-#   -Hosted        claudinine-<v>.plugin  claude.ai account upload. Identical
-#                                         minus bin/ -- no PATH entry at all;
-#                                         retrieval goes through the per-session
-#                                         launcher the compactor writes (see
+#   -Hosted        claudinine-<v>.plugin  claude.ai account upload. Drops bin/
+#                                         -- no PATH entry at all; retrieval
+#                                         goes through the per-session launcher
+#                                         the compactor writes (see
 #                                         src/Claudinine/Mirror/Launcher.cs).
+#                                         Also carries only the two Linux RIDs:
+#                                         hosted sessions are Linux containers,
+#                                         so the win-*/osx-* binaries are dead
+#                                         weight. Pass -HostedRids to override.
 #
 # The archive carries only what an installed plugin needs at runtime: the
 # manifest, the hooks, the commands, the shims, and the six native binaries.
@@ -27,7 +31,8 @@
 #   hooks/hooks.json
 #   commands/*.md
 #   README.md
-#   libexec/claudinine, libexec/claudinine.cmd, libexec/<rid>/claudinine[.exe]
+#   libexec/claudinine, libexec/<rid>/claudinine[.exe]
+#   libexec/claudinine.cmd                      (only when a win-* RID ships)
 #   bin/claudinine, bin/claudinine.cmd          (CLI zip only, forwarders)
 #
 # Usage:
@@ -42,7 +47,8 @@
 param(
     [string] $BinRoot,
     [string] $OutDir,
-    [switch] $Hosted
+    [switch] $Hosted,
+    [string[]] $HostedRids
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,7 +68,26 @@ if (-not $BinRoot) {
 if (-not (Test-Path $BinRoot)) { throw "BinRoot does not exist: $BinRoot" }
 $BinRoot = (Resolve-Path $BinRoot).Path
 
-$rids = @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')
+# The hosted bundle ships only what its one execution environment can run.
+# claude.ai-hosted sessions (Cowork) are Linux containers, so the four non-Linux
+# binaries are dead weight there -- ~2/3 of the bundle. Both Linux RIDs stay:
+# the sandbox architecture is not something we control or have measured, the
+# shim already routes on `uname -m`, and an arm64 fleet with no arm64 binary is
+# a hard failure, not a slow path.
+#
+# -HostedRids exists to make that assumption reversible in one flag rather than
+# a re-edit: if an account-uploaded .plugin ever turns out to also feed a local
+# desktop install (see docs/cowork-compatibility.md A1), pass the full set.
+$allRids = @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')
+# Split on commas: `pwsh -File script.ps1 -HostedRids a,b` passes ONE argument
+# ("a,b"), unlike an in-process call which binds two. CI invokes via -File, so
+# without this the whole list arrives as a single bogus RID name.
+$HostedRids = @($HostedRids | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$rids = if ($HostedRids) { $HostedRids }
+        elseif ($Hosted) { @('linux-x64', 'linux-arm64') }
+        else { $allRids }
+$unknown = $rids | Where-Object { $_ -notin $allRids }
+if ($unknown) { throw "unknown RID(s): $($unknown -join ', '); valid: $($allRids -join ', ')" }
 
 # Version is the plugin's identity and the update signal: the archive file name
 # embeds it, so a pinned URL changes every release. develop carries no version
@@ -97,7 +122,11 @@ try {
     # The shims are hand-written source (eng/shims/), not build output; they land
     # at libexec/ in the archive, which is where hooks.json invokes them from.
     Copy-Item (Join-Path $repo 'eng/shims/claudinine') (Join-Path $stage 'libexec/claudinine')
-    Copy-Item (Join-Path $repo 'eng/shims/claudinine.cmd') (Join-Path $stage 'libexec/claudinine.cmd')
+    # The .cmd half of the dual-shim pattern is only reachable from a Windows
+    # host; a bundle carrying no win-* binary has nothing for it to route to.
+    if ($rids | Where-Object { $_.StartsWith('win-') }) {
+        Copy-Item (Join-Path $repo 'eng/shims/claudinine.cmd') (Join-Path $stage 'libexec/claudinine.cmd')
+    }
 
     foreach ($rid in $rids) {
         $exe = if ($rid.StartsWith('win-')) { 'claudinine.exe' } else { 'claudinine' }

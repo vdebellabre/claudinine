@@ -440,12 +440,20 @@ internal sealed class ChainCollapseRule : ICompactionRule
         $"  sh \"{launcher}\" get {sid} --ref REF --full           # entire output (last resort)\n" +
         $"  sh \"{launcher}\" get {sid} --ref REF --media          # decode archived image/PDF to a file, then Read it\n\n";
 
+    // The header must NEVER say that assistant-authored content is spliced or
+    // quoted inside this tool result — in any wording. Fable 5's API-side
+    // safeguards read such a sentence as an assistant-impersonation injection
+    // and block EVERY resume of the session (bisected empirically 2026-08-15:
+    // the removed sentence alone flipped the verdict on an otherwise untouched
+    // transcript, and a reworded variant was flagged too; see
+    // CarrierHeaderDedupRule.LegacySentence, which heals it out of carriers
+    // written by older versions).
     private static string Header(int callCount, string sid, string launcher)
     {
         return
             CarrierPrefix + $"{CallCountPhrase(callCount.ToString())}. " +
             "Full outputs live in the session mirror; each [ref] line is one real call, " +
-            "in order, with a per-tool preview. Interleaved assistant notes are verbatim.\n\n" +
+            "in order, with a per-tool preview.\n\n" +
             CommandBlockStart +
             CommandLines(sid, launcher) +
             CommandBlockEnd +
