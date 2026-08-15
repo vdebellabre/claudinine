@@ -171,12 +171,14 @@ runs all three GC paths — legacy-pool sweep, colocated sweep, SessionDirGc —
 `tool-results/` and `workflows/` content aged past the grace window, with reapable bait proving the
 sweeps ran hot, and asserts the app's sidecars survive.
 
-**O8 · `version` reports `1.0.0` — FIXED and verified by CI.** The binaries were compiled before
+**O8 · `version` reports `1.0.0` — FIXED, shipped in v0.1.21.** The binaries were compiled before
 `set-version` ever ran (the compile job never saw `inputs.version`); fixed by passing
 `-p:Version={inputs.version}` to `dotnet publish`, with assertions at all four invocation points
-comparing `claudinine version` output to the dispatched version. The v0.1.20 release published
-2026-08-15 by the green main run carries the fix, so "which build is deployed" is now answerable
-from inside a session.
+comparing `claudinine version` output to the dispatched version. Correction to an earlier claim
+here: v0.1.20 did NOT carry the fix — that pipeline change was still develop-local when 0.1.20 ran,
+so its binaries report `1.0.0` (and its green run proves nothing, since the assertions ship in the
+same commit). PR #10 synced the pipeline to main and v0.1.21 (2026-08-15) is the first release whose
+binaries report their real version, assertion-verified on every RID in the run log.
 
 ### 3. Packaging & release
 
@@ -185,9 +187,11 @@ forwarders for the human verbs; hosted `.plugin` omits `bin/`), the `test ! -e v
 assertion, and release publication of both are in `build.yml`/`cd.yml` and merged to main. The hosted
 verify step also asserts the Linux-only RID set *and the absence* of the four non-Linux ones, so a
 silent regression back to a fat bundle fails CI. The Publish release run on main (2026-08-15 13:21,
-run 31887005499) went green and published v0.1.20 with both assets — `claudinine-0.1.20.plugin` on
-the release IS CI-produced. Last remaining step: import that CI artifact into claude.ai to replace
-the hand-packed install (one manual action, same validator that already accepted the layout).
+run 31887005499) went green and published v0.1.20 with both assets — CI-produced, though still
+version-blind (see O8); v0.1.21 (run 31894149339) is the fully correct artifact, and it also carries
+the Fable-safeguards header fix every install needs. Last remaining step: import
+`claudinine-0.1.21.plugin` into claude.ai to replace the hand-packed install (one manual action,
+same validator that already accepted the layout).
 
 **O10 · Bundle size against the sync limits — RESOLVED, measured.** The syncer enforces roughly
 4096 files / 25 MB per file / 64 MB total. Measured against the published 0.1.20 artifact: six RIDs
