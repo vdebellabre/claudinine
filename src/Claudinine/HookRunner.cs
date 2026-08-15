@@ -41,9 +41,28 @@ internal static class HookRunner
             switch (input.HookEventName)
             {
                 case "UserPromptSubmit" or "SessionEnd" or "PreCompact" or "SessionStart":
+                    // Before the pass, so the teardown is recorded even if the
+                    // pass below fails: hosts that keep sessions server-side
+                    // (Cowork cloud) tear down on idle — SessionEnd fires — and
+                    // later re-hydrate into a new process WITHOUT firing
+                    // SessionStart (measured 2026-08-15). The marker turns the
+                    // first prompt after such a teardown into this session's
+                    // start boundary below.
+                    if (input.HookEventName == "SessionEnd")
+                        EndMarker.Write(input.TranscriptPath);
+
+                    bool wake = input.HookEventName == "UserPromptSubmit"
+                        && EndMarker.Consume(input.TranscriptPath);
+
+                    // The re-hydration loaded the file as it stands right now:
+                    // re-stamp before the pass mutates anything — the same
+                    // invariant as the SessionStart stamp above.
+                    if (wake)
+                        LoadStamp.Write(input.TranscriptPath);
+
                     if (skipped) Compactor.MirrorOnly(input.TranscriptPath);
                     else Compactor.Run(input.TranscriptPath);
-                    if (input.HookEventName is "SessionEnd" or "SessionStart")
+                    if (input.HookEventName is "SessionEnd" or "SessionStart" || wake)
                     {
                         // Subagent transcripts get no hook events of their own, so
                         // they ride the session's boundary events — off the
@@ -52,9 +71,9 @@ internal static class HookRunner
                         // them clean at rest, SessionStart repairs after a crash.
                         CompactSubagents(input.TranscriptPath, skipped);
                     }
-                    if (input.HookEventName == "SessionStart")
+                    if (input.HookEventName == "SessionStart" || wake)
                     {
-                        // Housekeeping rides the once-per-session event, off the
+                        // Housekeeping rides the start boundary, off the
                         // per-prompt critical path. The colocated sweep covers
                         // this session's own claudinine dir (orphaned subagent
                         // mirrors and markers); other sessions' dirs are their
@@ -63,6 +82,11 @@ internal static class HookRunner
                         MirrorFile.CollectGarbageColocated(
                             MirrorLocator.ClaudinineDirFor(input.TranscriptPath));
                         SessionDirGc.Run(input.TranscriptPath, input.SessionId);
+                        // A real SessionStart clears any pending teardown marker,
+                        // so a CLI resume never replays the start work on its
+                        // first prompt.
+                        if (input.HookEventName == "SessionStart")
+                            EndMarker.Consume(input.TranscriptPath);
                     }
                     break;
             }

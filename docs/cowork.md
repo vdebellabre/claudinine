@@ -92,15 +92,23 @@ keep-last, uuid-less so nothing can reference them. `tool-results/` cannot be re
 
 ### 1. Trigger model — where most of the remaining value is
 
-**O1 · `SessionStart` does not fire on wake-from-idle.** Cowork sessions live server-side and survive
-desktop restarts. After `SessionEnd` on idle, the next activity resumes the session into a **new
-process** that re-hydrates from the transcript — observed at 13:27:32 (`resume_hydrate_ms` ≈ 1.0 s,
-pid 461 → 483, same session id). At that resume `UserPromptSubmit` fired and `SessionStart` did not;
-the runner's timing keys show a prompt-submit hook phase and no session-start one. A genuinely *new*
-session does fire it. So today the repair pass, both GC sweeps, `SessionDirGc` and `LoadStamp.Write`
-run once at session creation and never again — while re-reads happen repeatedly within one session's
-life. **Fix:** move that work to the first `UserPromptSubmit` of a process (a process-lifetime flag
-makes it once-per-process); keep `SessionStart` as the CLI path.
+**O1 · `SessionStart` does not fire on wake-from-idle — FIXED in-tree, pending cloud verification.**
+Cowork sessions live server-side and survive desktop restarts. After `SessionEnd` on idle, the next
+activity resumes the session into a **new process** that re-hydrates from the transcript — observed
+at 13:27:32 (`resume_hydrate_ms` ≈ 1.0 s, pid 461 → 483, same session id). At that resume
+`UserPromptSubmit` fired and `SessionStart` did not; a genuinely *new* session does fire it. So the
+start-boundary work (load stamp, subagent sweep, all three GC sweeps) ran once at session creation
+and never again — while re-reads happen repeatedly within one session's life.
+
+*The fix as shipped* (hooks are per-invocation processes, so "once per host process" lives on disk):
+`SessionEnd` writes a `<stem>.end` marker into the colocated `claudinine/` dir; a `UserPromptSubmit`
+that finds it is the first prompt after a teardown and consumes it, replaying the start work —
+`LoadStamp.Write` *before* the pass mutates (same invariant as `SessionStart`), the subagent sweep,
+and the housekeeping trio. A real `SessionStart` consumes the marker too, so a CLI resume never
+double-runs. Crash teardowns that skip `SessionEnd` stay uncovered; `SessionStart` remains the repair
+path there. Verified end-to-end locally (marker written → consumed → `.load` re-stamped → no replay
+on the next prompt). *Still to verify on cloud:* after a real idle teardown + wake, the first prompt
+leaves a fresh `.load` stamp and no `.end`.
 
 **O2 · No `Stop` trigger.** Autonomous stretches — scheduled tasks, `/loop`, Workflow runs, Monitors
 — pass dozens of turns with no user prompt, so `UserPromptSubmit` never fires and nothing compacts.

@@ -53,6 +53,12 @@ Two locations, both belonging to this plugin or the session it is compacting:
    delete — the next pass rewrites them — and if the session tree moves, the
    header's launcher path self-heals on the next pass.
 
+   Between a session's teardown and its next start boundary the directory also
+   carries a transient `<session-id>.end` marker: written at SessionEnd,
+   consumed by the next SessionStart — or by the next prompt, on hosts (Cowork
+   cloud) that re-hydrate an idled session without firing SessionStart, so the
+   start-of-session work still runs once per hydration.
+
 If the transcript carries retrieval stubs pointing at its own mirror and no
 mirror can be found anywhere, the plugin fails closed: no compaction, no mirror
 writes, nothing — the loss stays visible instead of being papered over.
@@ -186,7 +192,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet run --project Claudinine.Tests` — 308 tests, covering each
+- `cd src && dotnet run --project Claudinine.Tests` — 315 tests, covering each
   rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.
