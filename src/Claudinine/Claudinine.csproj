@@ -3,11 +3,12 @@
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
 		<AssemblyName>claudinine</AssemblyName>
-		<!-- No version here on develop: cd.yml writes the real one (see
-		     eng/set-version.ps1) into the runner's checkout just before a
-		     release is built, so `claudinine version` only ever reports a real
-		     released number, never a stale in-source one. A build off develop
-		     falls back to the SDK's own default (1.0.0.0). -->
+		<!-- No version here on develop: release builds get it as
+		     -p:Version on the publish command line (build.yml), and cd.yml's
+		     release commit writes it here via eng/set-version.ps1, so
+		     `claudinine version` only ever reports a real released number,
+		     never a stale in-source one. A build off develop falls back to
+		     the SDK's own default (1.0.0.0). -->
 		<RootNamespace>Claudinine</RootNamespace>
 
 		<PublishAot>true</PublishAot>

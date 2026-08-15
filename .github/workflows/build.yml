@@ -93,21 +93,36 @@ jobs:
       # reference this self-contained one — NETSDK1151.
       # -o is relative to working-directory, so ../ keeps the binaries at the repo
       # root where the smoke tests and upload-artifact below expect them.
+      # -p:Version bakes the release version into the assembly itself -- the
+      # `Apply version override` in the package job below runs AFTER this
+      # compile and only reaches the manifest, so without this flag every
+      # released binary reported the SDK default via `claudinine version`.
       - name: Publish (Native AOT)
         working-directory: src
-        run: dotnet publish Claudinine/Claudinine.csproj -c Release -r ${{ matrix.rid }} -o ../publish/${{ matrix.rid }}
+        run: dotnet publish Claudinine/Claudinine.csproj -c Release -r ${{ matrix.rid }} -o ../publish/${{ matrix.rid }} ${{ inputs.version != '' && format('-p:Version={0}', inputs.version) || '' }}
 
+      # The version assertion only fires on release builds (`version` input
+      # set): a validation build has no override, so the binary legitimately
+      # reports the SDK default there.
       - name: Smoke test
         if: ${{ !startsWith(matrix.rid, 'win-') }}
         run: |
-          ./publish/${{ matrix.rid }}/claudinine version
+          got="$(./publish/${{ matrix.rid }}/claudinine version)"
+          echo "claudinine version -> $got"
+          if [ -n "${{ inputs.version }}" ] && [ "$got" != "${{ inputs.version }}" ]; then
+            echo "binary reports $got but this build was dispatched for ${{ inputs.version }}"; exit 1
+          fi
           echo '{"hook_event_name":"SessionStart","transcript_path":"/nonexistent"}' | ./publish/${{ matrix.rid }}/claudinine hook
 
       - name: Smoke test (Windows)
         if: ${{ startsWith(matrix.rid, 'win-') }}
         shell: pwsh
         run: |
-          ./publish/${{ matrix.rid }}/claudinine.exe version
+          $got = ./publish/${{ matrix.rid }}/claudinine.exe version
+          Write-Host "claudinine version -> $got"
+          if ('${{ inputs.version }}' -and $got -ne '${{ inputs.version }}') {
+            throw "binary reports $got but this build was dispatched for ${{ inputs.version }}"
+          }
           '{"hook_event_name":"SessionStart","transcript_path":"C:\\nonexistent"}' | ./publish/${{ matrix.rid }}/claudinine.exe hook
 
       # Ship the binary only. `claudinine*` also matched the stripped symbol
@@ -203,7 +218,14 @@ jobs:
             test -x "verify/libexec/$rid/claudinine" || { echo "$rid binary not executable"; exit 1; }
           done
           test -f verify/.claude-plugin/plugin.json || { echo "manifest not at archive root"; exit 1; }
-          ./verify/libexec/linux-x64/claudinine version
+          # On a release build the binary must report the packed version -- this
+          # is the assertion that catches a binary compiled before (or without)
+          # the version override. Skipped on versionless packs, where the
+          # manifest has no version and pack-plugin falls back to 'dev'.
+          got="$(./verify/libexec/linux-x64/claudinine version)"
+          if [ -n "${{ inputs.version }}" ] && [ "$got" != "${{ steps.pack.outputs.version }}" ]; then
+            echo "binary reports $got, package is ${{ steps.pack.outputs.version }}"; exit 1
+          fi
           ./verify/bin/claudinine version
           echo "CLI archive verified"
 
@@ -229,7 +251,10 @@ jobs:
           done
           test ! -e verify-hosted/libexec/claudinine.cmd || { echo "hosted bundle carries the Windows shim with no win-* binary to route to"; exit 1; }
           test -f verify-hosted/.claude-plugin/plugin.json || { echo "manifest not at bundle root"; exit 1; }
-          ./verify-hosted/libexec/linux-x64/claudinine version
+          got="$(./verify-hosted/libexec/linux-x64/claudinine version)"
+          if [ -n "${{ inputs.version }}" ] && [ "$got" != "${{ steps.pack.outputs.version }}" ]; then
+            echo "binary reports $got, package is ${{ steps.pack.outputs.version }}"; exit 1
+          fi
           echo "hosted bundle verified"
 
       # The packed archives are what cd.yml publishes: hand them over as an
