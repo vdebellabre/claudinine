@@ -11,11 +11,16 @@ namespace Claudinine.Tests;
 public sealed class RestoreVerbTests : IDisposable
 {
     private readonly string _dir;
+    private readonly string _project;
 
     public RestoreVerbTests()
     {
+        // _dir doubles as the fake HOME: sid resolution globs
+        // <home>/.claude/projects/*/*/claudinine, so transcripts live in a
+        // projects-shaped tree and the verb gets _dir through its home seam.
         _dir = Path.Combine(Path.GetTempPath(), "claudinine-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_dir);
+        _project = Path.Combine(_dir, ".claude", "projects", "proj");
+        Directory.CreateDirectory(_project);
         Environment.SetEnvironmentVariable("CLAUDE_PLUGIN_DATA", Path.Combine(_dir, "plugin-data"));
     }
 
@@ -26,6 +31,10 @@ public sealed class RestoreVerbTests : IDisposable
     }
 
     private string MirrorsDir => Path.Combine(_dir, "plugin-data", "mirrors");
+
+    /// <summary>Where the canonical (colocated) mirror and markers of a session land.</summary>
+    private string ColocatedDir(string stem = "test-session") =>
+        Path.Combine(_project, stem, "claudinine");
 
     /// <summary>A session rich enough that several rules fire.</summary>
     private string BuildCompactableSession()
@@ -42,15 +51,16 @@ public sealed class RestoreVerbTests : IDisposable
         for (int i = 0; i < 20; i++)
             b.UserPrompt($"turn filler {i}").AssistantText("ok");
         b.AssistantText("done");
-        return b.WriteTo(_dir);
+        return b.WriteTo(_project);
     }
 
     /// <summary>
     /// No output assertions here — only the exit code matters. The verb's chatter
     /// goes to TUnit's per-test capture, which is reported only when a test fails.
     /// </summary>
-    private static int RunRestore(string[] args, bool compactionOn) =>
-        RestoreVerb.Run(args, compactionOn);
+    private int RunRestore(string[] args, bool compactionOn) =>
+        RestoreVerb.Run(args, compactionOn,
+            Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"), _dir);
 
     private static void RunHook(string transcriptPath, string eventName = "UserPromptSubmit")
     {
@@ -160,7 +170,7 @@ public sealed class RestoreVerbTests : IDisposable
         Compactor.Run(path);
 
         await Assert.That(RunRestore(["test-session"], compactionOn: false)).IsEqualTo(0);
-        await Assert.That(File.Exists(Path.Combine(MirrorsDir, "test-session.skip"))).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(ColocatedDir(), "test-session.skip"))).IsTrue();
         string restored = File.ReadAllText(path);
 
         // Hooks now mirror but never compact: the restored file survives a pass.
@@ -187,7 +197,7 @@ public sealed class RestoreVerbTests : IDisposable
         RunHook(path);
 
         // …and are mirrored despite compaction being off.
-        string mirror = File.ReadAllText(Path.Combine(MirrorsDir, "test-session.jsonl"));
+        string mirror = File.ReadAllText(Path.Combine(ColocatedDir(), "test-session.jsonl"));
         await Assert.That(mirror).Contains("99999999-0000-0000-0000-000000000001");
         await Assert.That(File.ReadAllText(path)).Contains("post-freeze work"); // transcript untouched
     }
@@ -200,7 +210,7 @@ public sealed class RestoreVerbTests : IDisposable
         await Assert.That(RunRestore(["test-session"], compactionOn: false)).IsEqualTo(0);
 
         await Assert.That(RunRestore(["test-session"], compactionOn: true)).IsEqualTo(0);
-        await Assert.That(File.Exists(Path.Combine(MirrorsDir, "test-session.skip"))).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(ColocatedDir(), "test-session.skip"))).IsFalse();
 
         string restored = File.ReadAllText(path);
         RunHook(path);
@@ -242,7 +252,7 @@ public sealed class RestoreVerbTests : IDisposable
         // Corrupt the mirror: drop the original of a MARKED live record. (An
         // unmarked one would be re-appended by the pre-restore mirror sync —
         // self-healing, not a corruption case.)
-        string mirrorPath = Path.Combine(MirrorsDir, "test-session.jsonl");
+        string mirrorPath = Path.Combine(ColocatedDir(), "test-session.jsonl");
         string[] mirrorLines = File.ReadAllLines(mirrorPath);
         string victimUuid = File.ReadAllLines(path)
             .Select(l => (JsonObject)JsonNode.Parse(l)!)
@@ -317,7 +327,7 @@ public sealed class RestoreVerbTests : IDisposable
             ["sessionId"] = "test-session",
             ["message"] = new JsonObject { ["role"] = "user", ["content"] = text },
         };
-        string path = Path.Combine(_dir, "test-session.jsonl");
+        string path = Path.Combine(_project, "test-session.jsonl");
         File.WriteAllText(path, string.Join("\n",
         [
             Rec("bbbbbbbb-0000-0000-0000-000000000001", null, "root").ToJsonString(),
@@ -339,15 +349,14 @@ public sealed class RestoreVerbTests : IDisposable
         string path = BuildCompactableSession();
         Compactor.Run(path);
         await Assert.That(RunRestore(["test-session"], compactionOn: false)).IsEqualTo(0);
-        string marker = Path.Combine(MirrorsDir, "test-session.skip");
+        string marker = Path.Combine(ColocatedDir(), "test-session.skip");
         await Assert.That(File.Exists(marker)).IsTrue();
 
-        // Explicit dirs: the env-driven overload also sweeps the real home dirs.
-        MirrorFile.CollectGarbage([MirrorsDir]);
+        MirrorFile.CollectGarbageColocated(ColocatedDir());
         await Assert.That(File.Exists(marker)).IsTrue(); // transcript alive: marker stays
 
         File.Delete(path);
-        MirrorFile.CollectGarbage([MirrorsDir]);
+        MirrorFile.CollectGarbageColocated(ColocatedDir());
         await Assert.That(File.Exists(marker)).IsFalse(); // transcript gone: marker reaped
     }
 

@@ -48,6 +48,12 @@ claudinine restore-compaction-off <session-id>
 
 Use `restore-compaction-on` instead to restore then let compaction resume.
 
+That form assumes a CLI/marketplace install, which keeps `claudinine` on PATH. A claude.ai-hosted install (Cowork) has no PATH entry — there, use the launcher Claudinine keeps next to each session's mirror:
+
+```bash
+sh ~/.claude/projects/<project>/<session-id>/claudinine/run.sh restore-compaction-off <session-id>
+```
+
 ## Comparison with Cozempic
 
 [Cozempic](https://github.com/Ruya-AI/cozempic) solves a closely related problem, and Claudinine started as an attempt to get the same benefit with far less machinery. If you are choosing between them, the first difference to mention is functional: Cozempic provides more than compaction — live token monitoring, agent-team protection and interactive diagnosis — if you want those features, Cozempic is the right pick. Claudinine focuses only on compaction, but has some serious advantages:
@@ -83,20 +89,20 @@ Deleting either shrinks the file on disk without saving Claude a single token. C
 
 | | baseline | Claudinine | Cozempic |
 |---|---|---|---|
-| **All sessions** (n=174) | 189.2 MB / 13.44 M tok | 42.6 MB (77.5%) / **4.15 M tok (69.1%)** | 83.8 MB (55.7%) / 9.89 M tok (26.4%) |
-| **Main transcripts** (n=97) | 167.9 MB / 10.34 M tok | 38.6 MB (77.0%) / **3.60 M tok (65.2%)** | 71.1 MB (57.7%) / 7.88 M tok (23.8%) |
-| **Subagent transcripts** (n=77) | 21.2 MB / 3.10 M tok | 4.0 MB (81.2%) / **0.55 M tok (82.1%)** | 12.7 MB (40.1%) / 2.01 M tok (35.1%) |
+| **All sessions** (n=174) | 189.2 MB / 13.44 M tok | 42.7 MB (77.4%) / **4.20 M tok (68.8%)** | 83.8 MB (55.7%) / 9.89 M tok (26.4%) |
+| **Main transcripts** (n=97) | 167.9 MB / 10.34 M tok | 38.7 MB (76.9%) / **3.63 M tok (64.9%)** | 71.1 MB (57.7%) / 7.88 M tok (23.8%) |
+| **Subagent transcripts** (n=77) | 21.2 MB / 3.10 M tok | 4.0 MB (81.0%) / **0.57 M tok (81.6%)** | 12.7 MB (40.1%) / 2.01 M tok (35.1%) |
 
 Those totals are dominated by whichever sessions happen to be largest — the ten biggest are about 28% of all corpus tokens. For what a single session should expect, the per-session view is the useful one, so here it is by size, with every file kept:
 
 | session size | n | Claudinine | Cozempic |
 |---|---|---|---|
-| Under 30k tokens | 52 | **67.3%** | 20.5% |
-| 30k – 100k | 86 | **78.2%** | 32.6% |
-| 100k – 400k | 33 | **62.9%** | 22.9% |
+| Under 30k tokens | 52 | **65.6%** | 20.5% |
+| 30k – 100k | 86 | **77.7%** | 32.6% |
+| 100k – 400k | 33 | **62.8%** | 22.9% |
 | Over 400k | 3 | **67.0%** | 24.2% |
 
-The median session is reduced by **74.8%** of its tokens with Claudinine and 23.8% with Cozempic. Claudinine saves more on **167 of 174** sessions, with 5 ties and 2 sessions where Cozempic saves more. It is also about 10× faster: compacting all 174 sessions from scratch takes ~31s against Cozempic's ~350s, which is what a native binary buys over a Python process spawned per session.
+The median session is reduced by **74.2%** of its tokens with Claudinine and 23.8% with Cozempic. Claudinine saves more on **167 of 174** sessions, with 5 ties and 2 sessions where Cozempic saves more. It is also about 10× faster: compacting all 174 sessions from scratch takes ~31s against Cozempic's ~300s, which is what a native binary buys over a Python process spawned per session.
 
 One of the two sessions Cozempic wins is worth detailing: it contains a single 900 KB block — a bundled skill the session loaded — which Cozempic truncates. Claudinine leaves skill text untouched by choice, since it's meant to impact Claude's behavior during a session, and should arguably persist across session reloads.
 

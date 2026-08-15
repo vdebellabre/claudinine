@@ -73,13 +73,13 @@ internal static class CloneVerb
             if (title is not null)
                 Console.WriteLine($"  Title:      {title}");
 
-            string? sourceMirror = FindSourceMirror(sourceId, home);
+            string? sourceMirror = FindSourceMirror(sourceTranscript, sourceId, home);
             if (sourceMirror is not null)
             {
-                string candidate = Path.Combine(
-                    Path.GetDirectoryName(sourceMirror)!, targetId + ".jsonl");
+                string candidate = MirrorLocator.PathFor(targetTranscript);
                 if (!File.Exists(candidate))
                 {
+                    Directory.CreateDirectory(Path.GetDirectoryName(candidate)!);
                     targetMirror = candidate;
                     CloneMirror(sourceMirror, candidate, targetId, targetTranscript);
                 }
@@ -101,7 +101,19 @@ internal static class CloneVerb
             // headerless mirror is invisible to CollectGarbage forever.
             try { if (File.Exists(targetTranscript)) File.Delete(targetTranscript); }
             catch (Exception e) { Dbg.Log($"clone cleanup failed ({targetTranscript}): {e.Message}"); }
-            try { if (targetMirror is not null && File.Exists(targetMirror)) File.Delete(targetMirror); }
+            try
+            {
+                if (targetMirror is not null && File.Exists(targetMirror))
+                {
+                    File.Delete(targetMirror);
+                    // The clone owns its claudinine/ and session dirs too; both
+                    // are empty once the mirror is gone (non-recursive Delete
+                    // refuses anything else, which is exactly right).
+                    string claudinineDir = Path.GetDirectoryName(targetMirror)!;
+                    Directory.Delete(claudinineDir);
+                    Directory.Delete(Path.GetDirectoryName(claudinineDir)!);
+                }
+            }
             catch (Exception e) { Dbg.Log($"clone cleanup failed ({targetMirror}): {e.Message}"); }
             Console.Error.WriteLine($"clone failed: {ex.Message}");
             return 1;
@@ -183,28 +195,43 @@ internal static class CloneVerb
     }
 
     /// <summary>
-    /// Rewrite the `claudinine get &lt;sid&gt; …` commands our own digests embed in their
-    /// text. Without this the clone's digests would send every retrieval at the source
-    /// session id — which resolves to the source mirror, or to nothing once the source
-    /// is archived. Every emitter (chain-collapse, carrier-header dedup, anchor-input
-    /// stubs, image-strip) spells exactly `claudinine get &lt;full-id&gt;`, so the rewrite
-    /// matches that whole phrase — NEVER the bare id, which also occurs in strings that
-    /// must survive verbatim (persisted-output sidecar paths under the source session's
-    /// directory are the only pointer to those files).
+    /// Rewrite the retrieval commands our own digests embed in their text. Without
+    /// this the clone's digests would send every retrieval at the source session id
+    /// — which resolves to the source mirror, or to nothing once the source is
+    /// archived. Emitters spell either `claudinine get &lt;full-id&gt;` (stubs, short
+    /// headers, pre-launcher full headers) or `sh "…/&lt;full-id&gt;/claudinine/run.sh"
+    /// get &lt;full-id&gt;` (launcher-form full headers) — both are rewritten, plus the
+    /// launcher path's own directory component, so the clone's header points at the
+    /// clone's launcher. Whole phrases only — NEVER the bare id, which also occurs
+    /// in strings that must survive verbatim (persisted-output sidecar paths under
+    /// the source session's directory are the only pointer to those files).
     /// </summary>
     private static void RewriteRetrievalCommands(JsonNode? node, string sourceId, string targetId)
     {
-        string sourcePhrase = "claudinine get " + sourceId;
-        string targetPhrase = "claudinine get " + targetId;
+        (string Source, string Target)[] phrases =
+        [
+            ("claudinine get " + sourceId, "claudinine get " + targetId),
+            ("run.sh\" get " + sourceId, "run.sh\" get " + targetId),
+            ($"/{sourceId}/claudinine/run.sh", $"/{targetId}/claudinine/run.sh"),
+        ];
         Rules.RuleHelpers.VisitStrings(node, text =>
-            text.Contains(sourcePhrase, StringComparison.OrdinalIgnoreCase)
-                ? text.Replace(sourcePhrase, targetPhrase, StringComparison.OrdinalIgnoreCase)
-                : null);
+        {
+            string rewritten = text;
+            foreach ((string source, string target) in phrases)
+            {
+                if (rewritten.Contains(source, StringComparison.OrdinalIgnoreCase))
+                    rewritten = rewritten.Replace(source, target, StringComparison.OrdinalIgnoreCase);
+            }
+            return ReferenceEquals(rewritten, text) ? null : rewritten;
+        });
     }
 
-    /// <summary>The source session's mirror, from the first search dir that has one.</summary>
-    private static string? FindSourceMirror(string sourceId, string home)
+    /// <summary>The source session's mirror: colocated first, then the legacy pools.</summary>
+    private static string? FindSourceMirror(string sourceTranscript, string sourceId, string home)
     {
+        string colocated = MirrorLocator.PathFor(sourceTranscript);
+        if (File.Exists(colocated))
+            return colocated;
         foreach (string dir in MirrorLocator.SearchDirectories(
             Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"), home))
         {
@@ -220,7 +247,8 @@ internal static class CloneVerb
     /// transcript. That header field is load-bearing: MirrorFile.CollectGarbage deletes
     /// any mirror whose mirrorOf target is gone, so a verbatim copy would have the
     /// clone's mirror collected the moment the source transcript is archived.
-    /// Written next to the source mirror — the dir the writing hook actually uses.
+    /// Written to the clone's own colocated claudinine dir — the canonical path
+    /// the clone's hooks will use.
     /// </summary>
     private static void CloneMirror(
         string sourceMirror, string targetMirror, string targetId, string targetTranscript)

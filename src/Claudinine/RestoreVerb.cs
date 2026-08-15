@@ -20,7 +20,14 @@ namespace Claudinine;
 /// </summary>
 internal static class RestoreVerb
 {
-    public static int Run(string[] args, bool compactionOn)
+    public static int Run(string[] args, bool compactionOn) =>
+        Run(args, compactionOn,
+            Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    /// <summary>Home seam for tests, same reason as CloneVerb: SpecialFolder
+    /// ignores env overrides, and sid resolution now globs home's projects.</summary>
+    internal static int Run(string[] args, bool compactionOn, string? pluginData, string home)
     {
         string verb = compactionOn ? "restore-compaction-on" : "restore-compaction-off";
         if (args.Length != 1)
@@ -29,13 +36,14 @@ internal static class RestoreVerb
             return 1;
         }
 
-        var mirrors = MirrorLocator.FindSessionMirrors(args[0]);
+        var mirrors = MirrorLocator.FindSessionMirrors(args[0], pluginData, home);
         if (mirrors.Count == 0)
         {
-            var searched = MirrorLocator.SearchDirectories();
+            var searched = MirrorLocator.SearchDirectories(pluginData, home);
             Console.Error.WriteLine(
-                $"no mirror found for session '{args[0]}' (searched: " +
-                (searched.Count == 0 ? "no mirror directory exists" : string.Join("; ", searched)) + ")");
+                $"no mirror found for session '{args[0]}' (searched claudinine/ session dirs" +
+                " under ~/.claude/projects" +
+                (searched.Count == 0 ? "" : " and: " + string.Join("; ", searched)) + ")");
             return 1;
         }
 
@@ -58,7 +66,7 @@ internal static class RestoreVerb
         // The re-enable half of `-on` comes first: even if the restore below
         // fails, compaction being back on is what the user asked for.
         if (compactionOn)
-            SkipMarkers.Remove(sid);
+            SkipMarkers.Remove(sid, transcriptPath);
 
         // A crashed or frozen session may hold records the mirror has not seen
         // yet (its final turn, or turns written while compaction was off).
@@ -108,6 +116,21 @@ internal static class RestoreVerb
 
     private static string? MirrorTarget(string mirrorPath)
     {
+        // A colocated mirror derives its transcript structurally: the header's
+        // absolute path goes stale whenever the tree moves (cloud restore,
+        // cross-device sync, home rename), while the sibling layout moves with
+        // it by construction.
+        string full = Path.GetFullPath(mirrorPath);
+        string dir = Path.GetDirectoryName(full)!;
+        if (string.Equals(Path.GetFileName(dir), "claudinine", StringComparison.OrdinalIgnoreCase))
+        {
+            string sessionDir = Path.GetDirectoryName(dir)!;
+            string stem = Path.GetFileNameWithoutExtension(full);
+            return string.Equals(stem, Path.GetFileName(sessionDir), StringComparison.OrdinalIgnoreCase)
+                ? Path.Combine(Path.GetDirectoryName(sessionDir)!, stem + ".jsonl")
+                : Path.Combine(sessionDir, "subagents", stem + ".jsonl");
+        }
+
         try
         {
             string? header = File.ReadLines(mirrorPath, Encoding.UTF8).FirstOrDefault();

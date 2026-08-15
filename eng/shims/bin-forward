@@ -1,0 +1,6 @@
+#!/bin/sh
+# CLI-archive convenience forwarder: keeps `claudinine` on PATH for humans
+# (Claude Code adds the plugin's bin/ to the Bash tool's PATH). Ships ONLY in
+# the CLI zip — the claude.ai-hosted bundle may not contain a top-level bin/
+# at all, which is why the real shim and binaries live in libexec/.
+exec "$(CDPATH= cd -- "$(dirname -- "$0")/../libexec" && pwd)/claudinine" "$@"

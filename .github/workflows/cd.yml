@@ -172,11 +172,13 @@ jobs:
           name: claudinine-archive
           path: artifacts
 
-      # Confirm the payload exists before anything irreversible.
-      - name: Check archive present
+      # Confirm the payloads exist before anything irreversible.
+      - name: Check archives present
         run: |
           zip="artifacts/${{ needs.build.outputs.zip }}"
+          plugin="artifacts/${{ needs.build.outputs.plugin }}"
           test -f "$zip" || { echo "::error::archive $zip missing"; exit 1; }
+          test -f "$plugin" || { echo "::error::hosted bundle $plugin missing"; exit 1; }
 
       # Record the release in one commit: the version bump the build packed
       # (uncommitted there, so replayed here) plus the digest of the archive that
@@ -245,7 +247,8 @@ jobs:
           version='${{ needs.version.outputs.version }}'
           tag="v$version"
           zip="artifacts/${{ needs.build.outputs.zip }}"
-          printf 'Plugin archive for `archive`-source installs.\n\nsha256: `%s`\n' \
+          plugin="artifacts/${{ needs.build.outputs.plugin }}"
+          printf 'Plugin archive for `archive`-source installs (`.zip`, sha256 `%s`) and hosted bundle for claude.ai account upload (`.plugin`).\n' \
             '${{ needs.build.outputs.sha256 }}' > notes.md
-          gh release create "$tag" "$zip" --title "$tag" --notes-file notes.md
-          echo "asset URL: $(gh release view "$tag" --json assets --jq '.assets[].url')"
+          gh release create "$tag" "$zip" "$plugin" --title "$tag" --notes-file notes.md
+          echo "asset URLs: $(gh release view "$tag" --json assets --jq '.assets[].url')"

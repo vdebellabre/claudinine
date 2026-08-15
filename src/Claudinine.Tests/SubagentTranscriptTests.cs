@@ -77,8 +77,8 @@ public sealed class SubagentTranscriptTests : IDisposable
         await Assert.That(File.ReadAllLines(path).Length < linesBefore).IsTrue();
         await Assert.That(text).Contains(ChainCollapseRule.CarrierPrefix);
         // Retrieval must go through the agent-file mirror, not the parent session's.
-        await Assert.That(text).Contains("claudinine get agent-abc123def456abc12 --ref");
-        await Assert.That(text).DoesNotContain("claudinine get test-session");
+        await Assert.That(text).Contains(" get agent-abc123def456abc12 --ref");
+        await Assert.That(text).DoesNotContain(" get test-session");
     }
 
     [Test]
@@ -140,8 +140,10 @@ public sealed class SubagentTranscriptTests : IDisposable
         await Assert.That(Run("SessionEnd", mainPath)).IsEqualTo(0);
 
         await Assert.That(File.ReadAllText(agentPath)).Contains(ChainCollapseRule.CarrierPrefix);
+        // The agent mirror lands in the SESSION's colocated dir, next to the
+        // session's own mirror.
         await Assert.That(File.Exists(Path.Combine(
-            _dir, "plugin-data", "mirrors", "agent-abc123def456abc12.jsonl"))).IsTrue();
+            _dir, "test-session", "claudinine", "agent-abc123def456abc12.jsonl"))).IsTrue();
     }
 
     [Test]
@@ -175,7 +177,7 @@ public sealed class SubagentTranscriptTests : IDisposable
         // Frozen: never compacted, but the mirror stays fresh (crash protection).
         await Assert.That(File.ReadAllBytes(agentPath)).IsEquivalentTo(before);
         await Assert.That(File.Exists(Path.Combine(
-            _dir, "plugin-data", "mirrors", "agent-abc123def456abc12.jsonl"))).IsTrue();
+            _dir, "test-session", "claudinine", "agent-abc123def456abc12.jsonl"))).IsTrue();
     }
 
     private static int Run(string hookEvent, string transcriptPath) =>

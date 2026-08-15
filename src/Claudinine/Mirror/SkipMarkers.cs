@@ -4,18 +4,23 @@ namespace Claudinine.Mirror;
 /// `restore-compaction-off` freezes a session via a `&lt;sid&gt;.skip` marker next to
 /// its mirror(s). File presence is the whole state: hooks that see it keep
 /// mirroring but never compact, so an explicit restore is never silently undone.
-/// Markers are written next to every mirror the session has (plus the write dir)
-/// because the verb typically runs from a shell WITHOUT CLAUDE_PLUGIN_DATA while
-/// hooks probe all known dirs anyway.
+/// Markers are written next to every mirror the session has (plus the colocated
+/// claudinine dir, the canonical location) because pre-migration sessions may
+/// still keep their mirror in a legacy pool while hooks probe all known dirs.
 /// </summary>
 internal static class SkipMarkers
 {
-    /// <summary>True when any known mirror dir holds a skip marker for this session.</summary>
-    public static bool IsCompactionSkipped(string sessionId)
+    /// <summary>
+    /// True when the transcript's colocated dir or any legacy mirror dir holds a
+    /// skip marker for it. Keyed by the transcript's stem, so session and
+    /// subagent files each carry their own marker.
+    /// </summary>
+    public static bool IsCompactionSkipped(string transcriptPath)
     {
-        foreach (string dir in MirrorLocator.SearchDirectories())
+        string stem = Path.GetFileNameWithoutExtension(transcriptPath);
+        foreach (string dir in MirrorLocator.SearchDirectoriesFor(transcriptPath))
         {
-            if (File.Exists(Path.Combine(dir, sessionId + ".skip")))
+            if (File.Exists(Path.Combine(dir, stem + ".skip")))
                 return true;
         }
         return false;
@@ -27,8 +32,9 @@ internal static class SkipMarkers
         var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string mirror in MirrorLocator.FindSessionMirrors(sessionId))
             dirs.Add(Path.GetDirectoryName(mirror)!);
-        Directory.CreateDirectory(MirrorLocator.MirrorsDirectory());
-        dirs.Add(MirrorLocator.MirrorsDirectory());
+        string colocated = MirrorLocator.ClaudinineDirFor(transcriptPath);
+        Directory.CreateDirectory(colocated);
+        dirs.Add(colocated);
         foreach (string dir in dirs)
         {
             try
@@ -43,9 +49,9 @@ internal static class SkipMarkers
         }
     }
 
-    public static void Remove(string sessionId)
+    public static void Remove(string sessionId, string transcriptPath)
     {
-        foreach (string dir in MirrorLocator.SearchDirectories())
+        foreach (string dir in MirrorLocator.SearchDirectoriesFor(transcriptPath))
         {
             try { File.Delete(Path.Combine(dir, sessionId + ".skip")); } catch { }
         }

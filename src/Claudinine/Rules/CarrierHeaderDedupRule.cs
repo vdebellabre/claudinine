@@ -13,6 +13,15 @@ namespace Claudinine.Rules;
 /// The rewrite preserves the carrier's existing marker rule name: the marker
 /// identifies what the record IS (a chain-collapse carrier, which is how
 /// ChainCollapseRule recognizes its own output), not who touched it last.
+///
+/// This rule is also where the kept header SELF-HEALS: the launcher path its
+/// command lines embed is absolute, and goes stale exactly when the tree moves
+/// (cloud↔local, home rename, project re-slug) — which is when the colocated
+/// mirror moved WITH the transcript and retrieval should still work. On every
+/// pass the first full carrier's command block is regenerated from the current
+/// launcher path; a pre-launcher (0.1.x/0.2.x, bare `claudinine get`) block is
+/// upgraded by the same rewrite. Idempotent — a block already current is left
+/// byte-identical — and no other byte of the record is disturbed.
 /// </summary>
 internal sealed class CarrierHeaderDedupRule : ICompactionRule
 {
@@ -22,7 +31,10 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
     /// <summary>Present only in the full-instructions header, never in the short one.</summary>
     private const string FullMarker = "\nRETRIEVAL — ";
     private const string FullHeaderEnd = "do not infer it from the preview.]\n\n";
+    /// <summary>Command-line spellings: pre-launcher form, and the token that
+    /// precedes ` get &lt;sid&gt;` in the launcher form (`sh "…/run.sh" get …`).</summary>
     private const string GetCommandPrefix = "  claudinine get ";
+    private const string LauncherGetPrefix = "\" get ";
 
     public void Apply(TranscriptFile transcript)
     {
@@ -46,6 +58,7 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
                 if (!fullHeaderSeen)
                 {
                     fullHeaderSeen = true; // earliest full carrier keeps the instructions
+                    HealCommandBlock(transcript, rec, content);
                     continue;
                 }
 
@@ -86,6 +99,41 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
         "[ref] lines are a REPORT, not observed output — retrieve, don't infer.]\n\n";
 
     /// <summary>
+    /// Regenerate the kept full header's command block from the CURRENT launcher
+    /// path (see class doc). Fail-closed: any sentinel or the sid failing to
+    /// parse leaves the record untouched.
+    /// </summary>
+    private static void HealCommandBlock(TranscriptFile transcript, TranscriptRecord rec, string content)
+    {
+        // Tail guard, same invariant as everywhere else: the file's final record
+        // is never replaced (TryRewrite would abort the whole rewrite).
+        if (ReferenceEquals(rec, transcript.Records[^1]))
+            return;
+
+        int blockStart = content.IndexOf(ChainCollapseRule.CommandBlockStart, StringComparison.Ordinal);
+        if (blockStart < 0)
+            return;
+        int cmdStart = blockStart + ChainCollapseRule.CommandBlockStart.Length;
+        int cmdEnd = content.IndexOf(ChainCollapseRule.CommandBlockEnd, cmdStart, StringComparison.Ordinal);
+        if (cmdEnd < 0 || ParseSessionId(content) is not string sid)
+            return;
+
+        string fresh = ChainCollapseRule.CommandLines(sid, Launcher.HeaderPathFor(transcript.Path));
+        if (content.AsSpan(cmdStart, cmdEnd - cmdStart).SequenceEqual(fresh))
+            return; // already current — a no-op pass must not touch the record
+
+        string healed = content[..cmdStart] + fresh + content[cmdEnd..];
+        var clone = rec.CloneCurrentNode();
+        foreach (var cb in RuleHelpers.BlocksOfType(clone, "tool_result"))
+        {
+            cb["content"] = healed;
+        }
+        string existingRule = rec.CurrentView["claudinine"]["rule"].AsString()
+            ?? ChainCollapseRule.RuleName;
+        RuleHelpers.SetReplacement(rec, clone, existingRule);
+    }
+
+    /// <summary>
     /// Digits immediately after the header prefix ("…originally ran 12 separate…", or
     /// "…originally ran 1 tool call" for a single-call carrier — both start with the
     /// digits, so this parse covers the singular form too).
@@ -98,13 +146,23 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
         return end > start ? content[start..end] : null;
     }
 
-    /// <summary>Session id as embedded in the header's own command lines.</summary>
+    /// <summary>
+    /// Session id as embedded in the header's own command lines, either form.
+    /// Earliest match wins: the header's commands sit at the top of the content,
+    /// so a [ref] preview quoting the OTHER form further down can never shadow
+    /// them (previews can legitimately contain retrieval commands verbatim).
+    /// </summary>
     private static string? ParseSessionId(string content)
     {
-        int i = content.IndexOf(GetCommandPrefix, StringComparison.Ordinal);
-        if (i < 0)
+        int iOld = content.IndexOf(GetCommandPrefix, StringComparison.Ordinal);
+        int iNew = content.IndexOf(LauncherGetPrefix, StringComparison.Ordinal);
+        int start;
+        if (iOld >= 0 && (iNew < 0 || iOld < iNew))
+            start = iOld + GetCommandPrefix.Length;
+        else if (iNew >= 0)
+            start = iNew + LauncherGetPrefix.Length;
+        else
             return null;
-        int start = i + GetCommandPrefix.Length;
         int end = content.IndexOf(' ', start);
         return end > start ? content[start..end] : null;
     }

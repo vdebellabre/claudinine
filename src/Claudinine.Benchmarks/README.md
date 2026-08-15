@@ -114,8 +114,10 @@ workload for the platform linker; see `eng/bench/profiling-notes.md` if it fails
 on your machine).
 
 Never touches `bench/corpus/`: every invocation gets a pristine copy in a temp
-workspace, and `CLAUDE_PLUGIN_DATA` is redirected there too so mirrors never
-reach the real pool. `--keep` retains the workspace for inspection.
+workspace. Mirrors are colocated with the copy, so they land in the workspace by
+construction; `CLAUDE_PLUGIN_DATA` is still redirected there so the legacy-pool
+read probes cannot wander into the real ones. `--keep` retains the workspace for
+inspection.
 
 The reported `floor` is the smallest session, **not** process startup — measure
 that separately with `claudinine version` (~12 ms here) and see the notes file

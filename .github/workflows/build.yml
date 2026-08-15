@@ -40,8 +40,11 @@ on:
         description: 'SHA-256 of the packed archive.'
         value: ${{ jobs.package.outputs.sha256 }}
       zip:
-        description: 'Archive file name, claudinine-<version>.zip (no directory).'
+        description: 'CLI archive file name, claudinine-<version>.zip (no directory).'
         value: ${{ jobs.package.outputs.zip }}
+      plugin:
+        description: 'Hosted bundle file name, claudinine-<version>.plugin (no directory).'
+        value: ${{ jobs.package.outputs.plugin }}
 
 jobs:
   publish:
@@ -138,6 +141,7 @@ jobs:
       version: ${{ steps.pack.outputs.version }}
       sha256: ${{ steps.pack.outputs.sha256 }}
       zip: ${{ steps.pack.outputs.zip }}
+      plugin: ${{ steps.pack.outputs.plugin }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -176,33 +180,57 @@ jobs:
         run: |
           $r = ./eng/pack-plugin.ps1 -BinRoot bins -OutDir artifacts
           if ($r.Bits -ne 'preserved') { throw "executable bits were not stored: $($r.Bits)" }
+          $h = ./eng/pack-plugin.ps1 -BinRoot bins -OutDir artifacts -Hosted
+          if ($h.Bits -ne 'preserved') { throw "hosted: executable bits were not stored: $($h.Bits)" }
           # $r.Zip is an absolute path; publish the bare file name so callers can
           # join it onto wherever they downloaded the artifact.
           "version=$($r.Version)"                  >> $env:GITHUB_OUTPUT
           "sha256=$($r.Sha256)"                    >> $env:GITHUB_OUTPUT
           "zip=$(Split-Path -Leaf $r.Zip)"         >> $env:GITHUB_OUTPUT
+          "plugin=$(Split-Path -Leaf $h.Zip)"      >> $env:GITHUB_OUTPUT
           Write-Host "packed $($r.Zip) ($($r.SizeMB) MB) sha256=$($r.Sha256)"
+          Write-Host "packed $($h.Zip) ($($h.SizeMB) MB) sha256=$($h.Sha256)"
 
-      # The zip is the install payload, so verify the bits survived a real
-      # round-trip rather than trusting the packer.
+      # The archives are the install payloads, so verify the bits survived a
+      # real round-trip rather than trusting the packer.
       - name: Verify archive
         run: |
           cd artifacts
           unzip -q -o "claudinine-${{ steps.pack.outputs.version }}.zip" -d verify
-          test -x verify/bin/claudinine || { echo "shim not executable after extract"; exit 1; }
+          test -x verify/libexec/claudinine || { echo "shim not executable after extract"; exit 1; }
+          test -x verify/bin/claudinine || { echo "bin forwarder not executable after extract"; exit 1; }
           for rid in linux-x64 linux-arm64 osx-x64 osx-arm64; do
-            test -x "verify/bin/$rid/claudinine" || { echo "$rid binary not executable"; exit 1; }
+            test -x "verify/libexec/$rid/claudinine" || { echo "$rid binary not executable"; exit 1; }
           done
           test -f verify/.claude-plugin/plugin.json || { echo "manifest not at archive root"; exit 1; }
-          ./verify/bin/linux-x64/claudinine version
-          echo "archive verified"
+          ./verify/libexec/linux-x64/claudinine version
+          ./verify/bin/claudinine version
+          echo "CLI archive verified"
 
-      # The packed zip is what cd.yml publishes: hand it over as an artifact so
-      # the release ships these exact bytes. The zip is not byte-reproducible
-      # across builds, so re-packing in the release job would produce a
-      # different digest than the one CI verified.
+      # The claude.ai validator refuses any hosted plugin with a top-level
+      # bin/ (measured 2026-08-15). This assertion is what would have caught
+      # that before an upload attempt -- it must never be removed.
+      - name: Verify hosted bundle
+        run: |
+          cd artifacts
+          unzip -q -o "claudinine-${{ steps.pack.outputs.version }}.plugin" -d verify-hosted
+          test ! -e verify-hosted/bin || { echo "hosted bundle contains a top-level bin/ -- the claude.ai validator will refuse it"; exit 1; }
+          test -x verify-hosted/libexec/claudinine || { echo "shim not executable after extract"; exit 1; }
+          for rid in linux-x64 linux-arm64 osx-x64 osx-arm64; do
+            test -x "verify-hosted/libexec/$rid/claudinine" || { echo "$rid binary not executable"; exit 1; }
+          done
+          test -f verify-hosted/.claude-plugin/plugin.json || { echo "manifest not at bundle root"; exit 1; }
+          ./verify-hosted/libexec/linux-x64/claudinine version
+          echo "hosted bundle verified"
+
+      # The packed archives are what cd.yml publishes: hand them over as an
+      # artifact so the release ships these exact bytes. The zip is not
+      # byte-reproducible across builds, so re-packing in the release job would
+      # produce a different digest than the one CI verified.
       - uses: actions/upload-artifact@v7
         with:
           name: claudinine-archive
-          path: artifacts/${{ steps.pack.outputs.zip }}
+          path: |
+            artifacts/${{ steps.pack.outputs.zip }}
+            artifacts/${{ steps.pack.outputs.plugin }}
           if-no-files-found: error

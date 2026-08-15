@@ -102,7 +102,7 @@ public sealed class StatuslineVerbTests : IDisposable
         LoadStamp.Write(path);
         LoadStamp.Write(path); // the doubled firing
         string stampAfterLoad = File.ReadAllText(
-            Path.Combine(MirrorLocator.MirrorsDirectory(), stem + ".load"));
+            Path.Combine(MirrorLocator.ClaudinineDirFor(path), stem + ".load"));
 
         var b2 = new TranscriptBuilder();
         for (int i = 0; i < 500; i++)
@@ -130,7 +130,7 @@ public sealed class StatuslineVerbTests : IDisposable
         await Assert.That(m!.Value.RemovedBytes).IsGreaterThan(0L);
         await Assert.That(line).IsNotNull();
         await Assert.That(File.ReadAllText(
-            Path.Combine(MirrorLocator.MirrorsDirectory(), stem + ".load")))
+            Path.Combine(MirrorLocator.ClaudinineDirFor(path), stem + ".load")))
             .IsEqualTo(stampAfterLoad);
     }
 

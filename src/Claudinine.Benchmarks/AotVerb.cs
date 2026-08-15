@@ -27,9 +27,11 @@ namespace Claudinine.Benchmarks;
 /// 2. Each timed invocation gets a PRISTINE copy. The pass is idempotent, so a
 ///    second run over the same file finds its work already done and reports a
 ///    time that no real hook would ever see.
-/// 3. Mirrors are redirected via CLAUDE_PLUGIN_DATA into the temp workspace. The
-///    mirror lives outside the transcript directory, so without this the harness
-///    would append megabytes into the user's real mirror pool.
+/// 3. CLAUDE_PLUGIN_DATA is redirected into the temp workspace. Mirrors are
+///    colocated with the copy nowadays, so the timed writes stay in the
+///    workspace either way — the redirect is what keeps the LEGACY read probes
+///    (migration, fork-heal parent lookup) from wandering into the user's real
+///    flat pools mid-benchmark.
 /// </summary>
 internal static class AotVerb
 {
