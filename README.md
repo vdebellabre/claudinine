@@ -23,9 +23,10 @@ Claudinine is a Claude Code plugin. Run `/plugin install claudinine` in Claude C
 
 ## How it works
 
-Whenever it is invoked, Claudinine runs one pass over the whole session transcript: copy full content to the sidecar, then compact. This pass is idempotent — re-running it has no effect — so the same pass is safe to run at every hook point. There are four active hooks:
+Whenever it is invoked, Claudinine runs one pass over the whole session transcript: copy full content to the sidecar, then compact. This pass is idempotent — re-running it has no effect — so the same pass is safe to run at every hook point. There are five active hooks:
 
 - On a new prompt — to compact the previous turn.
+- On turn end — for autonomous stretches (scheduled tasks, loops, workflow runs) that chain many turns with no prompt between them. Throttled to at most one pass per two minutes, so it stays quiet in interactive sessions where the per-prompt pass already runs.
 - On session exit — to compact the final turn, leaving the file clean at rest. Subagent transcripts (`<session>/subagents/agent-*.jsonl`) are swept here too, each with its own sidecar.
 - On session start — acts as repair for crash leftovers, plus garbage collection of sidecars and orphaned session directories.
 - Before Claude's compaction — same reasons as session start.

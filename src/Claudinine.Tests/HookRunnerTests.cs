@@ -60,6 +60,90 @@ public sealed class HookRunnerTests : IDisposable
     [Test]
     public async Task UserPromptSubmitCompactsAndExitsZero()
     {
+        string path = CompactableTranscript();
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"UserPromptSubmit","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
+    }
+
+    // Stop is the autonomous-stretch trigger (scheduled tasks, /loop, Workflow
+    // runs chain turns with no prompt between them): it compacts like
+    // UserPromptSubmit, but under a min-interval guard so an interactive
+    // session's per-prompt pass is not doubled at every turn end.
+
+    [Test]
+    public async Task StopCompactsWhenNoPassRanRecently()
+    {
+        string path = CompactableTranscript();
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"Stop","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
+    }
+
+    [Test]
+    public async Task StopSkipsWhenPassIsFresh()
+    {
+        string path = CompactableTranscript();
+        PassStamp.Touch(path);
+        byte[] before = File.ReadAllBytes(path);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"Stop","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllBytes(path)).IsEquivalentTo(before);
+    }
+
+    [Test]
+    public async Task StopRunsWhenStampIsStale()
+    {
+        string path = CompactableTranscript();
+        PassStamp.Touch(path);
+        string stamp = Path.Combine(
+            MirrorLocator.ClaudinineDirFor(path),
+            Path.GetFileNameWithoutExtension(path) + ".pass");
+        File.SetLastWriteTimeUtc(stamp, DateTime.UtcNow - TimeSpan.FromMinutes(10));
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"Stop","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
+    }
+
+    [Test]
+    public async Task UserPromptSubmitIgnoresFreshStamp()
+    {
+        string path = CompactableTranscript();
+        PassStamp.Touch(path);
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"UserPromptSubmit","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
+    }
+
+    [Test]
+    public async Task CompletedPassTouchesStamp()
+    {
+        string path = CompactableTranscript();
+
+        await Assert.That(Run($$"""
+            {"hook_event_name":"UserPromptSubmit","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
+            """)).IsEqualTo(0);
+
+        await Assert.That(PassStamp.IsFresh(path, TimeSpan.FromSeconds(120))).IsTrue();
+    }
+
+    private string CompactableTranscript()
+    {
         var b = new TranscriptBuilder();
         for (int i = 0; i < 8; i++)
         {
@@ -67,12 +151,6 @@ public sealed class HookRunnerTests : IDisposable
             b.BashRead("sed -n '1,100p' src/foo.cs", out _, new string('x', 500));
         }
         b.AssistantText("done");
-        string path = b.WriteTo(_dir);
-
-        await Assert.That(Run($$"""
-            {"hook_event_name":"UserPromptSubmit","transcript_path":"{{path.Replace("\\", "\\\\")}}"}
-            """)).IsEqualTo(0);
-
-        await Assert.That(File.ReadAllText(path)).Contains("[claudinine");
+        return b.WriteTo(_dir);
     }
 }

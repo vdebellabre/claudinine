@@ -110,9 +110,14 @@ path there. Verified end-to-end locally (marker written → consumed → `.load`
 on the next prompt). *Still to verify on cloud:* after a real idle teardown + wake, the first prompt
 leaves a fresh `.load` stamp and no `.end`.
 
-**O2 · No `Stop` trigger.** Autonomous stretches — scheduled tasks, `/loop`, Workflow runs, Monitors
-— pass dozens of turns with no user prompt, so `UserPromptSubmit` never fires and nothing compacts.
-`Stop` is the per-turn boundary that always fires. Add it with a min-interval guard.
+**O2 · No `Stop` trigger — FIXED in-tree.** Autonomous stretches — scheduled tasks, `/loop`, Workflow
+runs, Monitors — pass dozens of turns with no user prompt, so `UserPromptSubmit` never fires and
+nothing compacts. `Stop` is the per-turn boundary that always fires; it is now registered and runs
+the same steady pass under a min-interval guard: every completed pass (any event) touches a
+`<stem>.pass` stamp in the colocated dir, and `Stop` skips when the stamp is younger than 120 s — so
+interactive sessions, where the per-prompt pass already runs, do not pay twice per turn. `Stop` also
+joins the wake boundary from O1 (a pending `.end` marker bypasses the throttle), covering autonomous
+resumes that never see a prompt — verified end-to-end locally with the real binary.
 
 **O3 · Subagent compaction is boundary-bound.** `CompactSubagents` runs only at
 `SessionStart`/`SessionEnd`, so a Workflow's agent files stay fat until the session ends — and

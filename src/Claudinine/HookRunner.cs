@@ -34,25 +34,38 @@ internal static class HookRunner
 
             // Every event runs the same idempotent pass; they differ only in
             // which part of the file still has work in it. UserPromptSubmit is
-            // the steady-state workhorse (the turn that just ended), SessionEnd
-            // makes the file clean at rest (a resume loads the transcript BEFORE
-            // SessionStart hooks run), SessionStart/PreCompact are repair for
-            // crashes and missed ends — they pay at the next load.
+            // the steady-state workhorse (the turn that just ended), Stop covers
+            // autonomous stretches (scheduled tasks, /loop, Workflow runs chain
+            // turns with no prompt between them) under a min-interval guard,
+            // SessionEnd makes the file clean at rest (a resume loads the
+            // transcript BEFORE SessionStart hooks run), SessionStart/PreCompact
+            // are repair for crashes and missed ends — they pay at the next load.
             switch (input.HookEventName)
             {
-                case "UserPromptSubmit" or "SessionEnd" or "PreCompact" or "SessionStart":
+                case "UserPromptSubmit" or "Stop" or "SessionEnd" or "PreCompact" or "SessionStart":
                     // Before the pass, so the teardown is recorded even if the
                     // pass below fails: hosts that keep sessions server-side
                     // (Cowork cloud) tear down on idle — SessionEnd fires — and
                     // later re-hydrate into a new process WITHOUT firing
                     // SessionStart (measured 2026-08-15). The marker turns the
-                    // first prompt after such a teardown into this session's
-                    // start boundary below.
+                    // first event after such a teardown into this session's
+                    // start boundary below — a prompt, or a turn end when the
+                    // wake was autonomous and no prompt ever arrives.
                     if (input.HookEventName == "SessionEnd")
                         EndMarker.Write(input.TranscriptPath);
 
-                    bool wake = input.HookEventName == "UserPromptSubmit"
+                    bool wake = input.HookEventName is "UserPromptSubmit" or "Stop"
                         && EndMarker.Consume(input.TranscriptPath);
+
+                    // Stop fires at every turn end, right after the pass a
+                    // per-turn UserPromptSubmit just ran — the stamp throttles
+                    // it to stretches where nothing else compacts. A wake
+                    // bypasses the guard: start-boundary work is never skipped.
+                    if (input.HookEventName == "Stop" && !wake
+                        && PassStamp.IsFresh(input.TranscriptPath, TimeSpan.FromSeconds(120)))
+                    {
+                        return 0;
+                    }
 
                     // The re-hydration loaded the file as it stands right now:
                     // re-stamp before the pass mutates anything — the same
@@ -62,6 +75,7 @@ internal static class HookRunner
 
                     if (skipped) Compactor.MirrorOnly(input.TranscriptPath);
                     else Compactor.Run(input.TranscriptPath);
+                    PassStamp.Touch(input.TranscriptPath);
                     if (input.HookEventName is "SessionEnd" or "SessionStart" || wake)
                     {
                         // Subagent transcripts get no hook events of their own, so

@@ -11,6 +11,17 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/libexec/claudinine\" hook",
+            "timeout": 25
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

@@ -55,9 +55,12 @@ Two locations, both belonging to this plugin or the session it is compacting:
 
    Between a session's teardown and its next start boundary the directory also
    carries a transient `<session-id>.end` marker: written at SessionEnd,
-   consumed by the next SessionStart — or by the next prompt, on hosts (Cowork
-   cloud) that re-hydrate an idled session without firing SessionStart, so the
-   start-of-session work still runs once per hydration.
+   consumed by the next SessionStart — or by the next prompt or turn end, on
+   hosts (Cowork cloud) that re-hydrate an idled session without firing
+   SessionStart, so the start-of-session work still runs once per hydration.
+   A `<session-id>.pass` stamp records when a compaction pass last completed;
+   only its mtime is read, by the Stop trigger's min-interval guard (see
+   below).
 
 If the transcript carries retrieval stubs pointing at its own mirror and no
 mirror can be found anywhere, the plugin fails closed: no compaction, no mirror
@@ -174,7 +177,11 @@ Stated plainly, because they are real:
   matching, and fail-closed validation — but a format change could make the plugin
   inert until updated. It should not corrupt anything, and that is the design
   priority.
-- **Hooks run on every prompt.** Measured over the 174-session corpus
+- **Hooks run on every prompt, and on turn ends.** The turn-end (`Stop`) trigger
+  exists for autonomous stretches — scheduled tasks, loops, workflow runs — that
+  chain many turns with no prompt between them; a min-interval guard (one pass
+  per 120 s at most, tracked via the `.pass` stamp) keeps it from doubling the
+  per-prompt work in interactive sessions. Measured over the 174-session corpus
   (`eng/bench/steady.py`), the steady-state `UserPromptSubmit` pass — the one a
   user actually waits for, over a transcript already compacted and mirrored — is
   **17.5 ms median, 24.1 ms p90, 52.7 ms worst**, process startup included. That
@@ -192,7 +199,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet run --project Claudinine.Tests` — 315 tests, covering each
+- `cd src && dotnet run --project Claudinine.Tests` — 320 tests, covering each
   rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.
