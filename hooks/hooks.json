@@ -6,7 +6,18 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/libexec/claudinine\" hook",
-            "timeout": 25
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/libexec/claudinine\" hook",
+            "timeout": 60
           }
         ]
       }
@@ -18,6 +29,17 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/libexec/claudinine\" hook",
             "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/libexec/claudinine\" hook",
+            "timeout": 30
           }
         ]
       }

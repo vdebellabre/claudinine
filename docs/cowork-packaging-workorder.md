@@ -34,8 +34,8 @@ Canonical layout is `libexec/`. Two artifacts from it:
 
 | | CLI archive (`claudinine-<v>.zip`) | hosted bundle (`claudinine-<v>.plugin`) |
 |---|---|---|
-| `libexec/claudinine`, `libexec/claudinine.cmd` | routing shims | routing shims |
-| `libexec/<rid>/claudinine[.exe]` | 6 RIDs | Linux only is sufficient (see A3/B1); shipping 6 is also fine |
+| `libexec/claudinine`, `libexec/claudinine.cmd` | routing shims | POSIX shim only (`.cmd` has no win-* binary to route to) |
+| `libexec/<rid>/claudinine[.exe]` | 6 RIDs | **linux-x64 + linux-arm64** (20.34 MB → 7.27 MB; `-HostedRids` overrides) |
 | `bin/claudinine`, `bin/claudinine.cmd` | 2-line forwarders to `../libexec/claudinine` | **absent** |
 | install route | marketplace / `archive` source | `.plugin` uploaded to the account, synced to sessions |
 

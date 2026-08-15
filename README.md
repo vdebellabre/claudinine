@@ -21,12 +21,16 @@ Across 174 real sessions, transcripts shrank from **189 MB to 43 MB** on disk. T
 
 Claudinine is a Claude Code plugin. Run `/plugin install claudinine` in Claude Code, and that is the whole setup — the hooks register themselves and compaction starts with your next prompt. There is nothing to configure.
 
+On claude.ai (Cowork), plugin marketplaces are disabled, so `/plugin install` is not the route. Instead, download `claudinine-<version>.plugin` from the [latest release](https://github.com/vdebellabre/claudinine/releases/latest) and import it in claude.ai's plugin settings. It installs account-wide and registers in your Cowork sessions automatically — including sessions already running. That artifact ships Linux binaries only (the only kind a Cowork session can execute); CLI installs on Windows and macOS use the marketplace or the full zip.
+
 ## How it works
 
-Whenever it is invoked, Claudinine runs one pass over the whole session transcript: copy full content to the sidecar, then compact. This pass is idempotent — re-running it has no effect — so the same pass is safe to run at every hook point. There are four active hooks:
+Whenever it is invoked, Claudinine runs one pass over the whole session transcript: copy full content to the sidecar, then compact. This pass is idempotent — re-running it has no effect — so the same pass is safe to run at every hook point. There are six active hooks:
 
 - On a new prompt — to compact the previous turn.
-- On session exit — to compact the final turn, leaving the file clean at rest. Subagent transcripts (`<session>/subagents/agent-*.jsonl`) are swept here too, each with its own sidecar.
+- On turn end — for autonomous stretches (scheduled tasks, loops, workflow runs) that chain many turns with no prompt between them. Throttled to at most one pass per two minutes, so it stays quiet in interactive sessions where the per-prompt pass already runs.
+- On subagent completion — to compact that agent's transcript (`<session>/subagents/agent-*.jsonl`) the moment it finishes, each with its own sidecar. Subagent transcripts compact best of all file types.
+- On session exit — to compact the final turn, leaving the file clean at rest. Subagent transcripts are swept here too, as repair for any missed completion events.
 - On session start — acts as repair for crash leftovers, plus garbage collection of sidecars and orphaned session directories.
 - Before Claude's compaction — same reasons as session start.
 
@@ -35,6 +39,8 @@ This behavior is what allows Claudinine to be run through hooks only, without an
 Every rewrite is validated before an atomic swap, and any failed check leaves the original untouched. See [docs/session-file-changes.md](docs/session-file-changes.md) for exactly what is modified, why, and what the safety guarantees are.
 
 Compaction cannot touch the live in-memory context of a running session — Claude Code loads the transcript once and works from memory. The benefit therefore arrives every time you resume a session.
+
+On Cowork that moment comes more often than in the CLI, not less: cloud sessions are torn down when idle and re-hydrated from the transcript on the next activity, so one session pays the reload repeatedly within its life — each time from the compacted file. What shrinks there is the long tail: when the cloud container is eventually reclaimed, the transcript and its side file go together, so the archive does not outlive the session the way a local one does.
 
 One small native binary per platform, no runtime, published for x64/arm64 on Windows, macOS and Linux.
 

@@ -39,7 +39,7 @@ from compare import DEFAULT_CORPUS, ENC
 HEADER = (
     "[claudinine: this turn originally ran {n} separate tool calls. "
     "Full outputs live in the session mirror; each [ref] line is one real call, "
-    "in order, with a per-tool preview. Interleaved assistant notes are verbatim.\n\n"
+    "in order, with a per-tool preview.\n\n"
     "RETRIEVAL — use the targeted form; printing a whole record costs hundreds-to-thousands of tokens:\n"
     "  claudinine get {sid} --ref REF --grep PATTERN   # matching lines (PREFERRED)\n"
     "  claudinine get {sid} --grep PATTERN             # search all archived outputs\n"

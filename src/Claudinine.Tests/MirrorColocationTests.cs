@@ -207,6 +207,85 @@ public sealed class MirrorColocationTests : IDisposable
         await Assert.That(File.Exists(Path.Combine(claudinine, "agent-dead.jsonl.seen"))).IsFalse();
     }
 
+    // The app's own sidecars — tool-results/ offloads, workflows/ — must never
+    // be selected by any GC path while their session lives (cowork O7). They may
+    // only ever go with the WHOLE dir of a dead session (transcript gone + 24 h
+    // quiet), which is SessionDirGc's documented contract, not a selection.
+    [Test]
+    public async Task NoGcPathTouchesALiveSessionsToolResults()
+    {
+        string sid = "12345678-1234-1234-1234-123456789abc";
+        string output = "tool output " + new string('o', 2000);
+        var b = new TranscriptBuilder().UserPrompt("do the thing");
+        for (int i = 0; i < 3; i++)
+            b.ToolCall("Bash", new JsonObject { ["command"] = $"echo step {i}" }, output + i);
+        b.AssistantText("done");
+        string transcript = b.WriteTo(_project, sid + ".jsonl");
+        Compactor.Run(transcript);
+
+        string sessionDir = Path.Combine(_project, sid);
+        string claudinine = Path.Combine(sessionDir, "claudinine");
+        string offload = Path.Combine(sessionDir, "tool-results", "abc123.txt");
+        Directory.CreateDirectory(Path.Combine(sessionDir, "tool-results"));
+        File.WriteAllText(offload, "offloaded output");
+        string workflow = Path.Combine(sessionDir, "workflows", "wf_1.json");
+        Directory.CreateDirectory(Path.Combine(sessionDir, "workflows"));
+        File.WriteAllText(workflow, "{}");
+        // Bait the colocated sweep must reap — proof the sweeps ran hot, and
+        // the survivors below survived selection, not a sweep that no-oped.
+        string bait = Path.Combine(claudinine, "agent-dead.jsonl");
+        File.WriteAllText(bait, "{}\n");
+        // Age everything out of SessionDirGc's grace window so only the
+        // transcript-alive check protects the dir.
+        DateTime old = DateTime.UtcNow - TimeSpan.FromDays(30);
+        foreach (string entry in Directory.EnumerateFileSystemEntries(
+            sessionDir, "*", SearchOption.AllDirectories))
+        {
+            if (Directory.Exists(entry))
+            {
+                Directory.SetCreationTimeUtc(entry, old);
+                Directory.SetLastWriteTimeUtc(entry, old);
+            }
+            else
+            {
+                File.SetCreationTimeUtc(entry, old);
+                File.SetLastWriteTimeUtc(entry, old);
+            }
+        }
+        Directory.SetCreationTimeUtc(sessionDir, old);
+        Directory.SetLastWriteTimeUtc(sessionDir, old);
+
+        Directory.CreateDirectory(LegacyPool);
+        MirrorFile.CollectGarbage([LegacyPool]);
+        MirrorFile.CollectGarbageColocated(claudinine);
+        SessionDirGc.Run(transcript, currentSessionId: null);
+
+        await Assert.That(File.Exists(bait)).IsFalse();
+        await Assert.That(File.Exists(offload)).IsTrue();
+        await Assert.That(File.Exists(workflow)).IsTrue();
+        await Assert.That(File.Exists(MirrorLocator.PathFor(transcript))).IsTrue();
+    }
+
+    [Test]
+    public async Task ColocatedSweepReapsOrphanedLockFiles()
+    {
+        string transcript = BuildCompactableSession();
+        string sessionDir = Path.Combine(_project, "test-session");
+        string claudinine = Path.Combine(sessionDir, "claudinine");
+        Directory.CreateDirectory(claudinine);
+        Directory.CreateDirectory(Path.Combine(sessionDir, "subagents"));
+        File.WriteAllText(Path.Combine(sessionDir, "subagents", "agent-live.jsonl"), "{}\n");
+        File.WriteAllText(Path.Combine(claudinine, "test-session.lock"), "");
+        File.WriteAllText(Path.Combine(claudinine, "agent-live.lock"), "");
+        File.WriteAllText(Path.Combine(claudinine, "agent-dead.lock"), "");
+
+        MirrorFile.CollectGarbageColocated(claudinine);
+
+        await Assert.That(File.Exists(Path.Combine(claudinine, "test-session.lock"))).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(claudinine, "agent-live.lock"))).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(claudinine, "agent-dead.lock"))).IsFalse();
+    }
+
     [Test]
     public async Task ColocatedSweepIgnoresHeaderPathsEntirely()
     {

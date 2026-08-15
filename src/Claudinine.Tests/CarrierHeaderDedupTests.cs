@@ -72,6 +72,10 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         // First carrier: full instructions intact.
         await Assert.That(first).Contains("RETRIEVAL — ");
         await Assert.That(first).Contains("REPORT of past actions");
+        // Never describe assistant content as spliced into the tool result —
+        // Fable 5's safeguards block every resume over that sentence (see
+        // ChainCollapseRule.Header's constraint comment).
+        await Assert.That(first).DoesNotContain("Interleaved assistant notes");
 
         // Second carrier: short header, but everything load-bearing survives —
         // call count, get syntax with session id, report warning, refs, notes.
@@ -97,11 +101,17 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         await Assert.That(File.ReadAllText(path)).IsEqualTo(afterFirst);
     }
 
+    /// <summary>The exact FABLE-BLOCKING sentence old headers carried, split so
+    /// this source file never contains it contiguously (same reason as
+    /// CarrierHeaderDedupRule.LegacySentence).</summary>
+    private const string LegacySentence =
+        " Interleaved assistant" + " notes are verbatim.";
+
     /// <summary>The exact header 0.1.1–0.1.4 wrote, for retro-shortening coverage.</summary>
     private static string LegacyFullHeader(int calls) =>
         $"[claudinine: this turn originally ran {calls} separate tool calls. " +
         "Full outputs live in the session mirror; each [ref] line is one real call, " +
-        "in order, with a per-tool preview. Interleaved assistant notes are verbatim.\n\n" +
+        $"in order, with a per-tool preview.{LegacySentence}\n\n" +
         "RETRIEVAL — use the targeted form; printing a whole record costs hundreds-to-thousands of tokens:\n" +
         "  claudinine get test-session --ref REF --grep PATTERN   # matching lines (PREFERRED)\n" +
         "  claudinine get test-session --grep PATTERN             # search all archived outputs\n" +
@@ -134,9 +144,11 @@ public sealed class CarrierHeaderDedupTests : IDisposable
             .OfType<JsonValue>()
             .Select(v => v.TryGetValue<string>(out string? s) ? s : "")
             .ToList();
-        // Exactly one full-instructions block left, on the earlier carrier.
+        // Exactly one full-instructions block left, on the earlier carrier —
+        // with the Fable-blocking sentence healed out of the kept legacy header.
         string full = await Assert.That(contents).HasSingleItem(c => c.Contains("RETRIEVAL — "));
         await Assert.That(full).Contains("preview one");
+        await Assert.That(full).DoesNotContain("Interleaved assistant notes");
         // The later carrier: shortened header, body intact including refs and notes.
         string second = contents.Single(s => s.Contains("preview three"));
         await Assert.That(second).DoesNotContain("RETRIEVAL — ");
@@ -144,6 +156,32 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         await Assert.That(second).Contains("claudinine get test-session --ref REF");
         await Assert.That(second).Contains("[bbbb1111] Read(f.cs)");
         await Assert.That(second).Contains("(note) legacy note");
+        await Assert.That(second).DoesNotContain("Interleaved assistant notes");
+    }
+
+    // The heal must reach a [ref] preview quoting the sentence (a session
+    // working on this very codebase), not just the header — the safeguard
+    // trips on the sentence wherever it sits in the tool result.
+    [Test]
+    public async Task LegacySentenceQuotedInAPreviewIsHealedToo()
+    {
+        string body = "[eeee1111] Read(ChainCollapseRule.cs) -> 900b :: " +
+            $"preview quoting:{LegacySentence} end";
+        var b = new TranscriptBuilder().UserPrompt("old work");
+        b.ToolCall("Bash", new JsonObject { ["command"] = "one" }, LegacyFullHeader(2) + body);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string content = Load(path).SelectMany(r =>
+                (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
+            .Select(x => x["content"])
+            .OfType<JsonValue>()
+            .Select(v => v.TryGetValue<string>(out string? s) ? s : "")
+            .Single(c => c.Contains("[eeee1111]"));
+        await Assert.That(content).DoesNotContain("Interleaved assistant notes");
+        await Assert.That(content).Contains("preview quoting: end");
     }
 
     [Test]
