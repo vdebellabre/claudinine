@@ -1,9 +1,22 @@
 {
   "name": "claudinine",
-  "version": "0.1.17",
+  "version": "0.1.18",
+  "displayName": "Claudinine",
   "description": "Silent Claude Code context optimizer: compacts transcripts at re-read boundaries (bash-read dedup, archive retrieval, chain-collapse). Install and forget.",
   "author": {
-    "name": "vlajoumard"
+    "name": "vdebellabre",
+    "url": "https://github.com/vdebellabre"
   },
-  "license": "MIT"
+  "homepage": "https://github.com/vdebellabre/claudinine#readme",
+  "repository": "https://github.com/vdebellabre/claudinine",
+  "license": "MIT",
+  "keywords": [
+    "context",
+    "compaction",
+    "transcript",
+    "tokens",
+    "performance",
+    "native-aot"
+  ],
+  "hooks": "./hooks/hooks.json"
 }
