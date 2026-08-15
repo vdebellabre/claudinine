@@ -125,6 +125,39 @@ public sealed class CloneVerbTests : IDisposable
     }
 
     [Test]
+    public async Task RewritesLauncherFormRetrievalCommands()
+    {
+        // Launcher-form headers embed the source sid twice: in the launcher PATH
+        // (…/<sid>/claudinine/run.sh) and as the get argument. Both must point at
+        // the clone, so its header resolves to the clone's own launcher.
+        string digest = "[claudinine: …\n  sh \"C:/Users/u/.claude/projects/proj/" + SourceId +
+            "/claudinine/run.sh\" get " + SourceId + " --ref REF --full\n]";
+        var rec = new JsonObject
+        {
+            ["type"] = "user",
+            ["uuid"] = "u1",
+            ["sessionId"] = SourceId,
+            ["message"] = new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "tool_result",
+                    ["content"] = digest,
+                }),
+            },
+        };
+        WriteTranscript(rec.ToJsonString());
+
+        await Assert.That(CloneVerb.Run([SourceId], _root)).IsEqualTo(0);
+
+        string cloneId = await CloneId();
+        string cloned = ReadRecords(TranscriptPath(cloneId))[0]["message"]!["content"]![0]!["content"]!
+            .GetValue<string>();
+        await Assert.That(cloned).Contains($"/{cloneId}/claudinine/run.sh\" get {cloneId} --ref");
+        await Assert.That(cloned).DoesNotContain(SourceId);
+    }
+
+    [Test]
     public async Task PersistedOutputSidecarPathSurvivesClone()
     {
         // The app's <persisted-output> stubs embed an absolute sidecar path under

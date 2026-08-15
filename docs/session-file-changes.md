@@ -45,6 +45,14 @@ Two locations, both belonging to this plugin or the session it is compacting:
    are still read, and a legacy mirror is migrated to the colocated path the
    first time its session is touched.)
 
+   The same `claudinine/` directory also holds two tiny **retrieval
+   launchers**, `run.sh` and `run.cmd`, regenerated on every pass to point at
+   the currently running binary. The digest headers invoke retrieval through
+   `sh <…>/claudinine/run.sh` rather than a bare `claudinine`, because a
+   claude.ai-hosted (Cowork) install puts nothing on PATH. They are safe to
+   delete — the next pass rewrites them — and if the session tree moves, the
+   header's launcher path self-heals on the next pass.
+
 If the transcript carries retrieval stubs pointing at its own mirror and no
 mirror can be found anywhere, the plugin fails closed: no compaction, no mirror
 writes, nothing — the loss stays visible instead of being papered over.
@@ -133,8 +141,10 @@ Two further properties worth stating:
   records: ~37.8k tokens replayed from cache, no error, no UI breakage.
 - **Nothing is destroyed.** Full original content stays in the mirror and is
   retrievable with `claudinine get <session-id> --ref <ref> [--grep P | --info |
-  --full | --media]`. A mirror is deleted only once its own transcript no longer
-  exists.
+  --full | --media]` (or, where the binary is not on PATH, the same arguments
+  through the session's launcher: `sh <…>/<session-id>/claudinine/run.sh get …`
+  — the exact command every digest header spells out). A mirror is deleted only
+  once its own transcript no longer exists.
 - **Everything is reversible.** `claudinine restore-compaction-off <session-id>`
   (run while the session is closed) rebuilds the transcript from its mirror —
   verified line-identical to the pre-compaction original on the heaviest real
@@ -176,7 +186,7 @@ Stated plainly, because they are real:
 
 ## Verifying the claims
 
-- `cd src && dotnet run --project Claudinine.Tests` — 285 tests, covering each
+- `cd src && dotnet run --project Claudinine.Tests` — 308 tests, covering each
   rule, the validation gate, and the rechaining logic.
 - `CLAUDININE_DEBUG=1` on any hook invocation prints what fired and what was
   refused.

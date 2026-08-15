@@ -1,7 +1,17 @@
 # Claudinine × Cowork — compatibility checklist
 
 Status legend: **[V]** verified live in a Cowork cloud session (2026-08-15, Claude Code 2.1.233,
-`entrypoint: remote_cowork`) · **[?]** unknown, needs a test · **[!]** known gap, needs work.
+`entrypoint: remote_cowork`) · **[?]** unknown, needs a test · **[!]** known gap, needs work ·
+**[X]** closed.
+
+Rev 3 (2026-08-15): **A2 closed green** — the account plugin pipeline preserves exec bits AND
+binary bytes, so a native binary can ship in a hosted plugin as long as it is not in `bin/`. A4, A5
+and A6 closed by the same probe run. A0 (no top-level `bin/`) stands as the packaging blocker; E5
+(retrieval without PATH) is the consequence. C3 gains a concrete mechanism: `SubagentStop` carries
+`agent_transcript_path`.
+
+Rev 2: E1 and A6 closed by measurement; E2 closed by the mirror-colocation change
+(`<project>/<sid>/claudinine/`) plus the `MirrorLost` tripwire in `Compactor`; new item E4.
 
 Two Cowork runtimes matter, and they differ:
 
@@ -17,29 +27,43 @@ Two Cowork runtimes matter, and they differ:
 
 ## A. Distribution & install
 
+- **A0 [X] Resolved — executables moved to `libexec/`.** The validator refusal (measured
+  2026-08-15: *"claude.ai-hosted plugins may not ship bin/ executables because they are added to
+  PATH on the CLI but are not shown on the admin approval surface"*) is addressed by the
+  `docs/cowork-packaging-workorder.md` implementation: canonical layout is `libexec/` (shims +
+  six RID binaries), `hooks.json` invokes `${CLAUDE_PLUGIN_ROOT}/libexec/claudinine`, and
+  `pack-plugin.ps1` produces two artifacts — the CLI zip (adds a `bin/` of 2-line forwarders so
+  human verbs stay on PATH) and `-Hosted` → `claudinine-<v>.plugin` with no `bin/` at all. CI
+  asserts `test ! -e verify-hosted/bin` on every pack, so the refused layout cannot ship again.
+  Retrieval without PATH is E5's launcher. Remaining: an actual account-upload of the `.plugin`
+  to confirm the validator accepts it (acceptance test 1).
 - **A1 [!] Establish the install path.** `/plugin install claudinine` is not it: cloud sessions run
   with `SKIP_PLUGIN_MARKETPLACE=true`, and plugins arrive pre-synced from the account into
   `~/.claude/plugins/synced/<name>/`. Decide the supported route — `.plugin` bundle installed into
   the account from the desktop app (then synced), vs. local-mode-only marketplace install.
-- **A2 [?] Executable bit through the sync pipeline.** `build.yml` packs with the `zip` CLI
-  specifically because it stores Unix permission bits, and verifies `test -x` after extract. The
-  account→session sync is a different pipeline. If it drops the mode bits, every hook fails
-  silently (fail-closed = invisible). Fallback: `sh -c 'chmod +x "$0" && exec "$0" hook'`.
+- **A2 [X] Executable bit AND binary integrity survive the plugin sync.** Measured 2026-08-15 with
+  `claudinine-probe` v0.2 installed into the account and synced into a live cloud session: the three
+  files packed `755` materialised `-rwxr-xr-x` at
+  `~/.claude/plugins/synced/claudinine-probe/libexec/`, data files stayed `644`, and direct
+  execution without a shell interpreter worked. A 4 KiB blob of NULs, `0x1a`, lone CR/LF, `0xff
+  0xfe` and invalid UTF-8 round-tripped byte-identical (sha256 match, 4096 bytes). **A native binary
+  can ship in a hosted plugin** — the 1980-mtime/`644` pattern seen on `cowork-plugin-management` was
+  simply a markdown-only plugin, not evidence of stripping. Packaging constraint is A0, not this.
 - **A3 [?] Sync limits.** The syncer has a `synced_file_limit_exceeded` path with constants around
   4096 files / 25 MB per file / 64 MB total. Six RIDs ≈ 19 MB unpacked — probably fine, but confirm.
   Consider a Linux-only bundle for Cowork (see B1): smaller, and no dead mac/win binaries.
-- **A4 [?] `CLAUDE_PLUGIN_ROOT` for synced plugins.** Synced plugins sit one level deeper than the
-  documented `~/.claude/plugins/<name>/`. Confirm `${CLAUDE_PLUGIN_ROOT}` resolves to
-  `~/.claude/plugins/synced/claudinine` and that `bin/` survives the round trip intact.
-- **A5 [?] Plugin hooks are registered for *synced* plugins under the cowork entrypoint.** Proven
-  [V] for a skills-dir plugin in a headless run in the Cowork container (see C4); the synced +
-  interactive-cowork combination is the one that actually ships. No env flag disables plugin hooks
-  (only `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, which we don't care about — we register no MCP).
-- **A6 [V] `CLAUDE_PLUGIN_DATA` naming — moot for mirrors** since colocation (2026-08-15): mirrors,
-  skip markers and load stamps are written to `<sid>/claudinine/`, derived from `transcript_path`
-  alone, so the data-dir name no longer matters on the write path. The
-  `~/.claude/plugins/data/claudinine-*` glob survives only as a legacy READ fallback for
-  pre-colocation mirrors, which a Cowork container never has.
+- **A4 [X] `CLAUDE_PLUGIN_ROOT` for synced plugins.** Resolves to
+  `~/.claude/plugins/synced/<plugin-name>`, as seen by the hooks themselves. Whole tree intact.
+- **A5 [X] Synced-plugin hooks register under the cowork entrypoint — and do so mid-session.** The
+  plugin was installed into the account while a cloud session was already running (started 08:02,
+  synced 12:28); its `UserPromptSubmit` hook fired on the very next prompt at 12:30, and
+  `SubagentStop` on the next subagent. No restart needed. `SessionStart` did not fire, having
+  already passed — so a first-install session skips the repair pass, which is harmless.
+- **A6 [X] `CLAUDE_PLUGIN_DATA` naming.** `~/.claude/plugins/data/<plugin-name>-<source>` — an
+  account-synced plugin gets `-inline` (`…/data/claudinine-probe-inline`), a skills-dir install got
+  `-skills-dir`. The legacy `claudinine-*` glob matches both, and post-colocation this only affects
+  reads of pre-migration mirrors. `HOME=/root` in both hook and Bash contexts, so the legacy
+  `~/.claudinine` fallback agrees too.
 
 ## B. Runtime & platform
 
@@ -62,13 +86,18 @@ Two Cowork runtimes matter, and they differ:
   autonomous stretches — scheduled tasks, `/loop`, Workflow runs, Monitors — where dozens of turns
   pass with no user prompt at all. The per-turn boundary that always fires is `Stop`. Evaluate
   adding `Stop` (Cowork already registers one) with a min-interval guard so the cost stays bounded.
-- **C3 [!] Subagent sweep timing.** `CompactSubagents` runs only at `SessionStart`/`SessionEnd`. A
-  single Cowork `Workflow` can spawn dozens of agents inside one session, so `subagents/` grows
-  unbounded between boundaries — and subagent transcripts are the best-compacting file type (82%).
-  Consider `SubagentStop`, or sweeping on the `Stop` trigger from C2.
+- **C3 [!] Subagent sweep timing — with a better mechanism than sweeping.** `CompactSubagents` runs
+  only at `SessionStart`/`SessionEnd`, while a single Cowork `Workflow` spawns dozens of agents
+  inside one session, so `subagents/` grows unbounded between boundaries — and subagent transcripts
+  are the best-compacting file type (82%). Measured: `SubagentStop` fires per agent and its payload
+  carries **`agent_transcript_path`** (plus `agent_id`, `agent_type`, `stop_hook_active`,
+  `background_tasks`, `session_crons`). So compact *that one file* the moment it completes — no
+  directory enumeration, no waiting for a boundary, cost proportional to one agent's output.
 - **C4 [?] `SessionEnd` reliability.** In cloud the container is reclaimed on idle; a clean
   `SessionEnd` may never fire. That shifts weight onto the `SessionStart` repair pass — which only
   pays off if the mirror and transcript both survive (see E3).
+- **C6 [?] Cowork-only hook payload fields.** `SubagentStop` carries `background_tasks` and
+  `session_crons`; worth a look at whether any other event exposes state a compactor should respect.
 - **C5 [?] `PreCompact` fires.** Cowork forces autocompact lower (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80`),
   so this event should be *more* frequent than in the CLI. Confirm.
 
@@ -95,29 +124,51 @@ Two Cowork runtimes matter, and they differ:
 
 ## E. Retrieval & mirror durability
 
-- **E1 [!] `claudinine` is not on `PATH`.** Digest headers instruct bare `claudinine get <sid> --ref …`,
-  run from the Bash tool, which inherits neither `CLAUDE_PLUGIN_ROOT` nor `CLAUDE_PLUGIN_DATA`. If
-  the binary isn't resolvable, every retrieval instruction in every digest is dead on arrival.
-  Options: absolute path in the header, a `~/.local/bin/claudinine` symlink dropped at
-  `SessionStart`, or a `PATH` addition. (Worth checking whether this already bites in the CLI.)
-  Since colocation, the env-var half of this item is gone: `get` resolves mirrors from the
-  transcript layout alone, no `CLAUDE_PLUGIN_DATA` needed. Only binary resolution remains.
-- **E2 [V-by-construction, verify live] Mirrors live inside whatever gets snapshotted** — resolved
-  2026-08-15 by making `<project>/<sid>/claudinine/` the canonical mirror location. The sidecar dir
-  already holds state a resumed session cannot function without (`workflows/journal.jsonl` is
-  replayed on Workflow resume, `tool-results/*.txt` are pointed at by transcript stubs), so any
-  snapshot/sync that preserves the session preserves the mirror, by placement. Legacy flat-pool
-  mirrors are migrated on first touch. Backstop for the residual case (a restore that drops the
-  claudinine dir anyway): the missing-mirror tripwire — a transcript whose stubs name its OWN sid
-  with no mirror findable anywhere gets NO further passes, not even mirror writes, so the loss stays
-  visible instead of compounding. Remaining live checks: Cowork tolerates a foreign `claudinine/`
-  subdir in `<sid>/` (UI, sync, snapshot round-trip), and F2's re-upload behavior with the mirror
-  present.
-- **E3 [V] Mirror GC vs. cloud lifetime — restructured by colocation.** The mirror now dies exactly
-  when its session dir dies (`SessionDirGc`, 24 h grace), and the colocated sweep is structural — it
-  tests sibling existence, never the absolute paths recorded in headers, precisely because
-  cloud restore and cross-device sync relocate the tree and make recorded paths stale. The legacy
-  header-based sweep still runs, but only over the old flat pools.
+- **E1 [!/X] PATH: the slot exists, but hosted plugins may not fill it.** Claude Code appends
+  `<pluginRoot>/bin` to the **Bash tool's** PATH **unconditionally — even when no `bin/` directory
+  exists**: with the probe installed, PATH contained
+  `…/plugins/synced/claudinine-probe/bin` while the plugin shipped only `libexec/`. A non-`bin`
+  directory is never added (`libexec` was not on PATH, `command -v` failed). Combined with A0 this
+  means a hosted plugin gets a dangling PATH entry it is forbidden to populate at pack time.
+  Materialising `$CLAUDE_PLUGIN_ROOT/bin/` from a `SessionStart` hook *would* work — and would
+  reproduce exactly the un-reviewed PATH content A0 exists to prevent. Treat that as circumvention,
+  not as the design. Use E5(a) instead. Original measurement: Claude Code appends every installed
+  plugin's `bin/` directory to the **Bash tool's** PATH. Proven: a probe plugin's `bin/marker-tool` resolved
+  via `command -v`, and the live PATH already ends with
+  `…/plugins/synced/cowork-plugin-management/bin`. So the bare `claudinine get …` in digest headers
+  works in Cowork as in the CLI. Notes: hook processes do *not* get plugin bin dirs on PATH (they
+  get `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA`; the hook already uses an absolute path), and the
+  same bin dir was appended twice — don't assume dedup. Conditional on A2.
+- **E5 [X] Resolved — retrieval goes through a per-session launcher.** Option (a) implemented
+  (`src/Claudinine/Mirror/Launcher.cs`): every pass writes `run.sh`/`run.cmd` next to the colocated
+  mirror, targeting `Environment.ProcessPath` (re-resolved each pass, so plugin updates and install
+  contexts self-correct). Digest headers emit `sh "<abs>/claudinine/run.sh" get <sid> …` — no PATH
+  entry, exec-bit-independent, quoted against spacey paths. The header's absolute path SELF-HEALS:
+  CarrierHeaderDedupRule regenerates the first carrier's command block from the current launcher
+  path on every pass, which also upgrades pre-launcher (bare `claudinine get`) headers in place.
+  Every matcher handles both forms forever: `Compactor.MirrorLost` (tripwire), `ForkHealRule`
+  (retarget, incl. the launcher path via blanket sid replace), `CloneVerb` (phrase + path pairs),
+  header dedup's sid parse. `run.sh` also exports `CLAUDININE_DIR`, giving `get` a direct-addressing
+  fast path immune to prefix collisions. Option (b) — populating a PATH dir from a hook — was
+  rejected as circumvention of the A0 ban.
+- **E2 [X] Mirror durability — solved by placement.** Mirrors are now colocated at
+  `<project>/<sid>/claudinine/<stem>.jsonl`, inside the same sidecar dir as `subagents/`,
+  `tool-results/` and `workflows/`, so any snapshot, restore, sync or delete carries mirror and
+  transcript together. Backed by `Compactor.MirrorLost`, a fail-closed tripwire: a transcript
+  carrying its *own* stubs with no mirror anywhere disables the whole pass (including the mirror
+  append, so the evidence isn't blinded), while a fork carrying the *parent's* stubs still runs so
+  `ForkHealRule` can adopt. Legacy flat pools stay read-only with one-time migration on first touch.
+- **E3 [?] Mirror GC vs. cloud lifetime.** GC assumes transcripts age out slowly on a developer's
+  disk. Cloud containers are recycled aggressively; check the interaction so GC never runs against a
+  half-restored tree. Note `CollectGarbageColocated` deliberately ignores recorded absolute paths
+  (they go stale exactly when a tree moves) and tests sibling existence instead — the right call for
+  snapshot/restore.
+- **E4 [X] `MirrorFile.CollectGarbageColocated` is wired.** Resolved in 7a26e04 (the colocation
+  commit itself; the finding predated it). `HookRunner` calls it at `SessionStart` on the session's
+  own claudinine dir, alongside `MirrorFile.CollectGarbage()` (legacy pools) and `SessionDirGc.Run()`
+  — so files orphaned *inside a living session* (a deleted subagent transcript's mirror, its
+  `.skip`/`.load`/`.seen`) are swept once per session, off the per-prompt critical path. Other
+  sessions' dirs are their own hooks' business, or `SessionDirGc`'s when they die.
 
 ## F. Cowork-specific UX & safety
 
@@ -145,10 +196,14 @@ Two Cowork runtimes matter, and they differ:
 
 ## Suggested order
 
-1. **E2 (done 2026-08-15 — colocated mirrors + missing-mirror tripwire; one live round-trip check
-   left), A2, E1** — the three that decide whether this is safe and useful at all.
-2. **D5 + G1** — run the compactor over real Cowork transcripts and see what breaks. (This session's
+1. ~~**E2, A2, E1**~~ — all closed. The pipeline preserves exec bits and binary content, so the
+   remaining problems are packaging shape and retrieval, not feasibility.
+2. ~~**A0 + E5**~~ — done (see `docs/cowork-packaging-workorder.md`): `libexec/` layout + hosted
+   `.plugin` artifact, launcher-form digest headers with self-healing paths. Left: upload the
+   `.plugin` to an account and run the acceptance tests.
+3. ~~**E4**~~ — was already wired by the colocation commit.
+3. **D5 + G1** — run the compactor over real Cowork transcripts and see what breaks. (This session's
    own transcript is already a valid specimen.)
-3. **C2/C3** — the trigger model, which is where Cowork differs most from the CLI.
-4. **A1/A4/A5/A6** — packaging and install, once the above says it's worth shipping.
-5. **F1/F2** — product-level calls.
+4. **C2/C3** — the trigger model, which is where Cowork differs most from the CLI.
+5. **A1/A4/A5** — packaging and install, once the above says it's worth shipping.
+6. **F1/F2** — product-level calls.

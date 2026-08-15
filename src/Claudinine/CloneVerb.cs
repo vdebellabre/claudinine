@@ -195,23 +195,35 @@ internal static class CloneVerb
     }
 
     /// <summary>
-    /// Rewrite the `claudinine get &lt;sid&gt; …` commands our own digests embed in their
-    /// text. Without this the clone's digests would send every retrieval at the source
-    /// session id — which resolves to the source mirror, or to nothing once the source
-    /// is archived. Every emitter (chain-collapse, carrier-header dedup, anchor-input
-    /// stubs, image-strip) spells exactly `claudinine get &lt;full-id&gt;`, so the rewrite
-    /// matches that whole phrase — NEVER the bare id, which also occurs in strings that
-    /// must survive verbatim (persisted-output sidecar paths under the source session's
-    /// directory are the only pointer to those files).
+    /// Rewrite the retrieval commands our own digests embed in their text. Without
+    /// this the clone's digests would send every retrieval at the source session id
+    /// — which resolves to the source mirror, or to nothing once the source is
+    /// archived. Emitters spell either `claudinine get &lt;full-id&gt;` (stubs, short
+    /// headers, pre-launcher full headers) or `sh "…/&lt;full-id&gt;/claudinine/run.sh"
+    /// get &lt;full-id&gt;` (launcher-form full headers) — both are rewritten, plus the
+    /// launcher path's own directory component, so the clone's header points at the
+    /// clone's launcher. Whole phrases only — NEVER the bare id, which also occurs
+    /// in strings that must survive verbatim (persisted-output sidecar paths under
+    /// the source session's directory are the only pointer to those files).
     /// </summary>
     private static void RewriteRetrievalCommands(JsonNode? node, string sourceId, string targetId)
     {
-        string sourcePhrase = "claudinine get " + sourceId;
-        string targetPhrase = "claudinine get " + targetId;
+        (string Source, string Target)[] phrases =
+        [
+            ("claudinine get " + sourceId, "claudinine get " + targetId),
+            ("run.sh\" get " + sourceId, "run.sh\" get " + targetId),
+            ($"/{sourceId}/claudinine/run.sh", $"/{targetId}/claudinine/run.sh"),
+        ];
         Rules.RuleHelpers.VisitStrings(node, text =>
-            text.Contains(sourcePhrase, StringComparison.OrdinalIgnoreCase)
-                ? text.Replace(sourcePhrase, targetPhrase, StringComparison.OrdinalIgnoreCase)
-                : null);
+        {
+            string rewritten = text;
+            foreach ((string source, string target) in phrases)
+            {
+                if (rewritten.Contains(source, StringComparison.OrdinalIgnoreCase))
+                    rewritten = rewritten.Replace(source, target, StringComparison.OrdinalIgnoreCase);
+            }
+            return ReferenceEquals(rewritten, text) ? null : rewritten;
+        });
     }
 
     /// <summary>The source session's mirror: colocated first, then the legacy pools.</summary>

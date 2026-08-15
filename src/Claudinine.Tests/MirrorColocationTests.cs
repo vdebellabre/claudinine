@@ -107,7 +107,7 @@ public sealed class MirrorColocationTests : IDisposable
         string transcript = BuildCompactableSession();
         Compactor.Run(transcript);
         string compacted = File.ReadAllText(transcript);
-        await Assert.That(compacted).Contains("claudinine get test-session"); // own stubs
+        await Assert.That(compacted).Contains(" get test-session"); // own stubs, either form
 
         // The loss: the claudinine dir is gone but the stubs remain.
         Directory.Delete(Path.Combine(_project, "test-session", "claudinine"), recursive: true);
@@ -117,6 +117,44 @@ public sealed class MirrorColocationTests : IDisposable
 
         await Assert.That(File.ReadAllText(transcript)).IsEqualTo(compacted); // untouched
         // No fresh mirror: the tripwire must stay armed and the loss visible.
+        await Assert.That(File.Exists(MirrorLocator.PathFor(transcript))).IsFalse();
+    }
+
+    [Test]
+    public async Task TripwireFiresOnPreLauncherStubsToo()
+    {
+        // Transcripts compacted by 0.1.x/0.2.x promise their mirror with the bare
+        // `claudinine get <sid>` phrase (no launcher path). The tripwire must keep
+        // matching that form forever, alongside the launcher form.
+        var carrier = new JsonObject
+        {
+            ["type"] = "user",
+            ["uuid"] = "99999999-0000-0000-0000-000000000099",
+            ["parentUuid"] = null,
+            ["sessionId"] = "test-session",
+            ["message"] = new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "tool_result",
+                    ["tool_use_id"] = "toolu_0001",
+                    ["content"] = "[claudinine: this turn originally ran 2 separate tool calls. " +
+                        "claudinine get test-session --ref REF --full]",
+                }),
+            },
+            ["claudinine"] = new JsonObject { ["v"] = 1, ["rule"] = "chain-collapse" },
+        }.ToJsonString();
+        var b = new TranscriptBuilder().UserPrompt("hello");
+        b.RawLine(carrier);
+        b.AssistantText("done");
+        string transcript = b.WriteTo(_project);
+        string before = File.ReadAllText(transcript);
+
+        // No mirror anywhere: the pass must stop dead — no rewrite, no fresh mirror.
+        Compactor.Run(transcript);
+
+        await Assert.That(File.ReadAllText(transcript)).IsEqualTo(before);
         await Assert.That(File.Exists(MirrorLocator.PathFor(transcript))).IsFalse();
     }
 

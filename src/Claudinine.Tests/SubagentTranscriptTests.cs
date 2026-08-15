@@ -77,8 +77,8 @@ public sealed class SubagentTranscriptTests : IDisposable
         await Assert.That(File.ReadAllLines(path).Length < linesBefore).IsTrue();
         await Assert.That(text).Contains(ChainCollapseRule.CarrierPrefix);
         // Retrieval must go through the agent-file mirror, not the parent session's.
-        await Assert.That(text).Contains("claudinine get agent-abc123def456abc12 --ref");
-        await Assert.That(text).DoesNotContain("claudinine get test-session");
+        await Assert.That(text).Contains(" get agent-abc123def456abc12 --ref");
+        await Assert.That(text).DoesNotContain(" get test-session");
     }
 
     [Test]

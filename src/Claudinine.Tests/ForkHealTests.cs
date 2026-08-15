@@ -41,7 +41,8 @@ public sealed class ForkHealTests : IDisposable
         b.AssistantText("done");
         parentPath = b.WriteTo(_dir);
         Compactor.Run(parentPath);
-        await Assert.That(File.ReadAllText(parentPath)).Contains("claudinine get test-session");
+        // Form-agnostic: matches both `claudinine get <sid>` and `…run.sh" get <sid>`.
+        await Assert.That(File.ReadAllText(parentPath)).Contains(" get test-session");
 
         string forkPath = Path.Combine(_dir, "fork-session.jsonl");
         var lines = File.ReadAllLines(parentPath).Select(l =>
@@ -69,8 +70,8 @@ public sealed class ForkHealTests : IDisposable
 
         // Digest refs now point at the fork's own session id.
         string text = File.ReadAllText(forkPath);
-        await Assert.That(text).DoesNotContain("claudinine get test-session");
-        await Assert.That(text).Contains("claudinine get fork-session");
+        await Assert.That(text).DoesNotContain(" get test-session");
+        await Assert.That(text).Contains(" get fork-session");
 
         // The fork's mirror holds everything the parent mirror held — including
         // the interior records chain-collapse removed, which exist NOWHERE else.
@@ -91,7 +92,7 @@ public sealed class ForkHealTests : IDisposable
         }
 
         // Parent transcript and mirror untouched.
-        await Assert.That(File.ReadAllText(parentPath)).Contains("claudinine get test-session");
+        await Assert.That(File.ReadAllText(parentPath)).Contains(" get test-session");
         await Assert.That(File.Exists(MirrorLocator.PathFor(parentPath))).IsTrue();
     }
 
@@ -105,8 +106,8 @@ public sealed class ForkHealTests : IDisposable
 
         // Fail-closed: nothing to merge from → refs keep naming the parent (they
         // are dead either way; retargeting would only mask that).
-        await Assert.That(File.ReadAllText(forkPath)).Contains("claudinine get test-session");
-        await Assert.That(File.ReadAllText(forkPath)).DoesNotContain("claudinine get fork-session");
+        await Assert.That(File.ReadAllText(forkPath)).Contains(" get test-session");
+        await Assert.That(File.ReadAllText(forkPath)).DoesNotContain(" get fork-session");
     }
 
     [Test]

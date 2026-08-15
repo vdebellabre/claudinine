@@ -21,6 +21,9 @@ internal static class Compactor
         if (MirrorLost(transcript))
             return;
         bool mirrored = MirrorFile.TryAppendMissing(transcript);
+        // A frozen session still needs retrieval to work (its digests predate
+        // the freeze), so the launcher stays fresh here too.
+        Launcher.EnsureCurrent(transcriptPath);
         Dbg.Log($"compaction skipped (skip marker present); mirrorOk={mirrored}");
     }
 
@@ -37,6 +40,10 @@ internal static class Compactor
         // durably mirrored. Append failure → skip compaction entirely.
         if (!MirrorFile.TryAppendMissing(transcript))
             return;
+
+        // The retrieval launcher the digest headers point at, re-targeted at
+        // the currently running binary on every pass so it can't go stale.
+        Launcher.EnsureCurrent(transcriptPath);
 
         foreach (var rule in RuleCatalog.All)
         {
@@ -74,16 +81,24 @@ internal static class Compactor
     /// carries the PARENT's stubs (their get-commands still name the parent id)
     /// and legitimately has no mirror of its own yet — the pass must run so
     /// ForkHealRule can adopt the parent mirror and retarget those refs. Every
-    /// emitter spells `claudinine get &lt;full-id&gt;` inside the record it stamps,
-    /// so own-sid text inside a marked record is exactly "this session promised
-    /// its own mirror".
+    /// emitter spells a get-command naming the &lt;full-id&gt; inside the record it
+    /// stamps — `claudinine get &lt;id&gt;` (stubs, short headers, pre-launcher full
+    /// headers) or `sh "…/run.sh" get &lt;id&gt;` (launcher-form full headers) — so
+    /// own-sid text inside a marked record is exactly "this session promised
+    /// its own mirror". BOTH forms must stay matched forever: transcripts
+    /// compacted by 0.1.x/0.2.x carry the old phrasing and must keep tripping.
     /// </summary>
     private static bool MirrorLost(TranscriptFile transcript)
     {
-        string ownPhrase = "claudinine get "
-            + Path.GetFileNameWithoutExtension(transcript.Path);
+        string sid = Path.GetFileNameWithoutExtension(transcript.Path);
+        string ownPhrase = "claudinine get " + sid;
+        // The launcher form as it appears in the RAW jsonl line: the closing
+        // quote of the launcher path is JSON-escaped there (`…run.sh\" get <id>`),
+        // and RawLine is the raw line — matching the unescaped form would never hit.
+        string ownLauncherPhrase = "\\\" get " + sid;
         if (!transcript.Records.Any(r => r.View["claudinine"].Exists
-            && r.RawLine.Contains(ownPhrase, StringComparison.OrdinalIgnoreCase)))
+            && (r.RawLine.Contains(ownPhrase, StringComparison.OrdinalIgnoreCase)
+                || r.RawLine.Contains(ownLauncherPhrase, StringComparison.OrdinalIgnoreCase))))
         {
             return false;
         }

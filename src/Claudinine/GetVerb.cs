@@ -18,17 +18,21 @@ internal static class GetVerb
     public static int Run(string[] args) =>
         Run(args,
             Environment.GetEnvironmentVariable("CLAUDE_PLUGIN_DATA"),
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Environment.GetEnvironmentVariable(Launcher.DirEnvVar));
 
     /// <summary>Home seam for tests, same reason as CloneVerb: SpecialFolder
-    /// ignores env overrides, and sid resolution now globs home's projects.</summary>
-    internal static int Run(string[] args, string? pluginData, string home)
+    /// ignores env overrides, and sid resolution now globs home's projects.
+    /// launcherDir is CLAUDININE_DIR — set by run.sh to its own directory, so a
+    /// launcher-invoked get addresses this session's mirrors directly instead of
+    /// globbing every project (faster, and immune to prefix collisions).</summary>
+    internal static int Run(string[] args, string? pluginData, string home, string? launcherDir = null)
     {
         // Same top-level guard as clone: a mirror going away mid-read (GC race,
         // network share) should report and exit 1, not dump a stack trace.
         try
         {
-            return RunCore(args, pluginData, home);
+            return RunCore(args, pluginData, home, launcherDir);
         }
         catch (Exception e)
         {
@@ -37,7 +41,7 @@ internal static class GetVerb
         }
     }
 
-    private static int RunCore(string[] args, string? pluginData, string home)
+    private static int RunCore(string[] args, string? pluginData, string home, string? launcherDir)
     {
         if (args.Length == 0)
         {
@@ -69,7 +73,14 @@ internal static class GetVerb
             return 1;
         }
 
-        var mirrorPaths = MirrorLocator.FindSessionMirrors(session, pluginData, home);
+        // Launcher fast path: run.sh exported its own directory, which holds this
+        // session's mirrors. Only on a hit — a foreign sid typed into a launcher
+        // invocation still falls through to the full search.
+        List<string> mirrorPaths = [];
+        if (launcherDir is not null && Directory.Exists(launcherDir))
+            mirrorPaths = SessionResolver.ResolveByIdOrUniquePrefix([launcherDir], session);
+        if (mirrorPaths.Count == 0)
+            mirrorPaths = MirrorLocator.FindSessionMirrors(session, pluginData, home);
         if (mirrorPaths.Count == 0)
         {
             var searched = MirrorLocator.SearchDirectories(pluginData, home);
