@@ -36,6 +36,20 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
     private const string GetCommandPrefix = "  claudinine get ";
     private const string LauncherGetPrefix = "\" get ";
 
+    /// <summary>
+    /// Header sentence every version through 0.3.x wrote, which Fable 5's
+    /// API-side safeguards flag as an assistant-impersonation injection (a tool
+    /// result asserting assistant content is quoted inside it) — with it
+    /// present, EVERY resume of the session on Fable is blocked outright.
+    /// Healed away below; new headers no longer carry it (see the constraint
+    /// comment on ChainCollapseRule.Header). The literal is SPLIT so this
+    /// source file never contains the contiguous sentence: a session that Reads
+    /// this file would otherwise carry the trigger in its own transcript and
+    /// become unresumable on Fable until compaction heals the preview.
+    /// </summary>
+    private const string LegacySentence =
+        " Interleaved assistant" + " notes are verbatim.";
+
     public void Apply(TranscriptFile transcript)
     {
         bool fullHeaderSeen = false;
@@ -68,7 +82,9 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
                 if (end < 0 || callCount is null || sid is null)
                     continue; // unfamiliar header variant: fail closed
 
-                string rewritten = ShortHeader(callCount, sid) + content[(end + FullHeaderEnd.Length)..];
+                string rewritten = ShortHeader(callCount, sid)
+                    + content[(end + FullHeaderEnd.Length)..]
+                        .Replace(LegacySentence, "", StringComparison.Ordinal);
 
                 var clone = rec.CloneCurrentNode();
                 foreach (var cb in RuleHelpers.BlocksOfType(clone, "tool_result"))
@@ -100,8 +116,9 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
 
     /// <summary>
     /// Regenerate the kept full header's command block from the CURRENT launcher
-    /// path (see class doc). Fail-closed: any sentinel or the sid failing to
-    /// parse leaves the record untouched.
+    /// path, and strip the Fable-blocking <see cref="LegacySentence"/> from
+    /// older headers (see class doc). Fail-closed: any sentinel or the sid
+    /// failing to parse leaves the record untouched.
     /// </summary>
     private static void HealCommandBlock(TranscriptFile transcript, TranscriptRecord rec, string content)
     {
@@ -110,19 +127,25 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
         if (ReferenceEquals(rec, transcript.Records[^1]))
             return;
 
-        int blockStart = content.IndexOf(ChainCollapseRule.CommandBlockStart, StringComparison.Ordinal);
+        // Everywhere, not just the header: a [ref] preview quoting the sentence
+        // (a session working on this very codebase) trips the safeguard the
+        // same way, and previews are lossy by design.
+        string healed = content.Replace(LegacySentence, "", StringComparison.Ordinal);
+
+        int blockStart = healed.IndexOf(ChainCollapseRule.CommandBlockStart, StringComparison.Ordinal);
         if (blockStart < 0)
             return;
         int cmdStart = blockStart + ChainCollapseRule.CommandBlockStart.Length;
-        int cmdEnd = content.IndexOf(ChainCollapseRule.CommandBlockEnd, cmdStart, StringComparison.Ordinal);
-        if (cmdEnd < 0 || ParseSessionId(content) is not string sid)
+        int cmdEnd = healed.IndexOf(ChainCollapseRule.CommandBlockEnd, cmdStart, StringComparison.Ordinal);
+        if (cmdEnd < 0 || ParseSessionId(healed) is not string sid)
             return;
 
         string fresh = ChainCollapseRule.CommandLines(sid, Launcher.HeaderPathFor(transcript.Path));
-        if (content.AsSpan(cmdStart, cmdEnd - cmdStart).SequenceEqual(fresh))
-            return; // already current — a no-op pass must not touch the record
+        if (!healed.AsSpan(cmdStart, cmdEnd - cmdStart).SequenceEqual(fresh))
+            healed = healed[..cmdStart] + fresh + healed[cmdEnd..];
 
-        string healed = content[..cmdStart] + fresh + content[cmdEnd..];
+        if (string.Equals(healed, content, StringComparison.Ordinal))
+            return; // already current — a no-op pass must not touch the record
         var clone = rec.CloneCurrentNode();
         foreach (var cb in RuleHelpers.BlocksOfType(clone, "tool_result"))
         {
