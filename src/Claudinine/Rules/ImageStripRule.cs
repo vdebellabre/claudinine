@@ -29,8 +29,8 @@ internal sealed class ImageStripRule : ICompactionRule
             var rec = records[pos];
             if (rec.IsProtected())
                 continue;
-            if (!age.IsMidAged(pos))
-                continue; // recently shared — keep
+            if (!age.IsImageAged(pos))
+                continue; // recently shared — keep (image clock, faster than IsMidAged)
 
             var node = rec.CurrentView;
             string? sid = node["sessionId"].AsString();

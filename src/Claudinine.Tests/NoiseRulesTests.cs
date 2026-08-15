@@ -380,10 +380,13 @@ public sealed class NoiseRulesTests : IDisposable
     [Test]
     public async Task OldImagesStubbedRecentImagesKept()
     {
+        // Pins both edges of the image clock (faster than the shared IsMidAged):
+        // img-old sits exactly at the threshold, img-new exactly one turn under.
         var b = new TranscriptBuilder().UserPrompt("here is a screenshot");
         b.RawImageMessage("img-old");
-        AgeBy(b, AgeIndex.MidAgeTurns + 1);
+        AgeBy(b, 1);
         b.RawImageMessage("img-new");
+        AgeBy(b, AgeIndex.ImageAgeTurns - 1);
         b.AssistantText("done");
         string path = b.WriteTo(_dir);
 
@@ -396,6 +399,30 @@ public sealed class NoiseRulesTests : IDisposable
             .ToList();
         await Assert.That(imageBlocks).HasSingleItem(); // the recent one
         await Assert.That(AllText(path)).Contains("--media"); // the old one, stubbed with its retrieval pointer
+    }
+
+    [Test]
+    public async Task ImageAgesByObservationCountNotTurns()
+    {
+        // One prompt, no further turns: the image must still age out once
+        // ImageAgeResults observations have landed after it. Short reads stay
+        // under chain-collapse's break-even, so image-strip sees the originals.
+        var b = new TranscriptBuilder().UserPrompt("look at this screenshot");
+        b.RawImageMessage("img");
+        for (int i = 0; i < AgeIndex.ImageAgeResults; i++)
+            b.BashRead($"sed -n '1,5p' f{i}.txt", out _, $"short {i}");
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        var imageBlocks = records
+            .SelectMany(r => (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
+            .Where(x => x["type"]?.GetValue<string>() == "image")
+            .ToList();
+        await Assert.That(imageBlocks).IsEmpty();
+        await Assert.That(AllText(path)).Contains("--media");
     }
 
     [Test]
