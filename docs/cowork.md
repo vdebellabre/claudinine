@@ -2,13 +2,14 @@
 
 Supersedes `cowork-compatibility.md`, `claudinine-cowork-report.md` and `cowork-packaging-workorder.md`.
 
-**Verdict: functionally compatible, and the trigger model is now closed on cloud.** Claudinine
-installs, runs, compacts, and retrieves in Cowork cloud. Packaging was the only hard blocker and it is
-fixed (`libexec/`, launcher-based retrieval). All three trigger-model gaps (O1–O3) are shipped and
-validated against a real host. Local mode's blocker — hooks run on the desktop host, which the
-Linux-only bundle could not serve — is found and fixed in-tree, pending a release to validate (O12);
-what remains besides that is `PreCompact`, fork/clone, the local-mode retrieval namespace split, and
-one statusline accounting defect.
+**Verdict: functionally compatible in both modes.** Claudinine installs, runs, compacts, and
+retrieves in Cowork cloud; it installs, runs, and compacts in local mode (v0.1.22, validated
+2026-08-15 — hooks wired on the desktop host, transcript compacted, mirror colocated). Packaging was
+the only hard blocker and it is fixed (`libexec/`, all six RIDs, launcher-based retrieval). All three
+trigger-model gaps (O1–O3) are shipped and validated against a real cloud host. What remains:
+the local-mode retrieval namespace split (the one functional gap — headers quote host paths the
+sandbox cannot resolve), `PreCompact` (unobserved), fork/clone (untested), and one latent statusline
+accounting defect.
 
 Evidence comes from three live cloud sessions on 2026-08-15, `entrypoint: remote_cowork`: a
 diagnostic-probe session (`f4bcf08f…`, environment measurements) and a functional session
@@ -324,8 +325,9 @@ claude.ai account-import route (marketplaces disabled, Linux-only artifact) alon
 
 ### 4. Coverage gaps
 
-**O12 · Local "on your computer" mode — BLOCKER FOUND AND FIXED IN-TREE (2026-08-15, first local
-run).** Windows desktop, entrypoint `local-agent`, Claude Code 2.1.229, plugin 0.1.21 account-import:
+**O12 · Local "on your computer" mode — FIXED AND VALIDATED (2026-08-15, v0.1.22 re-import: hooks
+execute on the desktop host, transcript compacts, colocated mirror present).** History of the find,
+from the first local run on 0.1.21: Windows desktop, entrypoint `local-agent`, Claude Code 2.1.229, plugin 0.1.21 account-import:
 installs, all six hooks register (`PreCompact` included), and the shim runs from the sandbox printing
 `0.1.21` — the first independent confirmation of O8 on a real host. But **every hook fires and dies,
 exit 127, on every boundary — nothing compacts in local mode on any 0.1.20/0.1.21 install.** Root
@@ -335,8 +337,8 @@ returns `MINGW*`, the shim correctly resolves `libexec/win-x64/claudinine.exe` �
 removed. The shim's own header comment anticipated exactly this path; the 64% bundle cut is what
 broke it. *Fixed in-tree:* the hosted `.plugin` packs all six RIDs plus `claudinine.cmd` again
 (`pack-plugin.ps1`, `-HostedRids` remains as a deliberate-slimming override), and O9's
-absence-assertion — which actively enforced the bug — now asserts presence of all six. Needs the next
-release + account re-import to validate.
+absence-assertion — which actively enforced the bug — now asserts presence of all six. Shipped in
+v0.1.22 and validated the same day by a fresh local run after account re-import.
 
 Findings from the same run, recorded for whoever validates next:
 
