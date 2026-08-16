@@ -1,8 +1,8 @@
 # Claudinine
 
-**Claudinine keeps your Claude Code sessions from getting heavy.**
+**Claudinine keeps your Claude sessions from getting heavy** — in the Claude Code CLI and in Cowork on claude.ai.
 
-Every session, Claude Code writes down everything that happened — every file it read, every command it ran, every search result. That file grows fast, and it is mostly bulk you will never look at again: the full text of a file Claude read once, the output of a build that succeeded twenty turns ago.
+Every session, Claude writes down everything that happened — every file it read, every command it ran, every search result. That file grows fast, and it is mostly bulk you will never look at again: the full text of a file Claude read once, the output of a build that succeeded twenty turns ago.
 
 The next time that session is loaded, all of that bulk gets read back in. It costs tokens, time, and it crowds out the part of the conversation that actually matters.
 
@@ -19,9 +19,13 @@ Across 174 real sessions, transcripts shrank from **189 MB to 43 MB** on disk. T
 
 ## Install
 
-Claudinine is a Claude Code plugin. Run `/plugin install claudinine` in Claude Code, and that is the whole setup — the hooks register themselves and compaction starts with your next prompt. There is nothing to configure.
+Claudinine runs in the Claude Code CLI and in Cowork (claude.ai), in both of its modes — "In the cloud" and "On your computer". Pick the route that matches where you work.
 
-On claude.ai (Cowork), plugin marketplaces are disabled, so `/plugin install` is not the route. Instead, download `claudinine-<version>.plugin` from the [latest release](https://github.com/vdebellabre/claudinine/releases/latest) and import it in claude.ai's plugin settings. It installs account-wide and registers in your Cowork sessions automatically — including sessions already running. That artifact ships Linux binaries only (the only kind a Cowork session can execute); CLI installs on Windows and macOS use the marketplace or the full zip.
+**Claude Code CLI.** Run `/plugin install claudinine`, and that is the whole setup — the hooks register themselves and compaction starts with your next prompt. There is nothing to configure.
+
+**Cowork (claude.ai).** Plugin marketplaces are disabled there, so `/plugin install` is not the route. Download `claudinine-<version>.plugin` from the [latest release](https://github.com/vdebellabre/claudinine/releases/latest) and import it in claude.ai's plugin settings. It installs account-wide and registers in your Cowork sessions automatically — including sessions already running. The same artifact covers both Cowork modes: it carries binaries for all six platforms, because cloud sessions run hooks inside a Linux container while local sessions run them on your own desktop — Windows or macOS included.
+
+The two artifacts differ only in packaging: the `.plugin` file is what claude.ai's uploader accepts, while the CLI zip additionally puts `claudinine` on your PATH for the [retrieval commands](#getting-your-details-back).
 
 ## How it works
 
@@ -42,7 +46,9 @@ Compaction cannot touch the live in-memory context of a running session — Clau
 
 On Cowork that moment comes more often than in the CLI, not less: cloud sessions are torn down when idle and re-hydrated from the transcript on the next activity, so one session pays the reload repeatedly within its life — each time from the compacted file. What shrinks there is the long tail: when the cloud container is eventually reclaimed, the transcript and its side file go together, so the archive does not outlive the session the way a local one does.
 
-One small native binary per platform, no runtime, published for x64/arm64 on Windows, macOS and Linux.
+Cowork also leans harder on two of the hooks above. Sessions there often run long autonomous stretches — scheduled tasks, workflows, agent fan-outs — with no prompt in between, which is exactly what the turn-end hook covers: on one measured cloud session a single autonomous turn went from 285 KB to 36 KB, a stretch that would not have compacted at all without it. And because those stretches spawn many subagents, compacting each agent transcript the moment it finishes matters more than in the CLI: across one session's five agent files, 802 KB of tool output became 142 KB.
+
+One small native binary per platform, no runtime, published for x64/arm64 on Windows, macOS and Linux — which is what lets a single install follow you from the CLI to a cloud container to your own desktop.
 
 ## Getting your details back
 
@@ -59,6 +65,8 @@ That form assumes a CLI/marketplace install, which keeps `claudinine` on PATH. A
 ```bash
 sh ~/.claude/projects/<project>/<session-id>/claudinine/run.sh restore-compaction-off <session-id>
 ```
+
+Claudinine writes that same launcher path into every stub it leaves in the transcript, so Claude can pull an individual output back without you doing anything. One caveat in Cowork's local mode: your session runs commands inside a Linux sandbox while the launcher path is written from the desktop side, so a path quoted in a stub may not resolve as-is from inside a session. Compaction and the retrieval commands both work; you may just have to point them at the launcher yourself.
 
 ## Comparison with Cozempic
 
