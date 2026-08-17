@@ -22,8 +22,11 @@ internal static class Compactor
             return;
         bool mirrored = MirrorFile.TryAppendMissing(transcript);
         // A frozen session still needs retrieval to work (its digests predate
-        // the freeze), so the launcher stays fresh here too.
+        // the freeze), so the launcher — and in local mode the refs dump — stays
+        // fresh here too.
         Launcher.EnsureCurrent(transcriptPath);
+        if (LocalCowork.RefsDirFor(transcriptPath) is string refsDir)
+            RefsDump.TryEnsureCurrent(transcriptPath, refsDir);
         Dbg.Log($"compaction skipped (skip marker present); mirrorOk={mirrored}");
     }
 
@@ -44,6 +47,16 @@ internal static class Compactor
         // The retrieval launcher the digest headers point at, re-targeted at
         // the currently running binary on every pass so it can't go stale.
         Launcher.EnsureCurrent(transcriptPath);
+
+        // Cowork local mode: headers promise plain files under outputs/, so the
+        // dump is part of the mirror-first contract — no dump, no compaction
+        // (docs/cowork-compatibility.md E6/E7: an unkeepable retrieval promise
+        // silently degrades the model into inferring from previews).
+        if (LocalCowork.RefsDirFor(transcriptPath) is string refsDir
+            && !RefsDump.TryEnsureCurrent(transcriptPath, refsDir))
+        {
+            return;
+        }
 
         foreach (var rule in RuleCatalog.All)
         {
@@ -96,14 +109,31 @@ internal static class Compactor
         // quote of the launcher path is JSON-escaped there (`…run.sh\" get <id>`),
         // and RawLine is the raw line — matching the unescaped form would never hit.
         string ownLauncherPhrase = "\\\" get " + sid;
+        // Local-mode headers carry no get-command (their verbs are the model's
+        // file tools); the sid rides in the block's `mirror key:` breadcrumb.
+        string ownMirrorKeyPhrase = "mirror key: " + sid;
         if (!transcript.Records.Any(r => r.View["claudinine"].Exists
             && (r.RawLine.Contains(ownPhrase, StringComparison.OrdinalIgnoreCase)
-                || r.RawLine.Contains(ownLauncherPhrase, StringComparison.OrdinalIgnoreCase))))
+                || r.RawLine.Contains(ownLauncherPhrase, StringComparison.OrdinalIgnoreCase)
+                || r.RawLine.Contains(ownMirrorKeyPhrase, StringComparison.OrdinalIgnoreCase))))
         {
             return false;
         }
         if (MirrorLocator.ExistingMirrorsFor(transcript.Path).Count > 0)
             return false;
+        // Local mode: the refs dump is a second, independent copy of every
+        // archived payload, readable by the tools the headers actually teach.
+        // With it intact, retrieval — the promise the stubs make — still holds;
+        // stopping every future pass forever would protect nothing the dump
+        // doesn't already serve. Restore fidelity is degraded (the mirror is
+        // gone), which a fresh mirror rebuilds forward from here.
+        if (LocalCowork.RefsDirFor(transcript.Path) is string refsDir
+            && Directory.Exists(refsDir)
+            && Directory.EnumerateFiles(refsDir, "*.txt").Any())
+        {
+            Dbg.Log($"mirror lost for {transcript.Path} but local refs dump intact; pass continues");
+            return false;
+        }
         Dbg.Log($"mirror lost for stubbed transcript {transcript.Path}; pass disabled");
         return true;
     }

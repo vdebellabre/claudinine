@@ -58,8 +58,11 @@ public sealed class AnchorInputStubTests : IDisposable
         JsonObject[] records = Load(path);
         JsonObject input = (JsonObject)UseBlock(records)["input"]!;
         string pointer = input["claudinine"]!.GetValue<string>();
-        await Assert.That(pointer).Contains("claudinine get test-session --ref ");
-        await Assert.That(pointer).Contains(" --full");
+        // A pointer, not a command: the carrier's own RETRIEVAL block (same
+        // boundary segment, kept full by header dedup) teaches the how.
+        await Assert.That(pointer).StartsWith("input archived at collapse; original: ref ");
+        await Assert.That(pointer).Contains("RETRIEVAL block");
+        await Assert.That(pointer).DoesNotContain("claudinine get");
         await Assert.That(input["preview"]!.GetValue<string>()).StartsWith("python - <<'EOF' x");
         await Assert.That(input["preview"]!.GetValue<string>().Length <= 90).IsTrue();
         await Assert.That(input["command"]).IsNull(); // original payload gone
@@ -68,7 +71,7 @@ public sealed class AnchorInputStubTests : IDisposable
         JsonObject useRec = records.Single(r =>
             (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>()
                 .Any(x => x["type"]?.GetValue<string>() == "tool_use") == true);
-        await Assert.That(pointer).Contains("--ref " + useRec["uuid"]!.GetValue<string>()[..8]);
+        await Assert.That(pointer).Contains("ref " + useRec["uuid"]!.GetValue<string>()[..8]);
     }
 
     [Test]
@@ -79,7 +82,7 @@ public sealed class AnchorInputStubTests : IDisposable
 
         JsonObject[] records = Load(path);
         string pointer = ((JsonObject)UseBlock(records)["input"]!)["claudinine"]!.GetValue<string>();
-        string refArg = pointer.Split("--ref ")[1].Split(' ')[0];
+        string refArg = pointer.Split("original: ref ")[1].Split(' ')[0];
 
         // GetVerb writes to Console, which TUnit captures per test.
         int rc = GetVerb.Run(["test-session", "--ref", refArg, "--full"],

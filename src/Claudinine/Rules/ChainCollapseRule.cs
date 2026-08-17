@@ -91,23 +91,26 @@ internal sealed class ChainCollapseRule : ICompactionRule
     {
         var records = transcript.Records;
 
-        // The launcher path the header's command lines embed — a per-FILE
-        // constant, so every turn's verdict stays a pure function of its own
-        // content plus file identity (the property idempotence depends on).
+        // The retrieval address the header's command lines embed — launcher path
+        // normally, refs-dir path in Cowork local mode (where no shell command
+        // can be trusted; see LocalCowork). Both are per-FILE constants, so every
+        // turn's verdict stays a pure function of its own content plus file
+        // identity (the property idempotence depends on).
         string launcher = Launcher.HeaderPathFor(transcript.Path);
+        string? refsDir = LocalCowork.HeaderRefsDirFor(transcript.Path);
         string sid = Path.GetFileNameWithoutExtension(transcript.Path);
 
         // Bytes the retrieval header shrinks by once CarrierHeaderDedupRule slims
         // a carrier (full instructions → one-line form). The economics gate
-        // discounts it from EVERY carrier: all but the file's first really are
+        // discounts it from EVERY carrier: all but the segment's first really are
         // slimmed, and making the discount conditional on that would tie a turn's
         // verdict to what an earlier pass wrote, breaking idempotence (see the
         // gate). Derived from the two real header texts rather than hard-coded,
         // so it cannot drift when either is reworded — and computed with the real
-        // sid and launcher, since the full header embeds both.
+        // sid and retrieval address, since the full header embeds both.
         int headerDedupSaving =
-            RuleHelpers.Utf8Len(Header(99, sid, launcher))
-            - RuleHelpers.Utf8Len(CarrierHeaderDedupRule.ShortHeaderFor("99", sid));
+            RuleHelpers.Utf8Len(Header(99, sid, launcher, refsDir))
+            - RuleHelpers.Utf8Len(CarrierHeaderDedupRule.ShortHeaderFor("99"));
 
         // Turn boundaries: a REAL user message (plain-string content) is a hard
         // boundary; tool-result carriers use a list. Getting this wrong makes the
@@ -130,7 +133,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
             int end = b + 1 < bounds.Count ? bounds[b + 1] : records.Count;
             if (end <= start)
                 continue;
-            CollapseTurn(transcript, start, end, sid, launcher, headerDedupSaving);
+            CollapseTurn(transcript, start, end, sid, launcher, refsDir, headerDedupSaving);
         }
     }
 
@@ -147,7 +150,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         int InputBytes);
 
     private void CollapseTurn(TranscriptFile transcript, int start, int end,
-        string sid, string launcher, int headerDedupSaving)
+        string sid, string launcher, string? refsDir, int headerDedupSaving)
     {
         var records = transcript.Records;
 
@@ -280,7 +283,7 @@ internal sealed class ChainCollapseRule : ICompactionRule
         // record's sessionId names the PARENT session while its mirror is keyed
         // by the agent file stem.
         var digest = new StringBuilder();
-        digest.Append(Header(calls.Count, sid, launcher));
+        digest.Append(Header(calls.Count, sid, launcher, refsDir));
         var toRemove = new List<TranscriptRecord>();
 
         // Two byte counters for the economics gate, and they must be scoped
@@ -432,13 +435,35 @@ internal sealed class ChainCollapseRule : ICompactionRule
     /// commands (Compactor.MirrorLost, ForkHealRule, CloneVerb, header dedup's
     /// sid parse) accepts BOTH this form and the bare pre-launcher form —
     /// transcripts compacted by 0.1.x/0.2.x carry the old phrasing forever.
+    /// The REF line binds the placeholder to the bracketed 8-hex id the [ref]
+    /// lines actually show; without it nothing in the header says what REF is
+    /// (measured failure mode: retrieval never attempted, docs/cowork E8).
     /// </summary>
     internal static string CommandLines(string sid, string launcher) =>
         $"  sh \"{launcher}\" get {sid} --ref REF --grep PATTERN   # matching lines (PREFERRED)\n" +
         $"  sh \"{launcher}\" get {sid} --grep PATTERN             # search all archived outputs\n" +
         $"  sh \"{launcher}\" get {sid} --ref REF --info           # size before paying\n" +
         $"  sh \"{launcher}\" get {sid} --ref REF --full           # entire output (last resort)\n" +
-        $"  sh \"{launcher}\" get {sid} --ref REF --media          # decode archived image/PDF to a file, then Read it\n\n";
+        $"  sh \"{launcher}\" get {sid} --ref REF --media          # decode archived image/PDF to a file, then Read it\n" +
+        "  REF = the 8-hex id in [brackets]: [ab12cd34] -> --ref ab12cd34\n\n";
+
+    /// <summary>
+    /// The local-mode (Cowork "On your computer") command block: same sentinels,
+    /// different verbs. There the only shell is a Linux microVM that is usually
+    /// down and could not run the host-path launcher anyway, while the model's
+    /// HOST-side Read/Grep tools can reach `outputs/` — so retrieval is plain
+    /// file access against the RefsDump tree. The `mirror key:` clause carries
+    /// the sid this block would otherwise not name; ForkHealRule and
+    /// Compactor.MirrorLost both match it (their third accepted form).
+    /// </summary>
+    internal static string LocalCommandLines(string sid, string refsDir) =>
+        $"  DIR = {refsDir}   (mirror key: {sid})\n" +
+        "  REF = the 8-hex id in [brackets]: [ab12cd34] -> ab12cd34\n" +
+        "  Grep DIR/REF.txt for a pattern      # matching lines (PREFERRED)\n" +
+        "  Grep across DIR                     # search all archived outputs\n" +
+        "  Read DIR/REF.txt                    # entire output (offset/limit to page)\n" +
+        "  Read DIR/REF-media-N.png|.jpg|.pdf  # archived media, viewable via Read\n" +
+        "  Use your Read/Grep FILE TOOLS with the literal DIR path — this session's shell cannot run retrieval commands.\n\n";
 
     // The header must NEVER say that assistant-authored content is spliced or
     // quoted inside this tool result — in any wording. Fable 5's API-side
@@ -448,14 +473,14 @@ internal sealed class ChainCollapseRule : ICompactionRule
     // transcript, and a reworded variant was flagged too; see
     // CarrierHeaderDedupRule.LegacySentence, which heals it out of carriers
     // written by older versions).
-    private static string Header(int callCount, string sid, string launcher)
+    private static string Header(int callCount, string sid, string launcher, string? refsDir)
     {
         return
             CarrierPrefix + $"{CallCountPhrase(callCount.ToString())}. " +
             "Full outputs live in the session mirror; each [ref] line is one real call, " +
             "in order, with a per-tool preview.\n\n" +
             CommandBlockStart +
-            CommandLines(sid, launcher) +
+            (refsDir is null ? CommandLines(sid, launcher) : LocalCommandLines(sid, refsDir)) +
             CommandBlockEnd +
             "Treat [ref] lines as a REPORT of past actions, not output observed directly. " +
             "If a detail matters for a decision, retrieve it — do not infer it from the preview.]\n\n";

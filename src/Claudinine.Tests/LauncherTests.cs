@@ -44,6 +44,45 @@ public sealed class LauncherTests : IDisposable
     }
 
     [Test]
+    public async Task PluginLayoutTargetsTheRoutingShims()
+    {
+        // A binary under libexec/<rid>/ bakes the WRITE-time platform; the shim
+        // beside it selects the RID from uname at RUN time — the only choice
+        // that stays coherent when the hook's OS is not the shell's (cowork B5).
+        string libexec = Path.Combine(_dir, "plug", "libexec");
+        Directory.CreateDirectory(Path.Combine(libexec, "win-x64"));
+        string binary = Path.Combine(libexec, "win-x64", "claudinine.exe");
+        File.WriteAllText(binary, "");
+        File.WriteAllText(Path.Combine(libexec, "claudinine"), "#!/bin/sh\n");
+        File.WriteAllText(Path.Combine(libexec, "claudinine.cmd"), "@echo off\r\n");
+
+        Launcher.EnsureCurrent(Transcript, binary);
+
+        string libexecFwd = libexec.Replace('\\', '/');
+        await Assert.That(File.ReadAllText(RunSh))
+            .Contains($"exec \"{libexecFwd}/claudinine\" \"$@\"");
+        await Assert.That(File.ReadAllText(RunCmd))
+            .Contains($"\"{Path.Combine(libexec, "claudinine.cmd")}\" %*");
+    }
+
+    [Test]
+    public async Task MissingShimFallsBackToTheBinary()
+    {
+        // A dev tree or hand-pruned install has no shims: target what provably
+        // exists. (WritesBothLaunchersTargetingTheBinary covers the non-existent
+        // path case; this pins the layout-matched-but-shimless case.)
+        string libexec = Path.Combine(_dir, "plug2", "libexec");
+        Directory.CreateDirectory(Path.Combine(libexec, "linux-x64"));
+        string binary = Path.Combine(libexec, "linux-x64", "claudinine");
+        File.WriteAllText(binary, "");
+
+        Launcher.EnsureCurrent(Transcript, binary);
+
+        await Assert.That(File.ReadAllText(RunSh))
+            .Contains($"exec \"{binary.Replace('\\', '/')}\" \"$@\"");
+    }
+
+    [Test]
     public async Task SecondPassIsAByteAndMtimeNoOp()
     {
         Launcher.EnsureCurrent(Transcript, @"C:\plug\claudinine.exe");

@@ -172,6 +172,21 @@ internal static class RuleHelpers
     public static string RefPrefix(string uuid) => uuid.Length >= 8 ? uuid[..8] : uuid;
 
     /// <summary>
+    /// File extension for a decoded media block — shared by `get --media`
+    /// (temp-dir decode) and the local-mode refs dump so the two surfaces name
+    /// files identically for the same media type.
+    /// </summary>
+    public static string MediaFileExtension(string? mediaType) => mediaType switch
+    {
+        "image/png" => ".png",
+        "image/jpeg" => ".jpg",
+        "image/webp" => ".webp",
+        "image/gif" => ".gif",
+        "application/pdf" => ".pdf",
+        _ => ".bin",
+    };
+
+    /// <summary>
     /// Fixpoint sentinel present in every head/tail-trim marker: content carrying
     /// it is our own trim output and must never be re-trimmed (multibyte content
     /// can trim to just over a byte cap — each pass would then shave a sliver off

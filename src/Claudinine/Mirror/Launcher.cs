@@ -6,13 +6,20 @@ namespace Claudinine.Mirror;
 /// with NO PATH entry — a claude.ai-hosted plugin may not ship a top-level
 /// `bin/`, so in Cowork the binary is never on the Bash tool's PATH.
 ///
-/// The launcher targets <see cref="Environment.ProcessPath"/> — the actually
-/// running AOT binary, not the routing shim — re-resolved on every pass, so a
-/// plugin update or a different install context self-corrects at the next hook.
-/// Headers invoke it as `sh &lt;path&gt;`, which makes a lost exec bit survivable;
-/// the chmod is belt and braces. Regenerated every pass and safe to delete;
-/// the colocated GC leaves it alone (unknown extension) and the whole dir dies
-/// with the session via SessionDirGc.
+/// The launcher resolves from <see cref="Environment.ProcessPath"/> — re-derived
+/// on every pass, so a plugin update or a different install context
+/// self-corrects at the next hook. When the running binary sits in the plugin
+/// layout (`libexec/&lt;rid&gt;/claudinine`), the launcher targets the ROUTING SHIM
+/// (`libexec/claudinine`) rather than the binary itself: the shim selects the
+/// RID from `uname` at RUN time, where the binary path bakes the WRITE-time
+/// platform — and the two differ whenever the hook's OS is not the shell's
+/// (docs/cowork-compatibility.md B5: on Windows a `run.sh` exec'ing a win-x64
+/// PE is broken by construction for any POSIX shell that isn't MSYS).
+/// Outside that layout (dev builds, tests) the binary itself is the target,
+/// as before. Headers invoke it as `sh &lt;path&gt;`, which makes a lost exec bit
+/// survivable; the chmod is belt and braces. Regenerated every pass and safe
+/// to delete; the colocated GC leaves it alone (unknown extension) and the
+/// whole dir dies with the session via SessionDirGc.
 ///
 /// The script also exports CLAUDININE_DIR=&lt;its own directory&gt; so `get` can
 /// address this session's mirrors directly instead of globbing every project —
@@ -48,14 +55,40 @@ internal static class Launcher
         // retrieval convenience, never a broken pass.
         try
         {
+            (string shTarget, string cmdTarget) = ResolveTargets(binary);
             string dir = MirrorLocator.ClaudinineDirFor(transcriptPath);
             Directory.CreateDirectory(dir);
-            WriteIfChanged(Path.Combine(dir, "run.sh"), ShellScript(binary), unixMode: true);
-            WriteIfChanged(Path.Combine(dir, "run.cmd"), CmdScript(binary), unixMode: false);
+            WriteIfChanged(Path.Combine(dir, "run.sh"), ShellScript(shTarget), unixMode: true);
+            WriteIfChanged(Path.Combine(dir, "run.cmd"), CmdScript(cmdTarget), unixMode: false);
         }
         catch
         {
         }
+    }
+
+    /// <summary>
+    /// Prefer the plugin's routing shims over the concrete binary (see class
+    /// doc): a binary at `…/libexec/&lt;rid&gt;/claudinine[.exe]` resolves to
+    /// `…/libexec/claudinine` for run.sh and `…/libexec/claudinine.cmd` for
+    /// run.cmd — each only when that shim actually exists, so a dev tree or a
+    /// hand-pruned install falls back to the binary that is provably there.
+    /// </summary>
+    private static (string ShTarget, string CmdTarget) ResolveTargets(string binary)
+    {
+        string shTarget = binary, cmdTarget = binary;
+        string? ridDir = Path.GetDirectoryName(Path.GetFullPath(binary));
+        string? libexec = ridDir is null ? null : Path.GetDirectoryName(ridDir);
+        if (libexec is not null
+            && Path.GetFileName(libexec).Equals("libexec", StringComparison.OrdinalIgnoreCase))
+        {
+            string shim = Path.Combine(libexec, "claudinine");
+            string shimCmd = Path.Combine(libexec, "claudinine.cmd");
+            if (File.Exists(shim))
+                shTarget = shim;
+            if (File.Exists(shimCmd))
+                cmdTarget = shimCmd;
+        }
+        return (shTarget, cmdTarget);
     }
 
     private static string ShellScript(string binary) =>

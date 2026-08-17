@@ -248,7 +248,7 @@ internal static class GetVerb
         }
         string mediaType = source["media_type"].AsString() ?? "application/octet-stream";
         string dir = Path.Combine(Path.GetTempPath(), "claudinine", "media");
-        string path = Path.Combine(dir, $"{RuleHelpers.RefPrefix(uuid)}-{index}{Extension(mediaType)}");
+        string path = Path.Combine(dir, $"{RuleHelpers.RefPrefix(uuid)}-{index}{RuleHelpers.MediaFileExtension(mediaType)}");
         try
         {
             Directory.CreateDirectory(dir);
@@ -263,15 +263,5 @@ internal static class GetVerb
         }
         lines.Add($"wrote {path} ({mediaType}, {Math.Max(1, bytes.Length / 1024)}KB) — use the Read tool on this file to view it");
     }
-
-    private static string Extension(string mediaType) => mediaType switch
-    {
-        "image/png" => ".png",
-        "image/jpeg" => ".jpg",
-        "image/webp" => ".webp",
-        "image/gif" => ".gif",
-        "application/pdf" => ".pdf",
-        _ => ".bin",
-    };
 
 }
