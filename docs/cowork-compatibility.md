@@ -2,8 +2,30 @@
 
 Status legend: **[V]** verified live in a Cowork cloud session (2026-08-15, Claude Code 2.1.233,
 `entrypoint: remote_cowork`) · **[L]** verified live in a Cowork **local** session on Windows
-(2026-08-17, desktop app 1.30096.5.0, `local_<uuid>` layout, VM shell **down** throughout) ·
+(2026-08-17, desktop app 1.30096.5.0, `local_<uuid>` layout, VM shell **down** throughout — two such
+sessions: the pre-fix measurement run behind Rev 4, and the v1.1.0 validation run behind Rev 6) ·
 **[?]** unknown, needs a test · **[!]** known gap, needs work · **[X]** closed.
+
+Rev 6 (2026-08-17, later): **Rev 5 is validated live** — a fresh local session on the released
+**v1.1.0**, VM down for its entire duration, exercised the shell-free path end to end. Hooks executed
+on the Windows host and completed; local mode was detected structurally, landing the dump at exactly
+`local_<uuid>/outputs/.claudinine/refs/`; the length stamp tracked the mirror as it grew
+(23,970 → 362,972 B) so no-op passes skip; **47 ref files** accumulated, one input anchor and one
+result per archived call. Fidelity was proven by *retrieval*, not inspection — `Grep` across the refs
+dir resolved matches inside a 40,978 B archived `Read`, i.e. the header's own PREFERRED verb working.
+The emitted header carried every claimed property: `DIR` stated once, `REF` bound
+(`[ab12cd34] -> ab12cd34`), `mirror key: <sid>` breadcrumb, path-free short pointers, and an explicit
+"this session's shell cannot run retrieval commands". **E6/E7/E8/E9 move from built to validated**;
+B7's structural detection likewise. Two things the session could not measure from inside, both for
+the same reason (the allowlist): the live transcript's size, hence the local compaction ratio, and
+the plugin's own version string — `1.1.0` is the dispatched release, trusted from the pipeline rather
+than read off the host. The allowlist itself reproduced exactly: `Glob` on `…\rpm\plugin_<id>\` was
+refused while `outputs/` read freely. Still open and unchanged: **B2/B3/B8 and G5's next-window run**,
+which all need the VM and are consolidated as **O18** in `cowork.md`, plus **D8**, which does not and
+is carried as **O17** there. One correction to B8 while it is open: O12's 2026-08-15 observation that
+the shim "runs from the sandbox printing `0.1.21`" was made on one of the four boot days, so it is
+probably already affirmative evidence that `libexec` IS reachable from the VM — worth re-reading that
+run's evidence before spending the next window on `ls /sessions/*/mnt/outputs/../../`.
 
 Rev 5 (2026-08-17): **Rev 4's fixable items are built** (develop, same day). What shipped:
 **B5/B1 →** `run.sh` now targets the plugin's `libexec/claudinine` routing shim (uname-based RID
@@ -36,7 +58,7 @@ generator and its retrieval shell run on **different operating systems**. Conseq
 Linux binaries ever execute" is true of the *shell* and false of the *generator* (B5); E5(a) — the
 launcher, the fix Rev 3 recommended — cannot work there at all (E6); the colocated mirror from E2 is
 unreachable by the only tools that always exist (E7); and the VM that owns the sole shell booted 4
-times in 5.5 months on this machine (B6). Retrieval never once executed during a long, tool-heavy
+times in the 4 months to 2026-08-17 on this machine (B6). Retrieval never once executed during a long, tool-heavy
 session and nothing surfaced an error (E8). New: B5–B8, D7, E6–E9, G5.
 
 Rev 3 (2026-08-15): **A2 closed green** — the account plugin pipeline preserves exec bits AND

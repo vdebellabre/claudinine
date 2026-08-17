@@ -1,15 +1,31 @@
 # Claudinine × Cowork — status, evidence, open work
 
-Supersedes `cowork-compatibility.md`, `claudinine-cowork-report.md` and `cowork-packaging-workorder.md`.
+Supersedes `claudinine-cowork-report.md` and `cowork-packaging-workorder.md`. Companion, not
+superseded: `cowork-compatibility.md` carries the item-level checklist (`A0`–`G5`) and its revision
+history; this document is the narrative status. Both are current as of **2026-08-17, checklist
+Rev 6** (Rev 5 built the local-mode fixes; Rev 6 is the live validation of them on v1.1.0).
 
-**Verdict: functionally compatible in both modes.** Claudinine installs, runs, compacts, and
-retrieves in Cowork cloud; it installs, runs, and compacts in local mode (v0.1.22, validated
-2026-08-15 — hooks wired on the desktop host, transcript compacted, mirror colocated). Packaging was
-the only hard blocker and it is fixed (`libexec/`, all six RIDs, launcher-based retrieval). All three
-trigger-model gaps (O1–O3) are shipped and validated against a real cloud host. What remains:
-the local-mode retrieval namespace split (the one functional gap — headers quote host paths the
-sandbox cannot resolve), `PreCompact` (unobserved), fork/clone (untested), and one latent statusline
-accounting defect.
+**Which document wins, precisely** — because the naive rule ("the checklist is newer") is wrong in
+one direction. The checklist is authoritative for **host and environment facts**, especially local
+mode, where its Rev 4–6 material is measured in-session and this document only summarises it. This
+document is authoritative for **what has shipped**: several checklist items still carry their
+pre-fix flag because nothing has re-walked them since the fix landed — `A0`/`A1`/`A3` (packaging and
+install, closed here by O9/O10/O11), `C2`/`C3`/`C7` (the trigger model, closed here by O1/O2/O3), and
+`E4` (GC wiring, closed here by O7). Read a `[!]` on those as "flagged before the fix", not as an open
+gap. Re-flagging them in the checklist is pending housekeeping.
+
+**Verdict: functionally compatible in both modes, and local mode no longer depends on the Linux
+VM.** Claudinine installs, runs, compacts, and retrieves in Cowork cloud; it installs, runs,
+compacts **and retrieves** in local mode (v1.1.0, validated 2026-08-17 — hooks execute on the
+desktop host, transcript compacted, mirror colocated, and retrieval served by a `Read`/`Grep`-
+addressable refs dump under `outputs/`). Packaging was the first hard blocker and it is fixed
+(`libexec/`, all six RIDs, shim-targeting launcher). All three trigger-model gaps (O1–O3) are
+shipped and validated against a real cloud host. The local-mode retrieval namespace split was the
+second hard blocker — headers quoted host paths the sandbox could not resolve — and it is fixed by
+not needing a shell at all (O12, Rev 5). What remains is genuinely secondary: `PreCompact`
+(unobserved), fork/clone (untested), the mid-conversation `sid` change (O17), whether the plugin
+tree is reachable from the VM at all (O18, needs the VM), and one latent statusline accounting
+defect (O16).
 
 Evidence comes from three live cloud sessions on 2026-08-15, `entrypoint: remote_cowork`: a
 diagnostic-probe session (`f4bcf08f…`, environment measurements) and a functional session
@@ -20,6 +36,22 @@ is not the one that ran last. The validation host also carried `CLAUDE_CODE_TRAN
 the feature flag `tengu_ccr_delta_rehydrate: true` — the transcript is server-authoritative and
 re-hydrated by delta, which is exactly the mechanism the `.load` stamp exists to price.
 
+Local-mode evidence comes from four Windows desktop sessions: the first local run on **0.1.21**
+(2026-08-15, Claude Code 2.1.229 — installs, all six hooks register, every hook then dies exit 127,
+which is how O12 was found); a **v0.1.22** re-import the same day that made hooks execute and
+compact; a **2026-08-17** session still on 0.1.22 (desktop app 1.30096.5.0) which is where the
+retrieval half of the problem was measured — the checklist's Rev 4, source of O17 and of the
+launcher/header findings; and a **v1.1.0** session later the same day, the first run of the Rev 5
+shell-free retrieval path and the subject of Rev 6. The last two are the checklist's `[L]` evidence. Two properties of that last session are worth stating
+because they shaped what could be measured: the Linux VM was **down for its entire duration**
+(`yukonSilver: unsupported` — see O18), which is the normal case rather than bad luck, and the
+session ran with a connected repo folder, so the compactor's own artifacts were readable by the same
+file tools the digest headers point at. What that session could *not* measure from the inside: the
+live transcript's size and therefore its compaction ratio (the session store sits behind the
+connected-folder allowlist, O12), and the plugin's own version string (the install tree is behind
+the same boundary) — `1.1.0` is the dispatched release, taken on trust from the pipeline rather than
+read back off the host.
+
 **Transcript layout on this host.** The live transcript is a *flat* file at
 `<project>/<sid>.jsonl`, while `<project>/<sid>/` holds only the app's sidecars (`subagents/`,
 `tool-results/`, `ccr-tip.json`) and our colocated `claudinine/` dir. `MirrorLocator` handles this
@@ -28,15 +60,19 @@ correctly — both stamps recorded the flat path — but any tooling that assume
 
 ## The host
 
-| | cloud ("In the cloud") | local ("On your computer", measured 2026-08-15) |
+| | cloud ("In the cloud") | local ("On your computer", measured 2026-08-15 / 2026-08-17) |
 |---|---|---|
 | entrypoint | `remote_cowork` | `local-agent` |
-| Claude Code | 2.1.233 / 2.1.42 | 2.1.229 |
-| host | Firecracker VM, `x86_64`, Ubuntu glibc 2.39 | **split**: Bash tool in a Linux VM (`/sessions/<name>`), hooks on the **desktop host** (Windows measured) |
+| Claude Code | 2.1.233 / 2.1.42 | 2.1.229 (desktop app 1.30096.5.0) |
+| host | Firecracker VM, `x86_64`, Ubuntu glibc 2.39 | **split**: agent, hooks and file tools on the **desktop host** (Windows measured); `mcp__workspace__bash` in a separate Linux microVM |
+| agent/hook platform | `linux-x64` | **`win-x64`** — the same OS as the file tools, *not* the shell. The only host where the generator and its retrieval shell differ. |
+| shell availability | always, same machine as the hook | **usually absent** — gated by a `yukonSilver` check; 4 successful boots in the 4 months to 2026-08-17 on the measured machine (O18) |
+| retrieval surface | launcher (`sh …/run.sh`) executed in the same VM | **file tools** — `Read`/`Grep` against `outputs/.claudinine/refs/`; no shell involved (O12) |
 | `$HOME` | `/root` (cwd `/home/claude`), hooks and Bash agree | Bash: `/sessions/<name>` (home = cwd); hooks: the Windows profile |
-| session store | `~/.claude/projects/` in the container | host-side, per cowork-session: `%APPDATA%\Claude\local-agent-mode-sessions\<install>\<device>\local_<id>\.claude\projects\<slug>\` — VM sees it **read-only** at `<mnt>/.claude/` |
-| session life | server-side, survives desktop restarts; `SessionEnd` on idle, re-hydrates from transcript on next activity | untested |
-| plugin source | `~/.claude/plugins/synced/<name>/`, account-hosted install | host: `…\rpm\plugin_<id>\`; VM view: `<mnt>/.remote-plugins/plugin_<id>/` |
+| session store | `~/.claude/projects/` in the container | host-side, per cowork-session: `%APPDATA%\Claude\local-agent-mode-sessions\<install>\<mid>\local_<uuid>\.claude\projects\<slug>\` — VM sees it **read-only** at `<mnt>/.claude/`, and the *file tools* cannot see it at all (allowlist, O12) |
+| path stability | keyed by **project**; `~/.claude/projects/<slug>/` is durable and derivable | keyed by **session**: level 1 stable ≥ 4 months, level 2 varies, level 3 (`local_<uuid>`) per session. **No path is both stable and derivable** — the structural reason baked absolute paths fail here |
+| session life | server-side, survives desktop restarts; `SessionEnd` on idle, re-hydrates from transcript on next activity | session tree per `local_<uuid>`, cleared between sessions; VM per app-run. Wake/teardown behaviour still untested here |
+| plugin source | `~/.claude/plugins/synced/<name>/`, account-hosted install | host: `…\<install>\<mid>\rpm\plugin_<id>\` — **level 2**, *above* the session root; VM view: `<mnt>/.remote-plugins/plugin_<id>/` |
 | marketplaces | disabled (`SKIP_PLUGIN_MARKETPLACE=true`) | untested |
 
 **The "only Linux binaries ever execute" premise was wrong.** It held for cloud, but local Cowork
@@ -45,6 +81,13 @@ don't run there (see O12 for the measurement). The hosted `.plugin` therefore ca
 RIDs plus the `claudinine.cmd` twin** again; a Windows or macOS desktop resolves its native binary
 through the same shim. The shim routes on `uname -s`/`uname -m`; a missing RID is a hard failure,
 not a slow path — every hook dies exit 127.
+
+The deeper version of the same mistake was assuming the hook and the shell share a machine. They do
+on every host except local Cowork, and there the launcher generator was baking its *own* platform's
+binary into a POSIX script the Linux VM was told to run (`exec "C:/…/libexec/win-x64/claudinine.exe"`
+— broken by construction, not a path-form bug). Rev 5 fixes both halves: `run.sh`/`run.cmd` now
+target the `libexec/claudinine` routing shim so the RID is chosen at *run* time by whichever host
+executes it, and local mode stops using the launcher at all.
 
 ---
 
@@ -67,11 +110,37 @@ and it is heaviest exactly when a Workflow-heavy session was just torn down).
 **Retrieval without PATH.** `claudinine` is *not* resolvable in the Bash tool — the bare form returns
 `command not found`, exit 127. (Claude Code appends `<pluginRoot>/bin` to PATH unconditionally, even
 when no such directory exists, so a hosted plugin gets a dangling entry it is forbidden to fill.) The
-launcher solves it: `run.sh` / `run.cmd` are written next to the colocated mirror with the resolved
-absolute binary path and regenerated each pass. Digest headers spell that form, and every variant
+launcher solves it: `run.sh` / `run.cmd` are written next to the colocated mirror and regenerated each
+pass. (As measured here they named the generator's own resolved binary; since Rev 5 they target the
+`libexec/claudinine` routing shim instead, so the RID is chosen by whichever host executes them — the
+cloud behaviour below is unchanged either way, since there the two are the same file.) Digest headers
+spell that form, and every variant
 works when executed **exactly as written** — `--info`, `--ref --grep`, `--grep` across all archived
 outputs, `--full`, and subagent sidecars addressed by agent id. A `--full` retrieval of an archived
 `Read` was diffed against the file on disk: **69/69 non-blank lines recovered, 0 missing**.
+
+**Retrieval without a shell (local mode) — verified live 2026-08-17, VM down throughout.** The
+colocated mirror stays canonical; a retrieval *projection* of it is dumped to
+`outputs/.claudinine/refs/` — one `<ref>.txt` per mirrored record (tool_result text, or the
+serialized `tool_use` input for anchor stubs), plus `<ref>-media-N.*` for base64 media — and local
+digest headers teach `Read`/`Grep` against that directory instead of naming a command. Measured in a
+live session with no shell available at any point: hooks executed on the Windows host and completed
+(the dump only exists if a pass finished); local mode was detected structurally, landing the dump at
+exactly `local_<uuid>/outputs/.claudinine/refs/`; the length stamp
+(`.<sid>.dumped`) tracked the mirror as it grew (23,970 → 362,972 B), so no-op passes skip; and
+**47 ref files** accumulated, pairing one input anchor and one result per archived call. Content
+fidelity was confirmed by retrieval rather than by inspection — a `Grep` across the refs dir
+resolved two matches inside a 40,978 B archived `Read`, which is the header's own PREFERRED verb
+working end to end. The emitted header carried every Rev 5 property: the refs dir stated **once** as
+`DIR = …`, `REF` bound explicitly (`[ab12cd34] -> ab12cd34`), a `mirror key: <sid>` breadcrumb for
+`MirrorLost`/`ForkHealRule`, path-free short pointers, and an explicit note that *this session's
+shell cannot run retrieval commands*.
+
+**The allowlist boundary, reconfirmed from the other side.** In the same session `Glob` against the
+plugin tree (`…\rpm\plugin_<id>\`) was refused — *"outside this session's connected folders"* — while
+`outputs/` was freely readable. This is the measurement the whole local-mode design rests on (the
+process owns both paths; the tool layer declines the app-internal one), and it reproduced exactly,
+with the refs dump on the reachable side of the line.
 
 **Mirror durability.** Mirrors are colocated at `<project>/<sid>/claudinine/`, so anything that
 snapshots, syncs or deletes the session carries them with it. `Compactor.MirrorLost` is the
@@ -304,9 +373,11 @@ blocker once local mode was measured, so it is now inverted: all six RIDs plus `
 must be present, `bin/` must still be absent. The Publish release run on main (2026-08-15 13:21,
 run 31887005499) went green and published v0.1.20 with both assets — CI-produced, though still
 version-blind (see O8); v0.1.21 (run 31894149339) is the fully correct artifact, and it also carries
-the Fable-safeguards header fix every install needs. Last remaining step: import
-`claudinine-0.1.21.plugin` into claude.ai to replace the hand-packed install (one manual action,
-same validator that already accepted the layout).
+the Fable-safeguards header fix every install needs. Releases since then have gone the same route —
+v0.1.22 (the local-mode execution fix, O12) and **v1.1.0** (the Rev 5 retrieval rework), each
+imported into the account and picked up by a fresh session, which is the supported way to test since
+plugin state reaches a *running* session unreliably. The import step remains one manual action
+against the same validator that already accepted the layout.
 
 **O10 · Bundle size against the sync limits — RESOLVED, and the 64% cut REVERTED (2026-08-15).** The
 syncer enforces roughly 4096 files / 25 MB per file / 64 MB total. Measured against the published
@@ -318,15 +389,22 @@ and is reverted: the hosted bundle carries all six RIDs again. The size math abo
 revert free. Per-RID: linux-arm64 3.72, linux-x64 3.53, osx-x64 3.47, osx-arm64 3.43, win-arm64 3.17,
 win-x64 3.01 MB.
 
-**O11 · Install route and README claims — DONE.** The README's Install section now documents the
-claude.ai account-import route (marketplaces disabled, Linux-only artifact) alongside
+**O11 · Install route and README claims — DONE, but two claims went stale under O10/O12 and need a
+re-read.** The README's Install section documents the claude.ai account-import route alongside
 `/plugin install`, and the restore section shows the launcher form
-(`sh …/<sid>/claudinine/run.sh restore-compaction-off <sid>`) for hosted installs.
+(`sh …/<sid>/claudinine/run.sh restore-compaction-off <sid>`) for hosted installs. Both need
+correcting: the artifact is **no longer Linux-only** (O10's cut is reverted, all six RIDs ship), and
+the launcher form is not a universal instruction — in local mode there may be no shell to run it
+(O18), so the restore path there wants the `.cmd` twin or a documented file-tools equivalent. Small
+docs task, not a code change.
 
 ### 4. Coverage gaps
 
-**O12 · Local "on your computer" mode — FIXED AND VALIDATED (2026-08-15, v0.1.22 re-import: hooks
-execute on the desktop host, transcript compacts, colocated mirror present).** History of the find,
+**O12 · Local "on your computer" mode — FIXED AND VALIDATED IN TWO STAGES.** *Execution* fixed in
+v0.1.22 (2026-08-15: hooks execute on the desktop host, transcript compacts, colocated mirror
+present); *retrieval* fixed in v1.1.0 and validated 2026-08-17 with the VM down for the whole
+session (refs dump under `outputs/`, `Read`/`Grep` headers — see "Retrieval without a shell" above).
+History of the find,
 from the first local run on 0.1.21: Windows desktop, entrypoint `local-agent`, Claude Code 2.1.229, plugin 0.1.21 account-import:
 installs, all six hooks register (`PreCompact` included), and the shim runs from the sandbox printing
 `0.1.21` — the first independent confirmation of O8 on a real host. But **every hook fires and dies,
@@ -353,14 +431,31 @@ Findings from the same run, recorded for whoever validates next:
   `gitBranch: HEAD` — anything keying on `cwd` to find the repo lands in the wrong place.
 - *Record shapes present* (queue-operation 6, attachment 11, last-prompt 5, mode 2): every shape
   O5/O6 describe, so those rules get exercised the moment hooks can run.
-- *Next decisive unknown — retrieval across the namespace split.* Once hooks run, claudinine
-  executes natively on Windows and bakes **Windows absolute paths** into launcher headers
-  (`sh "C:/Users/…/run.sh" get …`) — but the model's Bash tool runs in the VM, where that path does
-  not exist. The store IS visible from the VM (read-only suffices for `get`) and so is the plugin
-  dir, just under different roots (`<mnt>/.claude/…`, `<mnt>/.remote-plugins/…`), so a path
-  translation exists in principle; whether the launcher should emit both forms is design work, not
-  a patch. Until then, local-mode compaction will work but header-quoted retrieval commands will
-  not resolve from the sandbox.
+- *The retrieval namespace split — the second blocker, now closed.* Once hooks ran, claudinine
+  executed natively on Windows and baked **Windows absolute paths** into launcher headers
+  (`sh "C:/Users/…/run.sh" get …`) while the model's shell ran in the VM, where that path does not
+  exist. The framing that survived only one revision was "translate the path": the store and the
+  plugin dir *are* both visible from the VM under different roots, so a translation exists in
+  principle — but it would have made retrieval depend on a shell that is absent most of the time
+  (O18), and it would have kept retrieval pointed at a directory the file tools are not allowed to
+  read (the allowlist measurement above). **The fix was to stop needing a shell.** The tools that
+  always work in local mode are the host-side file tools — `Read` with `offset`/`limit` ≈ `--full`,
+  `Grep` ≈ `--grep`, a stat ≈ `--info` — and they cover the whole verb surface, so local headers now
+  teach those instead of a command. Durability is unaffected: `outputs/` and `.claude/projects/`
+  share the same `local_<uuid>` parent and therefore the same lifetime, and the canonical mirror
+  never moved. The alternative of asking the user to mount the session root was rejected outright —
+  it is application-internal, the tool guidance forbids requesting it, and a mount of a live session
+  tree was observed being dropped mid-session anyway.
+- *Failure is now loud.* Before Rev 5 the broken retrieval was invisible: across a long, tool-heavy
+  local session `claudinine get` executed **zero times** and nothing reported a problem, because
+  three fallbacks masked it — previews that happened to contain the whole payload, the header's own
+  "if the file discussed still exists on disk, read IT instead", and re-running a query instead of
+  fetching the record. That left inference-from-previews as the only available behaviour, which is
+  precisely what the header's contract forbids; in one observed case the model asserted a verbatim
+  source line it had only seen in a preview and was right by luck. The promise is now load-bearing
+  rather than advisory: in local mode a failed refs dump **stops compaction**, mirror-first style,
+  and `MirrorLost` tolerates a lost mirror while the dump still serves retrieval but trips when both
+  are gone.
 
 **O13 · No corpus-scale Cowork numbers — MEASURED (2026-08-15 test run).** Real Cowork transcripts,
 genuine cl100k ruler:
@@ -397,6 +492,48 @@ also arrive **out of order** relative to the work (a wake queued at 17:08 for 17
 turn that had already done its job). Both push the same conclusion: `Stop` is the trigger doing the
 real work in Cowork, and the `.end`/`.load` machinery is a repair path for the teardowns that do
 happen, not the main mechanism.
+
+**O17 · The session id changes mid-conversation in local mode — OPEN, measured 2026-08-17.** Digest
+headers emitted early in one local session pointed at `79e249a1…`; headers emitted later in the
+*same* conversation pointed at `3090adb5…`. The copied session tree contained transcripts `79e249a1`
+and `0c4e203c` plus one colocated mirror, and **no `3090adb5` anywhere**, though live headers were
+already citing it. One ref resolved 3× in each of two different transcripts, which is either an
+8-hex collision or a resume carrying the parent's stubs — the case `ForkHealRule` exists for. Open
+questions: does a local resume mint a new `sid` *and* a new `local_<uuid>` (hence a second project
+dir the copy never saw)? Should `MirrorLost` have tripped for a transcript citing a sid with no
+mirror on that path? Rev 5 reduces the blast radius rather than answering this — ref files are
+sid-free, so a fork's refs stay valid unhealed, and the `mirror key` breadcrumb is what the heal
+rules key on now — but any `<sid>`-embedded path is still stale the moment this happens, which is a
+further argument for anchor-relative resolution over baked paths.
+
+**O18 · Everything still gated on a Linux VM that rarely boots — OPEN by circumstance, not by
+design.** Local Cowork's VM is gated by a `yukonSilver` check; when it reads `unsupported`, `startVM`
+short-circuits before touching the hypervisor and `mcp__workspace__bash` reports *"not supported on
+this device"*. From the app's own log on the measured machine: **4 successful boots between
+2026-04-16 and 2026-08-17**, against hundreds of `[startVM] VM not supported (win32/x64), skipping`.
+Virtualization, Hyper-V, VMP and WHP are all enabled — it is a gate, not a capability problem — and
+each `unsupported` evaluation also deletes the ~2 GB VM bundle, so a flip costs a fresh download
+(45–115 s observed). Widely reported upstream and unresolved. Rev 5's whole point is that this no
+longer blocks local mode; what it still blocks is *measurement*. Four things want the VM and should
+be run in one sitting when the gate flips:
+
+- **Is the plugin tree reachable from the VM at all?** `rpm\plugin_<id>\libexec\` sits at level 2 of
+  the session path while the plan9 share appears rooted at level 3. A log from a healthy day proves
+  `outputs/..` traverses up *one* level; it does not prove `../../rpm/…` reaches level 2. If it does
+  not, all six shipped binaries are invisible from inside the VM and the launcher route is dead in
+  local mode regardless of which platform it targets. One command settles it:
+  `ls /sessions/*/mnt/outputs/../../`. **Caveat before spending a window on it:** O12 records the shim
+  running *from the sandbox* and printing `0.1.21` on 2026-08-15 — which was one of the four boot days,
+  so that observation is probably already an affirmative answer. Re-read that run's evidence first;
+  this may be a closed item wearing a `[?]`.
+- **The real mount set.** `ls -d /sessions/*/mnt/*`, compared against the four mounts a session is
+  told about.
+- **That the VM does not relocate the agent.** Prediction: `Read`/`Glob`/`Grep` still report `C:\…`
+  paths with the VM up — it adds a second execution context rather than moving the first. (A live
+  host→VM translation table exists in the session prompt *while the VM is down*, which is itself
+  evidence that both namespaces coexist.)
+- **libc and cold-start on that image** — the Native AOT binary against whatever distro the microVM
+  runs, and the 18 ms hook median re-measured there.
 
 ### 5. Docs
 
