@@ -8,11 +8,11 @@ Rev 6** (Rev 5 built the local-mode fixes; Rev 6 is the live validation of them 
 **Which document wins, precisely** — because the naive rule ("the checklist is newer") is wrong in
 one direction. The checklist is authoritative for **host and environment facts**, especially local
 mode, where its Rev 4–6 material is measured in-session and this document only summarises it. This
-document is authoritative for **what has shipped**: several checklist items still carry their
-pre-fix flag because nothing has re-walked them since the fix landed — `A0`/`A1`/`A3` (packaging and
-install, closed here by O9/O10/O11), `C2`/`C3`/`C7` (the trigger model, closed here by O1/O2/O3), and
-`E4` (GC wiring, closed here by O7). Read a `[!]` on those as "flagged before the fix", not as an open
-gap. Re-flagging them in the checklist is pending housekeeping.
+document is authoritative for **what has shipped**. The stale-flag skew between the two was
+re-walked 2026-08-17: `A0`/`A1`/`A3` (packaging and install, closed here by O9/O10/O11),
+`C2`/`C3`/`C7` (the trigger model, closed here by O1/O2/O3) and `E4` (GC wiring, closed here by O7)
+now carry `[X]` in the checklist with closure notes pointing back at the O-items, and `B8` was
+desk-closed the same day from the 2026-08-15 boot-day evidence (see O18).
 
 **Verdict: functionally compatible in both modes, and local mode no longer depends on the Linux
 VM.** Claudinine installs, runs, compacts, and retrieves in Cowork cloud; it installs, runs,
@@ -23,9 +23,9 @@ addressable refs dump under `outputs/`). Packaging was the first hard blocker an
 shipped and validated against a real cloud host. The local-mode retrieval namespace split was the
 second hard blocker — headers quoted host paths the sandbox could not resolve — and it is fixed by
 not needing a shell at all (O12, Rev 5). What remains is genuinely secondary: `PreCompact`
-(unobserved), fork/clone (untested), the mid-conversation `sid` change (O17), whether the plugin
-tree is reachable from the VM at all (O18, needs the VM), and one latent statusline accounting
-defect (O16).
+(unobserved), fork/clone (untested), the mid-conversation `sid` change (O17), the VM-window
+measurement batch (O18 — its headline question, plugin-tree reachability from the VM, has since
+been desk-closed affirmative), and one latent statusline accounting defect (O16).
 
 Evidence comes from three live cloud sessions on 2026-08-15, `entrypoint: remote_cowork`: a
 diagnostic-probe session (`f4bcf08f…`, environment measurements) and a functional session
@@ -392,11 +392,12 @@ win-x64 3.01 MB.
 **O11 · Install route and README claims — DONE, but two claims went stale under O10/O12 and need a
 re-read.** The README's Install section documents the claude.ai account-import route alongside
 `/plugin install`, and the restore section shows the launcher form
-(`sh …/<sid>/claudinine/run.sh restore-compaction-off <sid>`) for hosted installs. Both need
-correcting: the artifact is **no longer Linux-only** (O10's cut is reverted, all six RIDs ship), and
-the launcher form is not a universal instruction — in local mode there may be no shell to run it
-(O18), so the restore path there wants the `.cmd` twin or a documented file-tools equivalent. Small
-docs task, not a code change.
+(`sh …/<sid>/claudinine/run.sh restore-compaction-off <sid>`) for hosted installs. Re-checked
+2026-08-17: the Linux-only worry was already stale — the README's Install section documents the
+six-RID artifact and both Cowork modes correctly (fixed with the O10 revert). What was genuinely
+missing was the local-mode restore path: the launcher form assumed a shell next to the mirror, and
+in local mode there may be none (O18). The README now shows the `run.cmd` twin under the
+local-agent session store for that case, run from an ordinary Windows terminal. Done.
 
 ### 4. Coverage gaps
 
@@ -517,15 +518,13 @@ each `unsupported` evaluation also deletes the ~2 GB VM bundle, so a flip costs 
 longer blocks local mode; what it still blocks is *measurement*. Four things want the VM and should
 be run in one sitting when the gate flips:
 
-- **Is the plugin tree reachable from the VM at all?** `rpm\plugin_<id>\libexec\` sits at level 2 of
-  the session path while the plan9 share appears rooted at level 3. A log from a healthy day proves
-  `outputs/..` traverses up *one* level; it does not prove `../../rpm/…` reaches level 2. If it does
-  not, all six shipped binaries are invisible from inside the VM and the launcher route is dead in
-  local mode regardless of which platform it targets. One command settles it:
-  `ls /sessions/*/mnt/outputs/../../`. **Caveat before spending a window on it:** O12 records the shim
-  running *from the sandbox* and printing `0.1.21` on 2026-08-15 — which was one of the four boot days,
-  so that observation is probably already an affirmative answer. Re-read that run's evidence first;
-  this may be a closed item wearing a `[?]`.
+- ~~**Is the plugin tree reachable from the VM at all?**~~ **Desk-closed 2026-08-17 — YES** (B8).
+  The re-read Rev 6 asked for settled it: the plugin tree reaches the VM through its **own
+  `.remote-plugins` mount** (the host table's VM view, a path observable only from inside the VM,
+  recorded on the 2026-08-15 boot day), and the same run's shim executed *from the sandbox* printing
+  `0.1.21` — execution subsumes visibility. The level-2-traversal framing was moot all along. So the
+  launcher route is alive in local mode whenever the VM is up; what the next window buys here is
+  only an opportunistic reconfirmation via the mount listing below.
 - **The real mount set.** `ls -d /sessions/*/mnt/*`, compared against the four mounts a session is
   told about.
 - **That the VM does not relocate the agent.** Prediction: `Read`/`Glob`/`Grep` still report `C:\…`

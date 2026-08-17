@@ -66,7 +66,13 @@ That form assumes a CLI/marketplace install, which keeps `claudinine` on PATH. A
 sh ~/.claude/projects/<project>/<session-id>/claudinine/run.sh restore-compaction-off <session-id>
 ```
 
-Claudinine writes that same launcher path into every stub it leaves in the transcript, so Claude can pull an individual output back without you doing anything. One caveat in Cowork's local mode: your session runs commands inside a Linux sandbox while the launcher path is written from the desktop side, so a path quoted in a stub may not resolve as-is from inside a session. Compaction and the retrieval commands both work; you may just have to point them at the launcher yourself.
+Claudinine writes that same launcher form into every stub it leaves in the transcript, so Claude can pull an individual output back without you doing anything. Cowork's local mode ("On your computer") is the one place that works differently, because those sessions usually have no shell at all: there Claudinine keeps a plain-text copy of every archived output inside the session's own workspace (`outputs/.claudinine/refs/`), and stubs point Claude's file tools at it instead of quoting a command — retrieval works with nothing to run. To restore such a session yourself, use the launcher's Windows twin from a regular terminal — the session store lives under your profile:
+
+```bash
+%APPDATA%\Claude\local-agent-mode-sessions\<install>\<device>\local_<id>\.claude\projects\<project>\<session-id>\claudinine\run.cmd restore-compaction-off <session-id>
+```
+
+(On a macOS desktop, the same colocated directory carries `run.sh`.)
 
 ## Comparison with Cozempic
 
