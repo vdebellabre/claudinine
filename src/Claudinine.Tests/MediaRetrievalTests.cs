@@ -81,7 +81,8 @@ public sealed class MediaRetrievalTests : IDisposable
         // The pointer addresses the stubbed record's own uuid.
         JsonObject stubbed = records.Single(r =>
             (r["claudinine"] as JsonObject)?["rule"]?.GetValue<string>() == "image-strip");
-        await Assert.That(stub).Contains($"claudinine get test-session --ref {stubbed["uuid"]!.GetValue<string>()[..8]} --media");
+        // Launcher form: self-sufficient with no PATH entry (hosted installs).
+        await Assert.That(stub).Contains($"/claudinine/run.sh\" get test-session --ref {stubbed["uuid"]!.GetValue<string>()[..8]} --media");
     }
 
     [Test]

@@ -121,13 +121,16 @@ internal sealed partial class ForkHealRule : ICompactionRule
     }
 
     /// <summary>
-    /// A retrieval command's session-id token, in either spelling: the bare
-    /// pre-launcher form (`claudinine get &lt;sid&gt;` — stubs, short headers, 0.1.x
-    /// full headers) or the launcher form (`sh "…/run.sh" get &lt;sid&gt;`). Length
-    /// floor keeps stray short tokens out; the char class ends the capture at
-    /// the following space. Note the blanket sid replace in RetargetStrings also
-    /// fixes the launcher PATH (`…/&lt;sid&gt;/claudinine/run.sh`) in the same pass.
+    /// A retrieval address's session-id token, in any of the three spellings:
+    /// the bare pre-launcher form (`claudinine get &lt;sid&gt;` — old stubs and short
+    /// headers, 0.1.x full headers), the launcher form (`sh "…/run.sh" get
+    /// &lt;sid&gt;`), or the local-mode breadcrumb (`mirror key: &lt;sid&gt;` — local
+    /// headers name no command; their ref FILES are sid-free by design, so the
+    /// breadcrumb is what keeps fork adoption discoverable there). Length floor
+    /// keeps stray short tokens out; the char class ends the capture at the
+    /// first non-sid character. Note the blanket sid replace in RetargetStrings
+    /// also fixes the launcher PATH (`…/&lt;sid&gt;/claudinine/run.sh`) in the same pass.
     /// </summary>
-    [GeneratedRegex("(?:claudinine|run\\.sh\") get ([A-Za-z0-9][A-Za-z0-9-]{6,})")]
+    [GeneratedRegex("(?:(?:claudinine|run\\.sh\") get |mirror key: )([A-Za-z0-9][A-Za-z0-9-]{6,})")]
     private static partial Regex GetCommand();
 }

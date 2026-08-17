@@ -78,10 +78,15 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         await Assert.That(first).DoesNotContain("Interleaved assistant notes");
 
         // Second carrier: short header, but everything load-bearing survives —
-        // call count, get syntax with session id, report warning, refs, notes.
+        // call count, the pointer to the kept RETRIEVAL block, the REF binding,
+        // report warning, refs, notes. No command and no sid on purpose: a bare
+        // `claudinine` resolves nowhere on hosted installs and a baked path goes
+        // stale when trees move (docs/cowork-compatibility.md E8).
         await Assert.That(second).DoesNotContain("RETRIEVAL — ");
         await Assert.That(second).StartsWith("[claudinine: this turn originally ran 3 separate tool calls.");
-        await Assert.That(second).Contains("claudinine get test-session --ref REF");
+        await Assert.That(second).Contains("RETRIEVAL block of the nearest earlier collapsed turn");
+        await Assert.That(second).Contains("REF = the 8-hex id in [brackets]");
+        await Assert.That(second).DoesNotContain("claudinine get");
         await Assert.That(second).Contains("REPORT");
         await Assert.That(second.Split("] Bash(").Length - 1).IsEqualTo(3);
         await Assert.That(second).Contains("(note) note b1");
@@ -89,6 +94,79 @@ public sealed class CarrierHeaderDedupTests : IDisposable
 
         // The marker still says chain-collapse: that is what the record IS.
         await Assert.That(CarrierRecord(records, secondId)["claudinine"]?["rule"]?.GetValue<string>()).IsEqualTo("chain-collapse");
+    }
+
+    [Test]
+    public async Task EachBoundarySegmentKeepsItsOwnFullHeader()
+    {
+        // The app's next load slices from the LAST compact_boundary, so a short
+        // header's pointer at a pre-boundary block would aim at instructions the
+        // model can no longer see. Each segment's first carrier stays full.
+        var b = new TranscriptBuilder().UserPrompt("first task");
+        b.BashRead("sed -n '1,5p' a0.txt", out string firstId, Output + "a0");
+        b.BashRead("sed -n '1,5p' a1.txt", out _, Output + "a1");
+        b.AssistantText("first done");
+        // The boundary lands in a call-free turn of its own: a protected record
+        // inside a collapsible span correctly aborts that span, which is not
+        // what this test is about.
+        b.UserPrompt("checkpoint");
+        b.AssistantText("compacting");
+        b.RawLine(new JsonObject
+        {
+            ["type"] = "system",
+            ["subtype"] = "compact_boundary",
+            ["uuid"] = "99999999-0000-0000-0000-000000000042",
+            ["parentUuid"] = null,
+            ["sessionId"] = "test-session",
+        }.ToJsonString());
+        b.UserPrompt("second task");
+        b.BashRead("sed -n '1,5p' b0.txt", out string secondId, Output + "b0");
+        b.BashRead("sed -n '1,5p' b1.txt", out _, Output + "b1");
+        b.AssistantText("second done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        JsonObject[] records = Load(path);
+        await Assert.That(CarrierContent(records, firstId)).Contains("RETRIEVAL — ");
+        await Assert.That(CarrierContent(records, secondId)).Contains("RETRIEVAL — ");
+    }
+
+    /// <summary>The exact short header 0.3.x–0.4.x wrote: a bare `claudinine get`
+    /// that resolves nowhere on hosted installs (docs/cowork E8).</summary>
+    private static string OldShortHeader(int calls) =>
+        $"[claudinine: this turn originally ran {calls} separate tool calls. " +
+        "Full outputs: claudinine get test-session --ref REF [--grep PATTERN | --info | --full | --media] " +
+        "(full retrieval guidance in the first collapsed block of this session; if the file " +
+        "discussed still exists on disk, read IT instead). " +
+        "[ref] lines are a REPORT, not observed output — retrieve, don't infer.]\n\n";
+
+    [Test]
+    public async Task OldShortHeadersAreUpgradedToThePointerForm()
+    {
+        string body = "[cccc1111] Bash(cmd) -> 500b :: preview five";
+        var b = new TranscriptBuilder().UserPrompt("old work");
+        b.ToolCall("Bash", new JsonObject { ["command"] = "one" }, OldShortHeader(2) + body);
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+        string afterFirst = File.ReadAllText(path);
+
+        JsonObject[] records = Load(path);
+        var carrier = records.SelectMany(r =>
+                (r["message"]?["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
+            .Select(x => x["content"])
+            .OfType<JsonValue>()
+            .Select(v => v.TryGetValue<string>(out string? s) ? s : "")
+            .Single(s => s.Contains("preview five"));
+        await Assert.That(carrier).DoesNotContain("claudinine get");
+        await Assert.That(carrier).Contains("RETRIEVAL block of the nearest earlier collapsed turn");
+        await Assert.That(carrier).Contains("[cccc1111] Bash(cmd)"); // body intact
+
+        // And the upgrade is a fixpoint.
+        Compactor.Run(path);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(afterFirst);
     }
 
     [Test]
@@ -153,7 +231,7 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         string second = contents.Single(s => s.Contains("preview three"));
         await Assert.That(second).DoesNotContain("RETRIEVAL — ");
         await Assert.That(second).StartsWith("[claudinine: this turn originally ran 2 separate tool calls.");
-        await Assert.That(second).Contains("claudinine get test-session --ref REF");
+        await Assert.That(second).Contains("RETRIEVAL block of the nearest earlier collapsed turn");
         await Assert.That(second).Contains("[bbbb1111] Read(f.cs)");
         await Assert.That(second).Contains("(note) legacy note");
         await Assert.That(second).DoesNotContain("Interleaved assistant notes");

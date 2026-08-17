@@ -126,7 +126,9 @@ public sealed class SubagentTranscriptTests : IDisposable
 
         string text = File.ReadAllText(path);
         await Assert.That(text).Contains("input archived at collapse");
-        await Assert.That(text).Contains("claudinine get agent-abc123def456abc12 --ref");
+        // The stub is a pointer; the full header it defers to addresses the
+        // FILE STEM (the mirror key), not the record's parent sessionId.
+        await Assert.That(text).Contains(" get agent-abc123def456abc12 --ref REF");
     }
 
     [Test]

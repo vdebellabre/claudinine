@@ -198,12 +198,14 @@ internal static class CloneVerb
     /// Rewrite the retrieval commands our own digests embed in their text. Without
     /// this the clone's digests would send every retrieval at the source session id
     /// — which resolves to the source mirror, or to nothing once the source is
-    /// archived. Emitters spell either `claudinine get &lt;full-id&gt;` (stubs, short
-    /// headers, pre-launcher full headers) or `sh "…/&lt;full-id&gt;/claudinine/run.sh"
-    /// get &lt;full-id&gt;` (launcher-form full headers) — both are rewritten, plus the
-    /// launcher path's own directory component, so the clone's header points at the
-    /// clone's launcher. Whole phrases only — NEVER the bare id, which also occurs
-    /// in strings that must survive verbatim (persisted-output sidecar paths under
+    /// archived. Emitters spell `claudinine get &lt;full-id&gt;` (old stubs and short
+    /// headers, pre-launcher full headers), `sh "…/&lt;full-id&gt;/claudinine/run.sh"
+    /// get &lt;full-id&gt;` (launcher-form full headers and stubs), or `mirror key:
+    /// &lt;full-id&gt;` (local-mode full headers, whose ref FILE paths are sid-free
+    /// and need no rewrite) — all are rewritten, plus the launcher path's own
+    /// directory component, so the clone's header points at the clone's
+    /// launcher. Whole phrases only — NEVER the bare id, which also occurs in
+    /// strings that must survive verbatim (persisted-output sidecar paths under
     /// the source session's directory are the only pointer to those files).
     /// </summary>
     private static void RewriteRetrievalCommands(JsonNode? node, string sourceId, string targetId)
@@ -213,6 +215,7 @@ internal static class CloneVerb
             ("claudinine get " + sourceId, "claudinine get " + targetId),
             ("run.sh\" get " + sourceId, "run.sh\" get " + targetId),
             ($"/{sourceId}/claudinine/run.sh", $"/{targetId}/claudinine/run.sh"),
+            ("mirror key: " + sourceId, "mirror key: " + targetId),
         ];
         Rules.RuleHelpers.VisitStrings(node, text =>
         {
