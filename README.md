@@ -48,7 +48,7 @@ On Cowork that moment comes more often than in the CLI, not less: cloud sessions
 
 Cowork also leans harder on two of the hooks above. Sessions there often run long autonomous stretches — scheduled tasks, workflows, agent fan-outs — with no prompt in between, which is exactly what the turn-end hook covers: on one measured cloud session a single autonomous turn went from 285 KB to 36 KB, a stretch that would not have compacted at all without it. And because those stretches spawn many subagents, compacting each agent transcript the moment it finishes matters more than in the CLI: across one session's five agent files, 802 KB of tool output became 142 KB.
 
-One small native binary per platform, no runtime, published for x64/arm64 on Windows, macOS and Linux — which is what lets a single install follow you from the CLI to a cloud container to your own desktop.
+One small native binary per platform, no runtime, published for x64/arm64 on Windows, macOS and Linux — including Linux under WSL, which is an ordinary marketplace install inside the distro. That is what lets a single install follow you from the CLI to a cloud container to your own desktop.
 
 ## Getting your details back
 
