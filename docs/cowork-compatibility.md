@@ -5,6 +5,31 @@ Status legend: **[V]** verified live in a Cowork cloud session (2026-08-15, Clau
 (2026-08-17, desktop app 1.30096.5.0, `local_<uuid>` layout, VM shell **down** throughout) ·
 **[?]** unknown, needs a test · **[!]** known gap, needs work · **[X]** closed.
 
+Rev 5 (2026-08-17): **Rev 4's fixable items are built** (develop, same day). What shipped:
+**B5/B1 →** `run.sh` now targets the plugin's `libexec/claudinine` routing shim (uname-based RID
+dispatch at RUN time) instead of baking the generator's own binary — coherent on every host whose
+shell can reach the path; local Cowork needs no launcher at all anymore, see next. **B7+E6 →**
+local mode is detected structurally (a `local_<uuid>` ancestor with `outputs/` and `.claude/`
+children — the write path's question is "where can the file tools read?", which only the layout
+answers; the doc's tool-name discriminator remains right for classifying transcripts) and gets a
+shell-free retrieval surface: every mirrored record is dumped as `outputs/.claudinine/refs/<ref>.txt`
+(+ `<ref>-media-N.*` for base64 media) and digest headers teach `Read`/`Grep` against that dir
+instead of shell commands. The colocated mirror STAYS canonical (durability, restore); the dump is
+the retrieval projection, regenerated from the mirror when deleted, length-stamped to skip no-op
+passes. A `mirror key: <sid>` breadcrumb in the local block keeps `MirrorLost` and `ForkHealRule`
+working (their third accepted form, alongside bare and launcher). **E7 →** the promise is now
+load-bearing: in local mode a failed refs dump stops compaction (mirror-first style), `MirrorLost`
+tolerates a lost mirror while the dump still serves retrieval, and trips when both are gone.
+**E8 →** `REF` is bound in every header form (`[ab12cd34] -> --ref ab12cd34`); short headers are
+now sid-free, path-free POINTERS (no more dead bare-`claudinine` command), and the pointer target
+is guaranteed live: header dedup keeps one full RETRIEVAL block per **compact-boundary segment**,
+not per file, so the app's context slice always contains the instructions. Old short headers and
+old bare-command media stubs are healed to the new forms in place; anchor-input and media stubs are
+now self-sufficient in the launcher form (or the refs-file path in local mode). **E9 →** the
+"≥ 2 tool calls" trigger inference was wrong: `MinCalls` is 1 and emission is gated by pure
+economics (`digestCost × 1.1 < replacedBytes`); single-call turns pass through when their digest
+can't pay, not because of a count floor. Still open from Rev 4: B2/B3/B8, D8, G5's next-window run.
+
 Rev 4 (2026-08-17): first observations from **local mode on Windows**, which turns out to be
 structurally unlike both cloud Cowork and the CLI, and is the only host where Claudinine's
 generator and its retrieval shell run on **different operating systems**. Consequences: B1's "only
@@ -81,19 +106,23 @@ Two Cowork runtimes matter, and they differ:
 
 ## B. Runtime & platform
 
-- **B1 [V/!] Only Linux binaries ever *execute* — but not only Linux binaries get *emitted*.** Cloud
+- **B1 [X] Only Linux binaries ever *execute* — but not only Linux binaries get *emitted*.** Cloud
   is `linux-x64`; local mode's shell is a Linux VM, so `linux-arm64` on Apple silicon hosts. Verify
   the `bin/claudinine` shim's arch dispatch works on both. **Rev 4 correction:** the claim "the
   `win-x64` publish is irrelevant to Cowork in both modes" is false for local mode on Windows. The
   shell is Linux, but the *hook that writes the launcher* is `win-x64`, and it bakes its own platform
-  into the command the shell is told to run. See B5.
+  into the command the shell is told to run. See B5. **Rev 5: closed** — the launcher now targets the
+  `libexec/claudinine` routing shim (RID from `uname` at run time) whenever the running binary sits in
+  the plugin layout; the concrete-binary target survives only as the dev-tree fallback.
 - **B2 [?] libc compatibility.** Confirm the Native AOT binary runs on the cloud image (glibc
   version, `libstdc++`/`libz` presence) and on the desktop's Linux VM image, which may be a
   different distro.
 - **B3 [?] Cold-start cost on this hardware.** 18 ms median was measured on a dev box. Re-measure in
   the Firecracker VM; the hook budget is shared with Cowork's own Python hooks
   (`user-prompt-submit-reply-reminder.py`, `stop-hook-git-check.sh`).
-- **B5 [L] ROOT CAUSE — local Cowork on Windows is the only host where generator OS ≠ shell OS.**
+- **B5 [X] ROOT CAUSE — local Cowork on Windows is the only host where generator OS ≠ shell OS.**
+  *(Rev 5: fixed for every coherent host by the shim-targeting launcher — see B1; local Cowork no
+  longer depends on the launcher at all — see E6.)*
   The launcher generator emits a binary path for *its own* platform. That is correct everywhere the
   shell shares the hook's OS, which is every host except local Cowork:
 
@@ -128,7 +157,12 @@ Two Cowork runtimes matter, and they differ:
   `stale`; plus #25136, #27330, #27456, #28238, #32004, #37016, #47327, #75321, #79832). **Design
   consequence: in local mode, any retrieval mechanism that needs a shell is unavailable most of the
   time.** Treat the shell as an optimisation, never as the retrieval path.
-- **B7 [L] Detection: discriminate on the shell tool's identity, not on filesystem probes.** The
+- **B7 [X] Detection: discriminate on the shell tool's identity, not on filesystem probes.**
+  *(Rev 5: the WRITE path detects local mode structurally instead — a `local_<uuid>` ancestor with
+  `outputs/` and `.claude/` children, `LocalCowork.RefsDirFor` — because its question is "where can
+  the model's file tools read?", which only the layout answers, and because the alternate retrieval
+  surface needs `outputs/` to exist anyway; no layout, no fix, launcher fallback. The tool-name
+  discriminator below remains the right way to classify a HOST from transcript evidence.)* The
   discriminator is already in the records Claudinine mirrors — the digest for this session literally
   reads `mcp__workspace__bash(echo alive; uname -a)`:
 
@@ -275,7 +309,8 @@ Two Cowork runtimes matter, and they differ:
   **Rev 4:** (a) is confirmed correct for cloud and the CLI, and **inoperable in local mode on
   Windows** — the launcher it writes cannot run there (B5), the binary it names may not even be
   visible (B8), and the shell it needs is usually gone (B6). Keep (a) as the shell path; add E6 as the
-  local-mode path.
+  local-mode path. **Rev 5: done exactly so** — (a) hardened by the shim-targeting launcher (B1),
+  local mode routed through the refs dump (E6).
 - **E2 [X] Mirror durability — solved by placement.** Mirrors are now colocated at
   `<project>/<sid>/claudinine/<stem>.jsonl`, inside the same sidecar dir as `subagents/`,
   `tool-results/` and `workflows/`, so any snapshot, restore, sync or delete carries mirror and
@@ -296,8 +331,15 @@ Two Cowork runtimes matter, and they differ:
   Workflow runs generate most. Wire it at `SessionStart`:
   `MirrorFile.CollectGarbageColocated(MirrorLocator.ClaudinineDirFor(transcriptPath))`.
   (Checked across all non-`Rules/` sources.)
-- **E6 [!] Local mode needs a shell-free retrieval path, and the mirror is in the wrong place for
-  it.** In local Cowork the tools that *always* work are the host-side file tools — `Read` (with
+- **E6 [X] Local mode needs a shell-free retrieval path, and the mirror is in the wrong place for
+  it.** *(Rev 5: built as a refinement of option (a) — the colocated mirror STAYS canonical for
+  durability/restore, and a retrieval PROJECTION of it is dumped to `outputs/.claudinine/refs/`:
+  one `<ref>.txt` per mirrored record (tool_result text, or the serialized tool_use input anchor
+  stubs address) plus `<ref>-media-N.*` for base64 media, length-stamped per mirror so no-op passes
+  skip, regenerated wholesale if deleted. Local digest headers teach `Read`/`Grep` against that dir
+  — same sentinels as the command block, so the self-heal regenerates mode-appropriately when a
+  transcript moves in or out of the layout. A `mirror key: <sid>` breadcrumb keeps ForkHealRule and
+  MirrorLost working; ref files themselves are sid-free, so a fork's refs stay valid unhealed.)* In local Cowork the tools that *always* work are the host-side file tools — `Read` (with
   `offset`/`limit`), `Glob`, `Grep`. They are Windows-side, they do not depend on the VM, and they
   cover the whole verb surface: `Read`+offset ≈ `--full`, `Grep` ≈ `--grep`, a stat ≈ `--info`. But
   they are gated by a **connected-folder allowlist**, and the colocated mirror is not on it. Measured:
@@ -313,7 +355,11 @@ Two Cowork runtimes matter, and they differ:
   guidance forbids requesting it, and a mount of the live session tree was observed to be dropped
   mid-session anyway. Note this makes local mode the *inverse* of A0/E5: there the problem was a shell
   that could not find the binary; here the problem is that the shell is the wrong tool entirely.
-- **E7 [!] Retrieval fails silently, which is worse than failing.** Across a long, tool-heavy local
+- **E7 [X] Retrieval fails silently, which is worse than failing.** *(Rev 5: resolved by removing
+  the broken promise rather than warning about it — local headers no longer name a shell command at
+  all, and the write path treats the refs dump as part of the mirror-first contract: dump fails →
+  compaction skipped, exactly like a failed mirror append. MirrorLost gains the local form: it
+  tolerates a lost mirror while the dump still serves retrieval, and trips when both are gone.)* Across a long, tool-heavy local
   session, `claudinine get` executed **zero times** and nothing anywhere reported a problem. Three
   fallbacks masked it: previews that happened to carry the entire payload (a 140 B tool result was
   fully contained in its own preview); the header's own *"if the file discussed still exists on disk,
@@ -327,7 +373,12 @@ Two Cowork runtimes matter, and they differ:
   emission time (does the launcher target exist and match the shell's platform? is the mirror inside a
   reachable root?) and, when it fails, emit a header that says retrieval is unavailable and previews
   must be treated as untrustworthy — or decline to compact at all, `MirrorLost`-style.
-- **E8 [!] The two header forms disagree, and the abbreviated one is unusable.** Block 1 of this
+- **E8 [X] The two header forms disagree, and the abbreviated one is unusable.** *(Rev 5: `REF` is
+  bound in every form (`[ab12cd34] -> --ref ab12cd34`); the short header is now a sid-free,
+  path-free pointer instead of a dead bare-`claudinine` command; and the pointer target is
+  structurally guaranteed: header dedup keeps one full RETRIEVAL block per compact-boundary
+  SEGMENT, so the app's context slice — which starts at the last boundary — always contains the
+  instructions. Old short headers and old bare-command media stubs are healed in place.)* Block 1 of this
   session emitted the full form (`sh "C:/…/run.sh" get <sid> --ref REF …`); every later block emitted
   `claudinine get <sid> --ref REF …` with a pointer to *"full retrieval guidance in the first collapsed
   block of this session"*. There is no `claudinine` on PATH in local mode (E1 is conditional on a
@@ -337,13 +388,18 @@ Two Cowork runtimes matter, and they differ:
   PATH entry"*, so the bare form contradicts the stated design. Also `--ref REF` is never bound to
   anything: refs appear as `[11699c8f]` and nothing states that the bracketed id is the `REF`
   placeholder. One clause fixes that.
-- **E9 [?] Header cost can exceed header benefit.** Block 1's retrieval preamble is ~800 tokens, with
+- **E9 [X] Header cost can exceed header benefit.** Block 1's retrieval preamble is ~800 tokens, with
   a ~300-char absolute path repeated four times. On a turn whose mirroring saved ~2 KB, the header is
-  net-negative. Consider emitting full instructions only when a turn's measured saving clears a
-  threshold, and a one-line pointer otherwise — noting E8's warning that the pointer target must
-  survive compaction. (Digest emission appears to trigger at ≥ 2 tool calls per turn; single-call turns
-  passed through unmirrored. Inferred from 4-, 6- and 2-call turns vs. several single-call turns, not
-  confirmed against the source.)
+  net-negative. **Rev 5 corrections:** the parenthetical trigger inference was wrong — `MinCalls` is
+  **1** and emission is gated by pure economics (`digestCost × 1.1 < replacedBytes`, priced on the
+  REAL built digest with the header-dedup discount applied); single-call turns pass through when
+  their digest can't pay, not because of a count floor, so the "threshold" asked for here already
+  exists and is exact. The path-repetition cost is fixed structurally: the local block emits the
+  refs dir ONCE as `DIR = …`, the short header carries no path at all, and anchor stubs are
+  path-free pointers (the launcher-form variant was measured at ~0.5 pt of corpus tokens and
+  reverted). Corpus after the whole Rev 5 rework: 68.8% tokens / 78.0% bytes vs 69.1%/77.5% before
+  — the residual −0.3 pt is the REF binding and the per-segment full headers, i.e. the price of
+  retrieval instructions that actually work.
 
 ## F. Cowork-specific UX & safety
 
@@ -367,8 +423,11 @@ Two Cowork runtimes matter, and they differ:
 - **G4** CI: add a Linux-only Cowork bundle target and a smoke test that exercises the synced-plugin
   layout.
 - **G5 [L] Falsifiable predictions for the next local-mode window** (the VM gate flips rarely — B6 —
-  so this list should be run in one sitting when it does). Predictions 1–4 were derived with the shell
-  **down** and each one, if it holds, shows the defect is independent of the gate:
+  so this list should be run in one sitting when it does). **Rev 5 note:** predictions 2–4 targeted
+  the pre-Rev-5 header, which no longer exists in local mode (headers there teach file tools, and
+  `run.sh` now execs the RID-dispatching shim, so 3's expected line-7 failure becomes "works iff the
+  plugin path is reachable from the VM", i.e. it collapses into B8/5). Predictions 1, 5 and 6 stand
+  unchanged and are still worth running. Original list, kept for the record:
   1. `Read`/`Glob`/`Grep` still report `C:\…` paths with the VM up. The VM does not relocate the agent;
      it adds a second execution context. (My system prompt carries a live host→VM translation table
      *while the VM is down* — a mapping only exists because both namespaces coexist.)
@@ -392,18 +451,16 @@ Two Cowork runtimes matter, and they differ:
    remaining problems are packaging shape and retrieval, not feasibility.
 2. **A0 + E5** — repack executables outside `bin/`, and switch digest headers to a launcher next to
    the colocated mirror. These two together are what makes a hosted install work at all.
-2b. **E7 + E8** — cheap, and they matter regardless of which host you fix first: bind `REF` in the
-   header, drop the unusable bare-`claudinine` form, and make retrieval failure loud. Right now a
-   broken read path is indistinguishable from a working one, which is the condition under which the
-   whole scheme quietly degrades into inference-from-previews.
-2c. **B7 + E6** — detect the host from the shell tool's name, and give local Cowork a shell-free
-   retrieval path (mirror under `outputs/`, `Read`/`Grep` instructions). This is the only change that
-   makes local mode work at all, and it removes the dependency on a VM that boots ~7% of the time.
-   Cheap to build, and it does not wait on B8.
+2b. **E7 + E8** — ~~cheap, and they matter regardless of which host you fix first~~ **DONE (Rev 5)**:
+   REF bound everywhere, short headers are pointers with a per-boundary-segment full block to point
+   at, retrieval failure fails the pass instead of silently degrading.
+2c. **B7 + E6** — ~~detect the host, give local Cowork a shell-free retrieval path~~ **DONE (Rev 5)**:
+   structural layout detection + the `outputs/.claudinine/refs/` dump + `Read`/`Grep` headers. Local
+   mode no longer depends on the VM at all.
 3. **E4** — one-line wiring, no reason to carry it.
-3b. **B5** — resolve the binary from `CLAUDININE_DIR` + `uname -s`/`-m` instead of baking the
-   generator's own platform. Fixes the CLI-on-Windows and native-Linux launchers properly; does not
-   help local Cowork.
+3b. **B5** — ~~resolve the binary at run time instead of baking the generator's platform~~ **DONE
+   (Rev 5)**: `run.sh`/`run.cmd` target the `libexec/` routing shims when the plugin layout is
+   detected, falling back to the concrete binary in dev trees.
 3. **D5 + G1** — run the compactor over real Cowork transcripts and see what breaks. (This session's
    own transcript is already a valid specimen.)
 4. **C2/C3** — the trigger model, which is where Cowork differs most from the CLI.
