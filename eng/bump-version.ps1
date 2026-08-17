@@ -42,23 +42,30 @@ if (-not $Repo) {
 }
 
 # No prior release at all (a brand-new repo) starts at 0.0.0, so a first patch
-# bump produces 0.0.1. gh exits non-zero when there are no releases (or, in
-# practice, whenever it fails); that is the one case this treats as "no
-# current version" rather than an error. Diagnosed against three failing CI
-# runs: this is a dot-sourced script (cd.yml's `pwsh -command ". '{0}'"`), and
-# a dot-sourced script's LAST NATIVE COMMAND's exit code becomes the whole
-# step's exit code regardless of what PowerShell itself does afterward --
-# there was no thrown exception (a try/catch around this never caught
-# anything), just a stale $LASTEXITCODE=1 from this gh call surviving all the
-# way to the end of the file. `exit 0` after handling the failure is not
-# optional cleanup here, it is the actual fix.
-$latestTag = gh release list --repo $Repo --limit 1 --json tagName --jq '.[0].tagName' 2>&1
-Write-Host "[bump-version] repo=$Repo exit=$LASTEXITCODE raw-output=[$latestTag]"
-if ($LASTEXITCODE -ne 0 -or -not $latestTag) {
-    $current = '0.0.0'
-} else {
-    $current = $latestTag -replace '^v', ''
+# bump produces 0.0.1. That fallback applies ONLY to a clean empty answer
+# (exit 0, no output). A FAILING `gh release list` must never reach it:
+# during the 2026-08-17 GitHub outage a 503 here fell back to 0.0.0 and a
+# minor bump published a bogus "Release 0.1.0" commit + stray v0.1.0 tag to
+# main (run 32053146604) -- an API error is not "no releases", it is "we do
+# not know the current version", and the only safe answer is to fail the run
+# before anything is built or pushed. Transient errors get a few retries.
+#
+# $global:LASTEXITCODE zeroing on the success path is load-bearing, not
+# cleanup. Diagnosed against three failing CI runs: this is a dot-sourced
+# script (cd.yml's `pwsh -command ". '{0}'"`), and a dot-sourced script's
+# LAST NATIVE COMMAND's exit code becomes the whole step's exit code
+# regardless of what PowerShell itself does afterward.
+$latestTag = $null
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    $latestTag = gh release list --repo $Repo --limit 1 --json tagName --jq '.[0].tagName' 2>&1
+    Write-Host "[bump-version] repo=$Repo attempt=$attempt exit=$LASTEXITCODE raw-output=[$latestTag]"
+    if ($LASTEXITCODE -eq 0) { break }
+    if ($attempt -lt 5) { Start-Sleep -Seconds (15 * $attempt) }
 }
+if ($LASTEXITCODE -ne 0) {
+    throw "gh release list failed after 5 attempts; refusing to guess the current version (last output: $latestTag)"
+}
+$current = if ($latestTag) { $latestTag -replace '^v', '' } else { '0.0.0' }
 $global:LASTEXITCODE = 0
 
 if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
