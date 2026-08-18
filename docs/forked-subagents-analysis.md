@@ -93,12 +93,18 @@ snapshot corpus contains zero `fork-context-ref` records, so the change is a
 no-op on every existing file by construction.
 
 Incidental observation from the same run — pre-existing, NOT caused by the fix
-(reproduced on the identical file minus the head record, which classifies
-sidechain under the OLD rule too): a turn whose collapsible batch reduces to one
-call still collapses, and on a file with no prior full header the digest header
-lands unamortized — 28.6 KB → 30.1 KB, net negative. Likely the denial-exclusion
-path missing the reduced-count MinCalls re-check the tail-drop path has; spun
-off as its own task.
+(reproduced on the identical file minus the head record), and investigated to
+conclusion 2026-08-18: **not a bug**. A single-call turn collapsed (620 B of
+payload) and the file GREW by ~1.5 KB, which looks wrong but is the documented
+residual of the economics gate's header-amortization discount: the gate prices
+every carrier as if `CarrierHeaderDedupRule` will slim its header (it must —
+conditioning the price on whether a carrier already exists makes pass 2 differ
+from pass 1, breaking byte-idempotence; unconditional full pricing was measured
+worse, 18 corpus files regressed), and on a file whose ONLY carrier is small,
+the one full header that must survive per segment lands unamortized. Loss is
+bounded by a single header per segment and only visible on tiny files.
+`MinCalls = 1` is likewise deliberate and corpus-measured. See the gate comment
+in `ChainCollapseRule.CollapseTurn` — do not re-file this.
 
 One first-pass claim in this area survives, narrowed: `ParentMirrorFiles` never
 constructs `agent-*.jsonl` candidates (`MirrorLocator.cs:184`). But
