@@ -106,6 +106,17 @@ bounded by a single header per segment and only visible on tiny files.
 `MinCalls = 1` is likewise deliberate and corpus-measured. See the gate comment
 in `ChainCollapseRule.CollapseTurn` — do not re-file this.
 
+Token-denominated, measured with cl100k on the collapsed record: 174 → 724
+tokens (+550) with the full header, of which the header block is ~577 (command
+syntax tokenizes at ~3.2 B/token vs ~4 for prose, so the residual is
+proportionally worse in tokens than in bytes). In the slimmed shape every
+subsequent carrier takes, the same digest is 147 tokens vs 174 original — the
+marginal trade the gate priced was genuinely profitable (−27); the entire loss
+is the one prepaid header. And the cost only lands if the agent conversation is
+ever loaded again (here: the operator's switch into it, session `8917c7ca`); a
+fork that runs, reports and dies never re-loads its transcript, making the whole
+trade disk-only.
+
 One first-pass claim in this area survives, narrowed: `ParentMirrorFiles` never
 constructs `agent-*.jsonl` candidates (`MirrorLocator.cs:184`). But
 `ProjectDirFor` explicitly handles `subagents/` paths (`MirrorLocator.cs:52`),
