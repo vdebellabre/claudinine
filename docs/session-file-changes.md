@@ -235,23 +235,54 @@ Neither gap is reachable by a session fork, because the fork abandons
 `subagents/` rather than copying it — there is no copied agent file carrying a
 stale parent path.
 
-### Open: does `subagent_type: "fork"` reach it?
+### Measured: what `subagent_type: "fork"` inherits
 
 CLI 2.1.232 turned on subagent forking by default, described upstream as the
-subagent inheriting the full conversation. If a forked subagent's transcript
-contains copied parent records, then parent-session digest headers — parent sid
-in the launcher path — would be replayed *inside* an `agent-<id>.jsonl`, which
-is precisely the shape the detection gap above cannot see.
+subagent inheriting the full conversation. Measured 2026-08-18 on a standalone
+CLI at 2.1.232+ (session `b85203e9`, plugin 1.1.0 at user scope), by asking a
+forked subagent to report only what it could see, without tools:
 
-This is a hypothesis, not a finding. It could not be tested on 2.1.229:
-`subagent_type: "fork"` is rejected as an unknown agent type on this build.
+- **The fork inherits the compacted view, faithfully.** Its view matched the
+  parent's exactly — same carrier headers, same refs, no raw payload leaking
+  through on the inheriting side. Context inheritance operates on the compacted
+  transcript, not on a pre-rewrite copy or a hydrated view. It quoted a carrier
+  header back verbatim.
+- **Full outputs are absent from the inherited context, previews are present.**
+  For ref `adfed4ed` the fork had the preview fragment and the inter-call note,
+  and could not see the rest of the payload.
+- **Retrieval works from inside the fork.** It ran the header's command
+  unmodified — a launcher path belonging to the *parent* session, with a `<sid>`
+  argument that is not the agent's own — and the full record came back intact.
+  Retrieval is session-addressed, not identity-scoped; a forked subagent is not
+  confined to its own session's archive.
+- **The retrieved bytes confirmed the parent's prose.** The parent had asserted
+  specifics (a settings key, a marketplace registration) that were unverifiable
+  from collapsed context; the archive returned them and they were accurate.
 
-**Test after the CLI reaches 2.1.232+:** spawn a forked subagent from a session
-that already has digest headers, then inspect the resulting
-`subagents/agent-<id>.jsonl` for launcher paths naming the *parent* sid. If they
-are present, both gaps above become live and fork-heal needs an agent-shaped
-detection path and candidate shape. If the forked agent file starts clean, the
-inheritance is in-memory only and nothing is needed.
+So the earlier worry — that a forked subagent would hold stubs with no way back
+— does not hold. The cost is real but narrower, and best stated the way the fork
+itself put it: the parent's conclusions arrive as **assertions whose evidence is
+behind a retrieval call**. Warrant is deferred, not lost. This is why the
+per-call inter-call notes are load-bearing rather than decorative — they are the
+only thing keeping a collapsed turn interpretable without paying for a `get`.
+Do not trim them as redundant prose.
+
+One incidental finding, worth keeping because it constrains every matcher: a
+first attempt appended `; echo "EXIT=$?"` to the header's command and was
+**denied by the permission layer before execution** — no exit status, no output.
+The identical command in the header's bare form ran without a prompt. Appending
+to the retrieval command breaks the match; the bare form is the one that works.
+
+Two things deliberately not claimed from this measurement: the `600b` size match
+was called consistent-on-inspection by the fork rather than verified (`--info`
+was not run), and the fork's "7 prior messages" was its own turn-boundary
+framing, not a raw block count — it flagged both itself.
+
+**Still unmeasured:** whether a forked subagent's `agent-<id>.jsonl` on disk
+carries copied parent records, and so whether parent-sid launcher paths ever
+land inside an agent file. The context-level question above is answered; the
+disk-level one is not. Until it is, the two code-level gaps in the preceding
+section remain reachable in principle and unreached in practice.
 
 ## Known, accepted trade-offs
 

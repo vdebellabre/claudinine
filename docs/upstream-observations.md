@@ -138,16 +138,19 @@ Two items in that range touch our territory. Both were checked against the code 
   launcher paths (`sh "<abs>/run.sh" get <sid>`) that are ordinary Windows paths, never the
   `\??\` device form, so nothing we write trips the new validation.
 
-One item is **open, not cleared**: 2.1.232 turned on **subagent forking by default**
-(`subagent_type: "fork"` inherits the full conversation) and made non-teammate spawns
-background by default. Initially logged here as a mix-not-format change; that was too
-quick. If a forked subagent's transcript carries copied parent records, parent-session
-digest headers land inside an `agent-<id>.jsonl`, where fork-heal's detection cannot see
-them (the captured sid is the agent's own; the parent sid hides in the launcher path).
-Untestable on 2.1.229 — `subagent_type: "fork"` is rejected as an unknown agent type on
-this build. Test it after the CLI reaches 2.1.232+; the procedure and the two code-level
-gaps are written up in `session-file-changes.md`, section "Session forks". Also noted, not
-affecting us: 2.1.232 fixed fullscreen re-normalizing the whole conversation on every
+One item was flagged open and is now **measured and cleared at the context level**: 2.1.232
+turned on **subagent forking by default** (`subagent_type: "fork"`) and made non-teammate
+spawns background by default. First logged here as a mix-not-format change, then reopened
+on the worry that a forked subagent would inherit stubs it could not resolve. Measured
+2026-08-18 on a standalone CLI at 2.1.232+ (untestable on our pinned 2.1.229, which rejects
+`subagent_type: "fork"` as an unknown agent type): the fork inherits the compacted view
+faithfully, and **retrieval works from inside it** — it ran the header's command unmodified
+against the *parent* session's launcher and sid, and got the full record back. Retrieval is
+session-addressed, not identity-scoped. The residual cost is that inherited prose arrives as
+assertions whose evidence sits behind a `get`. Full measurement, plus an incidental
+permission-matcher finding (appending to the retrieval command gets it denied; the bare
+header form runs), in `session-file-changes.md`, section "Session forks". Still unmeasured:
+whether a forked agent's on-disk file carries parent records. Also noted, not affecting us: 2.1.232 fixed fullscreen re-normalizing the whole conversation on every
 update, the same family as the 2.1.227 quadratic fix, so timing comparisons across that
 boundary stay suspect.
 
