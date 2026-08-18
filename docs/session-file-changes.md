@@ -180,6 +180,79 @@ Two further properties worth stating:
   `claudinine restore-compaction-on <session-id>` restores it once and lets
   steady-state compaction resume (it also unfreezes a frozen session).
 
+## Session forks
+
+The desktop app can fork a conversation into a new session id, copying history
+records verbatim. Measured on a live fork (2026-08-18, `251e5d4a` forked to
+`7868eb69`, CLI 2.1.229):
+
+- **The transcript is copied; the sidecar is not.** 41 of the fork's 55 records
+  still carried the *parent's* `sessionId`, untouched. The parent's
+  `subagents/` directory was **not** copied — the fork had no `subagents/` dir
+  at all.
+- **No `forkedFromSessionId` field.** This fork form stamps nothing. Do not use
+  that field to detect forks — a disk-wide search for it found only prose
+  mentions, never a real record.
+- **Retrieval survives the fork.** The fork got its own mirror
+  (`claudinine/7868eb69.jsonl`, `mirrorOf` pointing at itself) and 78 of 79 refs
+  resolved, including pre-fork refs from the session's first tool call. The one
+  failure was a `ToolSearch` whose output was empty (`-> 0b :: (no output)`) —
+  nothing to archive, and it fails identically in the parent, so it is not a
+  fork artifact. Every launcher path in the fork named the new sid; zero stale
+  parent paths remained.
+
+Two things this measurement did *not* establish, recorded so they are not
+mistaken for verified:
+
+- **Which mechanism did the retargeting.** Only `chain-collapse` and
+  `anchor-input-stub` stamps appear in the fork — no fork-heal stamp — and
+  `Launcher.EnsureCurrent` rewrites paths on every pass regardless of forks. So
+  "ForkHealRule detected and retargeted" and "the launcher rewrite made it moot"
+  are indistinguishable from the on-disk evidence. The outcome is correct either
+  way; the cause is not pinned.
+- **What happens to the abandoned subagent.** The fork keeps the spawn digest
+  and it resolves from the session mirror, but the agent transcript itself lives
+  only in the parent. If the parent is GC'd, the fork retains a working ref to
+  the spawn summary and loses only the sidechain detail behind it. That is
+  believed harmless, but it is an assumption, not a checked invariant.
+
+### Fork-heal does not cover subagents, and on this evidence does not need to
+
+`ForkHealRule` detects a foreign session by regexing the sid out of a digest's
+retrieval command. In a subagent transcript that capture yields the agent's own
+id (`agent-<id>`), because the emitters derive the same string from the file
+stem (`ChainCollapseRule.cs:101`). The *parent* sid appears only inside the
+launcher path (`.../<parent-sid>/claudinine/run.sh`), which the capture group
+does not cover. So in an agent file the rule finds nothing foreign and returns
+before any lookup: the gap is in **detection**, not resolution.
+
+A second gap sits behind it: `ParentMirrorFiles` only ever constructs
+`<sid>/claudinine/<sid>.jsonl` and `<pool>/<sid>.jsonl` candidates
+(`MirrorLocator.cs:184`), never `agent-*.jsonl`, so adoption could not resolve
+an agent mirror even if detection fired. Both would have to change together.
+
+Neither gap is reachable by a session fork, because the fork abandons
+`subagents/` rather than copying it — there is no copied agent file carrying a
+stale parent path.
+
+### Open: does `subagent_type: "fork"` reach it?
+
+CLI 2.1.232 turned on subagent forking by default, described upstream as the
+subagent inheriting the full conversation. If a forked subagent's transcript
+contains copied parent records, then parent-session digest headers — parent sid
+in the launcher path — would be replayed *inside* an `agent-<id>.jsonl`, which
+is precisely the shape the detection gap above cannot see.
+
+This is a hypothesis, not a finding. It could not be tested on 2.1.229:
+`subagent_type: "fork"` is rejected as an unknown agent type on this build.
+
+**Test after the CLI reaches 2.1.232+:** spawn a forked subagent from a session
+that already has digest headers, then inspect the resulting
+`subagents/agent-<id>.jsonl` for launcher paths naming the *parent* sid. If they
+are present, both gaps above become live and fork-heal needs an agent-shaped
+detection path and candidate shape. If the forked agent file starts clean, the
+inheritance is in-memory only and nothing is needed.
+
 ## Known, accepted trade-offs
 
 Stated plainly, because they are real:

@@ -138,10 +138,16 @@ Two items in that range touch our territory. Both were checked against the code 
   launcher paths (`sh "<abs>/run.sh" get <sid>`) that are ordinary Windows paths, never the
   `\??\` device form, so nothing we write trips the new validation.
 
-Also noted, not affecting us: 2.1.232 turned on **subagent forking by default**
+One item is **open, not cleared**: 2.1.232 turned on **subagent forking by default**
 (`subagent_type: "fork"` inherits the full conversation) and made non-teammate spawns
-background by default — a change in the *mix* of subagent transcripts we will see, not in
-their format; and 2.1.232 fixed fullscreen re-normalizing the whole conversation on every
+background by default. Initially logged here as a mix-not-format change; that was too
+quick. If a forked subagent's transcript carries copied parent records, parent-session
+digest headers land inside an `agent-<id>.jsonl`, where fork-heal's detection cannot see
+them (the captured sid is the agent's own; the parent sid hides in the launcher path).
+Untestable on 2.1.229 — `subagent_type: "fork"` is rejected as an unknown agent type on
+this build. Test it after the CLI reaches 2.1.232+; the procedure and the two code-level
+gaps are written up in `session-file-changes.md`, section "Session forks". Also noted, not
+affecting us: 2.1.232 fixed fullscreen re-normalizing the whole conversation on every
 update, the same family as the 2.1.227 quadratic fix, so timing comparisons across that
 boundary stay suspect.
 
