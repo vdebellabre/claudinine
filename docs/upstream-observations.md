@@ -9,18 +9,47 @@ time I checked?" without re-deriving the answer from scratch.
 Add an entry when a version bump is noticed. An entry saying "read the changelog, no
 territory touched" is worth writing: the value is in the *continuity*, not the detail.
 
+## The review, when asked for one
+
+Two checks. The changelog says what upstream *meant* to change; the bundle diff says
+what actually moved in the binary we parse against. Neither subsumes the other — read
+both, then write the entry.
+
+1. **Changelog, from the last entry's baseline to current.** The bottom of this file's
+   last entry names the previous shell and CLI versions; read the notes for everything
+   in between. Online, since the bundle ships no CHANGELOG. Only the CLI matters here.
+2. **Diff the CLI bundle** against the previous version, per the recipe below — but only
+   when the CLI actually moved *and* both versions are still on disk (see the pruning
+   caution). A shell-only bump ends at step 1.
+
+Then append an entry, ending with the new baseline so the next review knows where to
+start from.
+
+**A corpus run is not part of this, deliberately.** `bench/corpus/` is 174 frozen JSONL
+files and `compare.py` shells out only to `cln` and cozempic, never to `claude` — so a
+run is a regression test on *our* parser against 2026-08-12-era inputs, and its verdict
+is unchanged by whatever Claude version is installed. It cannot see an upstream format
+change: new record shapes are simply absent from a frozen corpus, so everything passes
+and nothing is learned. Use it to check our own changes, not upstream's.
+
 ## What to observe
 
-Three tracks move independently. The first two have version numbers; the third is the
-one that actually matters and does not.
+Two tracks move independently, and both are read off disk:
 
 | Track | How to read it |
 |---|---|
 | Desktop shell | `ls %LOCALAPPDATA%\AnthropicClaude` → `app-<ver>` dirs (newest mtime = current) |
 | Embedded CLI | `%APPDATA%\Claude\claude-code\<ver>\claude.exe --version`; `.payload` holds a sha256 build identity |
-| Transcript format | empirically, from a live session's JSONL — see `session-file-changes.md`, `parallel-batch-transcript-format.md` |
 
-A shell bump alone has never moved the format. A CLI bump is the one to take seriously.
+Record both in every entry, but they carry different weight: a shell bump alone has never
+moved anything we parse, while a CLI bump is the one to take seriously. Confirm which CLI
+is actually *running* rather than trusting the highest version dir — the app can keep
+several and run an older one (`Get-Process claude | Select Path`).
+
+The thing that truly matters, the transcript format, has no version number and is not
+checked by this review — it is pinned empirically in `session-file-changes.md` and
+`parallel-batch-transcript-format.md`. The two checks here are early warning that those
+documents may need re-verifying, not a substitute for it.
 
 ### Digging into the CLI bundle
 
@@ -46,7 +75,11 @@ Three cautions, all learned the hard way:
   key is the signal worth trusting.
 - **Old versions are pruned eventually.** Squirrel keeps a couple of `app-*` dirs and the
   CLI keeps a couple of version dirs, so a differential read is only possible for a while
-  after the bump. If a bump looks interesting, diff it while both sides are still on disk.
+  after the bump — diff while both sides are still on disk. If the previous CLI is already
+  gone, the bundle diff is simply unavailable: say so in the entry and let the changelog
+  read stand alone, rather than reaching for a substitute. To keep the option open across
+  a bump you expect to care about, copy the current `claude.exe` aside beforehand (~300 MB)
+  — the `.payload` sha256 identifies which build it was.
 
 ## Observations
 
