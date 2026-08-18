@@ -20,6 +20,13 @@ internal sealed class TranscriptFile
     /// all 57 on-disk subagent files are 100% sidechain-flagged, while a main
     /// transcript always contains unflagged records — one unflagged record is
     /// enough to classify as main, so guards written for main files stay armed.
+    ///
+    /// One record type is classification-neutral: a fork-mode agent transcript
+    /// (CLI 2.1.232+, subagent_type "fork") opens with a `fork-context-ref`
+    /// pointer that carries no isSidechain (no uuid, no message either — see
+    /// docs/forked-subagents-analysis.md). Without the exemption every forked
+    /// agent file classifies as MAIN and sidechain compaction silently disarms —
+    /// measured live 2026-08-18: exit 0, transcript byte-unchanged.
     /// </summary>
     public required bool IsSidechainFile { get; init; }
 
@@ -88,7 +95,7 @@ internal sealed class TranscriptFile
             Records = records,
             EndsWithNewline = endsWithNewline,
             LoadedLength = loadedLength,
-            IsSidechainFile = records.All(r => r.IsSidechain),
+            IsSidechainFile = records.All(r => r.IsSidechain || r.Type == "fork-context-ref"),
         };
     }
 
