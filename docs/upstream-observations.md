@@ -105,6 +105,48 @@ Noticed because the desktop app updated itself. **Shell-only bump; nothing to do
 
 **Baseline going forward: shell 1.32352.1, CLI 2.1.229.**
 
+### 2026-08-18 (later) — changelog read 2.1.229 → 2.1.234; no local bump
+
+Review on request. **Nothing moved on this machine since the entry above**, so this was a
+changelog read only; the bundle diff did not apply.
+
+- Shell: still `app-1.32352.1`; Squirrel checked for updates at 08:39 and stayed. Nothing
+  staged in `packages/` beyond the 1.32352.1 nupkg.
+- CLI: still `2.1.229` running, and **bit-identical** to the recorded baseline —
+  sha256 `5736c66b…c58376c`, 307,186,848 B, matching `.payload`. Only `2.1.227` and
+  `2.1.229` on disk, so the diff had no new side to compare against.
+- **But upstream is ahead of this install**: 2.1.234 is current, and the desktop CLI is
+  pinned five releases back (230 does not exist publicly; 231/232/233/234 do). So the
+  changelog range was read even though nothing changed locally. Worth remembering: the
+  desktop app's CLI can sit well behind the published version, and the version *we* parse
+  against is the one on disk, not the newest released.
+
+Two items in that range touch our territory. Both were checked against the code and are
+**non-breaking**; neither needs work.
+
+- **2.1.234: `CLAUDE_CODE_PROJECT_DIR_NAME`** — "hosts that give each session its own
+  config directory can choose a short name for the per-project transcript directory". This
+  is the closest thing to a real hazard in the range, because it makes the per-project
+  directory name host-chosen rather than derived. We are safe by construction: the
+  colocated mirror is derived from the hook's own `transcript_path` by
+  `Path.GetDirectoryName` (`MirrorLocator.cs:31`), never by recomputing a project slug, and
+  the verb-time fallback *enumerates* `~/.claude/projects` rather than predicting a name
+  (`MirrorLocator.cs:126`), so a renamed project dir is still found. Do not "improve" either
+  into slug reconstruction — this env var is exactly why that would break.
+- **2.1.233 + 2.1.234: NT-namespace (`\??\`) path rejection** in session restore, remote
+  file reads, CLAUDE.md includes, workflow scripts and uploads. Our digest headers emit
+  launcher paths (`sh "<abs>/run.sh" get <sid>`) that are ordinary Windows paths, never the
+  `\??\` device form, so nothing we write trips the new validation.
+
+Also noted, not affecting us: 2.1.232 turned on **subagent forking by default**
+(`subagent_type: "fork"` inherits the full conversation) and made non-teammate spawns
+background by default — a change in the *mix* of subagent transcripts we will see, not in
+their format; and 2.1.232 fixed fullscreen re-normalizing the whole conversation on every
+update, the same family as the 2.1.227 quadratic fix, so timing comparisons across that
+boundary stay suspect.
+
+**Baseline going forward: shell 1.32352.1, CLI 2.1.229 (upstream at 2.1.234).**
+
 ### Earlier, reconstructed from scattered notes
 
 These predate this file and were recorded prose-style elsewhere; kept here so the trail
