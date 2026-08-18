@@ -242,11 +242,13 @@ subagent inheriting the full conversation. Measured 2026-08-18 on a standalone
 CLI at 2.1.232+ (session `b85203e9`, plugin 1.1.0 at user scope), by asking a
 forked subagent to report only what it could see, without tools:
 
-- **The fork inherits the compacted view, faithfully.** Its view matched the
-  parent's exactly — same carrier headers, same refs, no raw payload leaking
-  through on the inheriting side. Context inheritance operates on the compacted
-  transcript, not on a pre-rewrite copy or a hydrated view. It quoted a carrier
-  header back verbatim.
+- **The fork inherited the parent's compacted view — because that WAS the
+  parent's live context.** (Mechanism corrected 2026-08-18, second experiment
+  below: the parent had just been resumed, so its in-memory context equaled the
+  compacted transcript, and this observation could not distinguish disk-read
+  from memory-inheritance.) Its view matched the parent's exactly — same carrier
+  headers, same refs, no raw payload leaking through on the inheriting side. It
+  quoted a carrier header back verbatim.
 - **Full outputs are absent from the inherited context, previews are present.**
   For ref `adfed4ed` the fork had the preview fragment and the inter-call note,
   and could not see the rest of the payload.
@@ -272,6 +274,48 @@ first attempt appended `; echo "EXIT=$?"` to the header's command and was
 **denied by the permission layer before execution** — no exit status, no output.
 The identical command in the header's bare form ran without a prompt. Appending
 to the retrieval command breaks the match; the bare form is the one that works.
+
+### Settled: the fork inherits LIVE MEMORY, not the disk transcript
+
+The measurement above was confounded: the parent had been freshly resumed, so
+live context and disk were identical at fork time. Settled 2026-08-18 with a
+canary-divergence experiment (session `ac149bcb`, CLI 2.1.232+, plugin active):
+
+Protocol — force the two states apart, plant a distinct unguessable marker on
+each side, fork, ask for the markers' NEIGHBORS (the fork prompt must name the
+markers, so presence is proven by quoting the adjacent tokens, which the prompt
+does not contain):
+
+- **Memory-side marker**: a 12 KB canary file read in one turn, collapsed on
+  disk by the next prompt's hook. After the pass the marker survived on disk
+  only inside the carrier's `toolUseResult` — a field the record→API converters
+  never read — so the API-visible disk view had the digest but not the marker,
+  while live memory held the full read. (First attempt failed instructively:
+  asking the session to "summarize in one word" made it echo the marker into
+  surviving prose. The canary turn must end with a content-free reply.)
+- **Disk-side marker**: edited into a surviving assistant record's
+  `message.content` AFTER the app had loaded it (the app never re-reads
+  mid-session, canary-verified 2026-08-06).
+
+Fork verdict, three for three: it quoted the memory marker's neighbors verbatim
+(`left-77e1 … right-30ab`), did NOT see the disk marker, and saw **no digest
+headers at all** — both Read results sat raw and uncollapsed in its context,
+including the turn the disk had carried as a carrier for two prompts.
+
+Consequences:
+
+- The compacted-view inheritance measured above happens exactly when the parent
+  was freshly loaded from a compacted transcript. The lean-fork benefit is
+  realized at parent LOAD time, like every other compaction benefit — there is
+  no mid-session disk consumer in the fork path.
+- A parent that stays live across a long stretch hands every fork the fat view,
+  regardless of what the disk says. A fork of a long-lived parent is a context
+  the plugin structurally cannot reach — same family as the auto-compaction
+  spectator problem, and one more input to the incremental-vs-recompile design
+  discussion.
+- The on-disk `fork-context-ref` pointer (`parentSessionId`/`parentLastUuid`)
+  is bookkeeping for later loads of the agent conversation, not the inheritance
+  mechanism itself.
 
 Two things deliberately not claimed from this measurement: the `600b` size match
 was called consistent-on-inspection by the fork rather than verified (`--info`

@@ -20,12 +20,15 @@ The desktop CLI is pinned at 2.1.229, which rejects `subagent_type: "fork"` as a
 unknown agent type, so the fork itself was run on a standalone CLI at 2.1.232+.
 
 The first question is answered elsewhere (`session-file-changes.md`, section
-"Session forks"): the fork inherits the compacted view faithfully, and retrieval
-**works** from inside it — it ran the header's command unmodified against the
-parent session's launcher and sid, and got the full record back. Retrieval is
-session-addressed, not identity-scoped. The residual cost is that inherited prose
-arrives as assertions whose evidence sits behind a `get`. This document covers
-the second question: the on-disk shape.
+"Session forks"), with a mechanism correction settled 2026-08-18 by a
+canary-divergence experiment recorded there: **the fork inherits the parent's
+LIVE in-memory context, not the disk transcript.** The original run observed
+"the compacted view" only because the parent had just been resumed, making
+memory equal disk. Retrieval still works from inside a fork whose inherited
+memory carries digests — session-addressed, not identity-scoped — and the
+residual cost (inherited prose as assertions whose evidence sits behind a `get`)
+applies exactly when the parent itself was loaded from a compacted transcript.
+This document covers the second question: the on-disk shape.
 
 ## The measurement setup
 

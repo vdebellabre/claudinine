@@ -143,14 +143,19 @@ turned on **subagent forking by default** (`subagent_type: "fork"`) and made non
 spawns background by default. First logged here as a mix-not-format change, then reopened
 on the worry that a forked subagent would inherit stubs it could not resolve. Measured
 2026-08-18 on a standalone CLI at 2.1.232+ (untestable on our pinned 2.1.229, which rejects
-`subagent_type: "fork"` as an unknown agent type): the fork inherits the compacted view
-faithfully, and **retrieval works from inside it** — it ran the header's command unmodified
-against the *parent* session's launcher and sid, and got the full record back. Retrieval is
-session-addressed, not identity-scoped. The residual cost is that inherited prose arrives as
-assertions whose evidence sits behind a `get`. Full measurement, plus an incidental
-permission-matcher finding (appending to the retrieval command gets it denied; the bare
-header form runs), in `session-file-changes.md`, section "Session forks". Still unmeasured:
-whether a forked agent's on-disk file carries parent records. Also noted, not affecting us: 2.1.232 fixed fullscreen re-normalizing the whole conversation on every
+`subagent_type: "fork"` as an unknown agent type), then mechanism-corrected the same day by
+a canary-divergence experiment: **the fork inherits the parent's LIVE in-memory context, not
+the disk transcript** (the first run saw "the compacted view" only because the parent had
+just been resumed, making memory equal disk). So a fork carries digests exactly when the
+parent was loaded from a compacted transcript — and **retrieval works from inside it**: it
+ran the header's command unmodified against the *parent* session's launcher and sid, and got
+the full record back. Retrieval is session-addressed, not identity-scoped. The residual cost
+is that inherited prose arrives as assertions whose evidence sits behind a `get`. Full
+measurement, the settling experiment, plus an incidental permission-matcher finding
+(appending to the retrieval command gets it denied; the bare header form runs), in
+`session-file-changes.md`, section "Session forks". The on-disk shape is measured too: a
+forked agent's file carries NO parent records, just a `fork-context-ref` pointer — see
+`forked-subagents-analysis.md`. Also noted, not affecting us: 2.1.232 fixed fullscreen re-normalizing the whole conversation on every
 update, the same family as the 2.1.227 quadratic fix, so timing comparisons across that
 boundary stay suspect.
 
