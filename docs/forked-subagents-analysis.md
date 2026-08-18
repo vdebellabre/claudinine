@@ -1,8 +1,10 @@
 # Forked subagents: what the transcripts actually look like
 
-Status: **analysis only, no fix applied.** Everything below was measured on disk
-on 2026-08-18. Nothing here is a proposal; the last section lists what a fix
-would have to decide.
+Status: **amended 2026-08-18 (second pass), classification fix shipped.** The
+first pass was measurement-only; a re-measurement the same day overturned
+finding 1 (see its rewritten section — the original text mis-read the file in
+two ways), surfaced the actual defect (classification), and that defect was
+fixed with tests. Findings 2–4 stand as measured.
 
 ## Why this was investigated
 
@@ -39,35 +41,71 @@ Artifacts:
 - the same file, hard-linked into `8917c7ca-…/subagents/`
 - one mirror per session, under each session's own `claudinine/` directory
 
-## Finding 1 — inherited digests defeat fork-heal's detection (CONFIRMED LIVE)
+## Finding 1 — REWRITTEN 2026-08-18: no inherited digests exist on disk; the real gap was classification
 
-The agent transcript contains **three `[claudinine:` digest headers and zero rule
-stamps**. Our compactor never wrote this file: the headers arrived as copied
-parent context. They carry **four launcher paths naming the parent session**
-`b85203e9`, inside a file whose own identity is `agent-a9b839ac5eaa570bd`.
+The first pass claimed the three `[claudinine:` headers "arrived as copied
+parent context" and that fork-heal's detection missed them because the parent
+sid "exists only in the path portion of the launcher invocation". **Both claims
+were wrong.** Re-measured against the live file:
 
-`ForkHealRule.Apply` derives `currentSid` from the file stem
-(`ForkHealRule.cs:40`), so here it is `agent-a9b839ac5eaa570bd`. It then collects
-foreign sids from the digest's retrieval command. Measured on this file, that
-capture returns **nothing at all** — the get-target set is empty. The parent sid
-exists only in the *path* portion of the launcher invocation, which the capture
-group does not cover. `flagged.Count == 0`, and the rule returns
-(`ForkHealRule.cs:58-59`) before any parent lookup happens.
+- **The fork materializes no inherited records at all.** The 15 on-disk records
+  are the `fork-context-ref` pointer (record 0) plus the agent's OWN
+  conversation. The three `[claudinine:` hits are the operator's canary prompt
+  and the agent QUOTING a digest header in its answer (records 1–3). The
+  inherited compacted view exists only behind the pointer — `contextLength: 36`
+  against 15 records was saying exactly this.
+- **The regex measurement was a raw-vs-decoded artifact.** The launcher commands
+  in the file DO spell the parent sid as the get argument:
+  `…/b85203e9-…/claudinine/run.sh\" get b85203e9-8ccd-… --ref adfed4ed --full`.
+  The first-pass check ran against raw JSONL, where the quote is JSON-escaped
+  (`run.sh\"`), so the pattern's literal `run.sh"` never matches — the same
+  escaped-quote trap `Compactor.MirrorLost` handles explicitly on RawLine.
+  Against the decoded strings `ForkHealRule` actually visits, the capture DOES
+  return the parent sid.
+- **Detection actually stops one gate earlier.** `ForkHealRule.Apply` skips any
+  record without a `claudinine` envelope (`ForkHealRule.cs:49`), and no record
+  in this file has one — that is what "zero rule stamps" meant. And for this
+  file, not healing is the DESIGNED outcome: these are quoting records, the
+  exact class the fork-vs-quote validation exists to leave verbatim. Even with
+  detection, `genuineFork` would refuse — agent-authored uuids are not in the
+  parent's mirror.
 
-So the gap is in **detection**, not resolution. This was previously recorded in
-`session-file-changes.md` as reachable in principle but unreached in practice.
-That is no longer accurate: it is reached.
+So there are no inherited digests on disk to heal, and fork-heal is the wrong
+frame for fork-mode agents entirely. (It remains the right frame for SESSION
+forks, which copy records verbatim, envelopes included.) What the second pass
+found instead:
 
-A second gap sits behind it. Even if detection fired, `MirrorFile.MirrorUuidsOf`
-resolves a parent through `ParentMirrorFiles`, which only ever constructs
-`<sid>/claudinine/<sid>.jsonl` and `<pool>/<sid>.jsonl` candidates
-(`MirrorLocator.cs:184`), never `agent-*.jsonl`. Both gaps would have to be
-closed together.
+**The real defect was classification.** `IsSidechainFile` required EVERY record
+to carry `isSidechain: true`; the `fork-context-ref` head carries none, so every
+fork-mode agent file classified as MAIN, and ChainCollapse's sidechain guard
+(`ChainCollapseRule.cs:173`) aborted on every record. Verified live on a copy of
+this file: SubagentStop → exit 0, transcript byte-unchanged, zero compaction,
+silently. Once forks are the default everywhere, that would have canceled
+subagent compaction (82.1% token savings on agent files in the corpus benchmark)
+wholesale.
 
-**Severity today: latent, not active.** All refs in the agent file resolve, from
-both sessions. It becomes real only when a referenced session is aged out while
-an agent file that references it survives — see finding 4 for why that
-combination is plausible rather than theoretical.
+**Fixed 2026-08-18**: `fork-context-ref` is classification-neutral in
+`IsSidechainFile`, protected in `IsProtected()`, and the tolerance is pinned by
+`ForkedSubagentTests` (classification both directions, byte-identical survival
+of the head record, mirroring by content hash, idempotence). Re-verified on the
+live copy: the pass now compacts it and is byte-idempotent across passes. The
+snapshot corpus contains zero `fork-context-ref` records, so the change is a
+no-op on every existing file by construction.
+
+Incidental observation from the same run — pre-existing, NOT caused by the fix
+(reproduced on the identical file minus the head record, which classifies
+sidechain under the OLD rule too): a turn whose collapsible batch reduces to one
+call still collapses, and on a file with no prior full header the digest header
+lands unamortized — 28.6 KB → 30.1 KB, net negative. Likely the denial-exclusion
+path missing the reduced-count MinCalls re-check the tail-drop path has; spun
+off as its own task.
+
+One first-pass claim in this area survives, narrowed: `ParentMirrorFiles` never
+constructs `agent-*.jsonl` candidates (`MirrorLocator.cs:184`). But
+`ProjectDirFor` explicitly handles `subagents/` paths (`MirrorLocator.cs:52`),
+so a parent-SESSION candidate resolves correctly from inside an agent file — the
+gap only matters if a referenced parent were itself an agent, which nothing
+observed produces.
 
 ## Finding 2 — `fork-context-ref`, a record type we do not model
 
@@ -91,11 +129,17 @@ Two properties matter for any future work:
 
 - It carries the parent linkage in **clean structured fields**. Any detection
   built on this is strictly better than regexing launcher paths: unambiguous, and
-  it survives header-format changes.
-- **We do not model this type.** It has no `uuid`, no `sessionId`, no `message`.
-  It sat at the head of a file that our tail walk and reachability guard
-  processed without complaint, but nothing in the code anticipates it, so that is
-  an untested tolerance rather than a designed one.
+  it survives header-format changes. Per the rewritten finding 1, it is also the
+  ONLY sound detection signal — text detection is envelope-gated at
+  `ForkHealRule.cs:49`, and relaxing that gate would reopen the quoting
+  false-positive surface it exists to close.
+- ~~We do not model this type.~~ **Modeled since 2026-08-18.** It has no `uuid`,
+  no `sessionId`, no `message`, no `isSidechain`. It originally sat at the head
+  of a file that our tail walk and reachability guard processed without
+  complaint — an untested tolerance. It is now designed: classification-neutral
+  (`TranscriptFile.IsSidechainFile`), protected (`TranscriptRecord.IsProtected`),
+  mirrored by content hash like other uuid-less lines, all pinned by
+  `ForkedSubagentTests`.
 
 ## Finding 3 — divergent mirrors of one shared file (EXPLAINED, NOT A DEFECT)
 
@@ -146,12 +190,26 @@ disappearing from one session does not make the file vanish, and the other links
 keep the inode alive, so `File.Exists` on a surviving path stays true and that
 mirror is kept. The hazard is the reverse direction, and it is real: if one
 session's `subagents/` link is removed, **that session's mirror is deleted**,
-while the file itself lives on under the other links. Combined with finding 1,
-that is the concrete path to a dead ref — an agent transcript surviving with
-digest headers pointing at a mirror GC has already collected.
+while the file itself lives on under the other links.
+
+With finding 1 rewritten, the refs at risk are narrower than first stated: the
+on-disk ones are QUOTED commands in agent prose (out of healing scope by design
+— fork-heal deliberately leaves quotes verbatim), and the fork's LIVE inherited
+context (out of reach of any disk tool). A dead quoted ref degrades an archived
+conversation's replayability, not the live session. Watch-item, not a defect.
 
 Not demonstrated; no aged-out example was available. Stated as the mechanism to
 check first.
+
+## Methodology correction 2: regex measurements must run on DECODED strings
+
+The first pass's central detection claim fell to this: a regex containing a
+literal `"` (like ForkHealRule's `run\.sh"`) never matches raw JSONL, where the
+quote is escaped as `\"`. Any measurement of a rule's pattern must be run
+against the decoded string values the rule actually visits
+(`node.ForEachString`), never against the raw line. This is the second time the
+trap has bitten — `Compactor.MirrorLost` carries an explicit JSON-escaped
+variant for exactly this reason, and its comment records the first time.
 
 ## Methodology correction: `st_ino` is unsound on Windows
 
@@ -163,25 +221,27 @@ stayed 4. The walk found the right two paths by luck.
 `fsutil hardlink list <path>` is the authoritative enumeration on NTFS. Any
 future link-awareness in this codebase must not key on `st_ino` comparison.
 
-## What a fix would have to decide
+## What was decided, and what stays open
 
-Open questions, in the order they gate each other:
+The second pass resolved most of the first pass's open questions:
 
-1. **Should a forked agent's inherited digests be healed at all?** They resolve
-   today. The argument for healing is finding 4; the argument against is that
-   rewriting inherited parent context inside an agent file changes records the
-   agent did not author.
-2. **If yes, detect via `fork-context-ref` or via launcher paths?** The record's
-   `parentSessionId` is cleaner, but only exists for fork-mode agents; copied
-   headers could in principle reach a plain agent file by other routes.
-3. **What is the adoption target?** `ParentMirrorFiles` would need an
-   `agent-*.jsonl` candidate shape, and a rule for which of several linked
-   sessions is the right parent when more than one mirror exists.
-4. **Does mirror ownership need to become link-aware?** That is the largest
-   change and the least justified by current evidence — the divergence in finding
-   3 was benign and operator-caused.
+1. ~~Should a forked agent's inherited digests be healed at all?~~ **Dissolved.**
+   There are no inherited digests on disk (rewritten finding 1) — the only
+   parent-naming text is quotes, which fork-heal deliberately leaves verbatim.
+   Nothing to heal, so nothing to decide.
+2. ~~Detect via `fork-context-ref` or via launcher paths?~~ **Answered**: if
+   detection is ever needed, `fork-context-ref` — text detection is
+   envelope-gated and the envelope never survives the fork's re-serialization.
+3. **Classification** (not on the first pass's list — it was the actual defect):
+   **shipped 2026-08-18**, see finding 1.
+4. **Adoption target / link-aware mirror ownership**: both stay hypothetical.
+   `ParentMirrorFiles` resolves parent sessions from agent files already; the
+   `agent-*.jsonl` candidate shape and link-awareness have no observed scenario
+   that needs them. Finding 4's dead-quoted-ref path remains the watch-item that
+   would reopen this.
 
-None of this is urgent: no data is lost, and every ref measured resolves.
+Nothing urgent remains: no data is lost, every ref measured resolves, and forked
+agent files now compact.
 
 ## Reproducing the measurements
 
