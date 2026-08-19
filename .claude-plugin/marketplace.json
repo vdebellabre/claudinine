@@ -9,8 +9,8 @@
       "name": "claudinine",
       "source": {
         "source": "archive",
-        "url": "https://github.com/vdebellabre/claudinine/releases/download/v1.2.0/claudinine-1.2.0.zip",
-        "sha256": "73c3c8d9a76e821fd0f64b8ecf822533dee4138dca470551c577542d672e265d"
+        "url": "https://github.com/vdebellabre/claudinine/releases/download/v1.2.1/claudinine-1.2.1.zip",
+        "sha256": "7cf64c9daad2297ee188cf555d2f45ef1a402cadc2d845bcd917224c091e9273"
       },
       "description": "Silent context optimizer: compacts session transcripts at re-read boundaries (chain-collapse, read dedup, aged-result stubs). Install and forget."
     }
