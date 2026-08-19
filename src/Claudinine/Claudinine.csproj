@@ -3,6 +3,7 @@
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
 		<AssemblyName>claudinine</AssemblyName>
+		<Version>1.1.0</Version>
 		<!-- No version here on develop: release builds get it as
 		     -p:Version on the publish command line (build.yml), and cd.yml's
 		     release commit writes it here via eng/set-version.ps1, so
