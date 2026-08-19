@@ -3,8 +3,21 @@
 Status legend: **[V]** verified live in a Cowork cloud session (2026-08-15, Claude Code 2.1.233,
 `entrypoint: remote_cowork`) · **[L]** verified live in a Cowork **local** session on Windows
 (2026-08-17, desktop app 1.30096.5.0, `local_<uuid>` layout, VM shell **down** throughout — two such
-sessions: the pre-fix measurement run behind Rev 4, and the v1.1.0 validation run behind Rev 6) ·
+sessions: the pre-fix measurement run behind Rev 4, and the v1.1.0 validation run behind Rev 6; plus
+a third on 2026-08-19, desktop app 1.32885.1 / CC 2.1.234, behind Rev 7) ·
 **[?]** unknown, needs a test · **[!]** known gap, needs work · **[X]** closed.
+
+Rev 7 (2026-08-19): **CC 2.1.234 / desktop 1.32885.1 measured; no compatibility break.** A fresh
+local session ran the plugin end to end — 37.8 KB colocated mirror, 5 ref files dumped to
+`local_<uuid>/outputs/.claudinine/refs/`, `.end` marker and `.seen`/`.load`/`.pass` sidecars all
+written, `run.sh`/`run.cmd` regenerated. Two layout findings, both in **D7/D9**: the level-3 run dir
+is now a *sibling* of an `agent/` dir whose own `local_ditto_<uuid>` tree is a complete candidate
+root, and its uuid no longer echoes any id above it; and 2.1.234's advertised "short fixed project
+folder" (`CLAUDE_CODE_PROJECT_DIR_NAME`) does **not** apply to first-party Cowork — the desktop app
+sets it only for `3p` session types, so the measured session still got a 193-char mangled slug. Five
+tests pin the run-dir drift, the sibling-root ambiguity and the fixed-slug case
+(`LocalCoworkTests`). No code change was needed; the fourth id namespace (CC `sessionId`
+`59c505b2-…`, unrelated to all three Cowork ids) is unchanged behaviour, see `cowork.md` O-notes.
 
 Rev 6 (2026-08-17, later): **Rev 5 is validated live** — a fresh local session on the released
 **v1.1.0**, VM down for its entire duration, exercised the shell-free path end to end. Hooks executed
@@ -290,11 +303,11 @@ Two Cowork runtimes matter, and they differ:
   (`.claude/projects/<mangled-cwd>/<sid>/`, same dash-mangling), relocated under a three-level
   Cowork-specific root. Scope of each level, pinned by comparing the Apr 16 log against this session:
 
-  | segment | 2026-04-16 | 2026-08-17 | scope |
-  |---|---|---|---|
-  | 1 | `b60e81e4-…` | `b60e81e4-…` | stable ≥ 4 months — install/user |
-  | 2 | `d042ebc1-…` | `f377406b-…` | varies |
-  | 3 | `local_d778c0c3-…` | `local_933e2b31-…` | per session |
+  | segment | 2026-04-16 | 2026-08-17 | 2026-08-19 | scope |
+  |---|---|---|---|---|
+  | 1 | `b60e81e4-…` | `b60e81e4-…` | `b60e81e4-…` | stable ≥ 4 months — install/user |
+  | 2 | `d042ebc1-…` | `f377406b-…` | `f377406b-…` | varies (conversation) |
+  | 3 | `local_d778c0c3-…` | `local_933e2b31-…` | `local_ce39ec54-…` | per session (run dir) |
 
   Under level 3: `outputs/` (the agent's cwd), `uploads/` (read-only), and `.claude/projects/…`.
   Contrast with the CLI, where `~/.claude/projects/<slug>/` is keyed by **project** and accumulates
@@ -304,6 +317,46 @@ Two Cowork runtimes matter, and they differ:
   never is. This is the structural reason baking any absolute path into a digest header fails in local
   mode. Also: the skills tree inverts the segment order (`skills-plugin\<level2>\<level1>\skills`), so
   don't assume consistent ordering across Cowork's trees.
+
+  *Level-3 name drift (measured 2026-08-19, CC 2.1.234 / desktop 1.32885.1).* The run dir has worn
+  three names — `local_<uuid>`, `local_ditto_<uuid>` (2.1.111, echoing the **conversation** id), and
+  `local_<uuid>` again at 2.1.234 with a uuid that matches **nothing** above it. Two consequences.
+  First, the `local_` prefix is the only invariant, and it is what `LocalCowork.RefsDirFor` anchors on
+  — pinned by `DetectionToleratesEveryObservedRunDirPrefix` so the tolerance stays deliberate rather
+  than incidental. Second, at 2.1.234 the run dir is a **sibling** of an `agent/` dir, not nested
+  under it, and `agent/local_ditto_<uuid>/` can itself be a complete tree with its own `outputs/` and
+  `.claude/`. The ancestor walk starts at the transcript so it resolves to the right one, but two
+  candidate roots now coexist in one conversation — `DetectionHandlesTheRunDirBeingASiblingOfAgentDir`
+  covers it. Do not treat level 3's uuid as derivable from any other id.
+- **D9 [L] The "short fixed project folder" is gated on `3p` sessions — first-party Cowork still gets
+  the long slug.** CC 2.1.234 added `CLAUDE_CODE_PROJECT_DIR_NAME`, which replaces the mangled-cwd
+  project dir with a fixed name; the 2.1.234 changelog advertises it as shortening Windows paths for
+  new Cowork sessions. It does not fire here. Both sides gate it:
+
+  - **CC** honors the var only when `CLAUDE_CONFIG_DIR` is also set —
+    `projectDirName = CLAUDE_CONFIG_DIR ? validate(CLAUDE_CODE_PROJECT_DIR_NAME) : undefined`, then
+    `dirName(cwd) = projectDirName ?? mangle(cwd)`. Validation is
+    `/^[A-Za-z0-9_-]{1,64}$/` minus Windows reserved names (`con|prn|aux|nul|com[0-9]|lpt[0-9]`), so
+    the value is always one short safe segment.
+  - **The desktop app** sets it as `...type === '3p' && { CLAUDE_CODE_PROJECT_DIR_NAME: 'session' }`
+    — the literal string **`session`**, and **only for third-party session types**.
+
+  A local Cowork session measured on 2026-08-19 (CC 2.1.234, desktop 1.32885.1) has `CLAUDE_CONFIG_DIR`
+  set, so CC's gate passes; it still landed in a **193-char** mangled slug, because the session is not
+  `3p`. Note 193 is just under the truncation threshold: the same mangling truncates at **200** chars
+  and appends a base36 hash of the full path (`slice(0,200) + "-" + hash`), which is what produced the
+  `…-ou-qnm1cz` dirs in the April trees — a *cut mid-word*, not a new naming scheme.
+
+  Nothing in Claudinine keys off the slug — every consumer (`MirrorLocator.ColocatedDirectories`,
+  `CloneVerb`, the benchmark cells) enumerates the `projects` dir instead of predicting a name, and
+  `MirrorLocator`'s path math keys only off `<sid>.jsonl` and the `subagents/` marker, both *inside*
+  the slug dir. Shorter paths are strictly good for the colocated mirror, which nests
+  `<sid>/claudinine/<stem>.jsonl` under it and is the component closest to `MAX_PATH`. The one thing
+  to watch if the flag ever reaches first-party sessions: `session` is a **constant**, so the mangled
+  name's incidental per-session uniqueness disappears and two concurrent runs are separated *only* by
+  the `local_<uuid>` above — the same segment detection anchors on.
+  `DetectionSurvivesTheFixedShortProjectDirName` pins both halves (detection still resolves, and two
+  runs sharing the slug still get distinct mirrors) so the flip is a non-event.
 - **D8 [?] The session id changes mid-conversation, and headers bake it.** Digest headers emitted
   early in this session point at `79e249a1-…`; headers emitted later in the *same* conversation point
   at `3090adb5-…`. The copied mirror tree contains transcripts `79e249a1` and `0c4e203c` plus one
