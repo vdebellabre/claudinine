@@ -2,7 +2,7 @@
   "name": "claudinine",
   "version": "1.1.0",
   "displayName": "Claudinine",
-  "description": "Silent Claude Code context optimizer: compacts transcripts at re-read boundaries (bash-read dedup, archive retrieval, chain-collapse). Install and forget.",
+  "description": "Silent Claude context optimizer: compacts transcripts at re-read boundaries (bash-read dedup, archive retrieval, chain-collapse). Install and forget.",
   "author": {
     "name": "vdebellabre",
     "url": "https://github.com/vdebellabre"
