@@ -210,7 +210,10 @@ jobs:
           if ($src -isnot [string] -and $src.source -eq 'archive') {
             ./eng/set-archive-source.ps1 -Sha256 '${{ needs.build.outputs.sha256 }}' -Version $version
           } else {
-            Write-Host 'marketplace on relative-path source; skipping digest pin'
+            # A graceful skip here would produce a three-file release commit
+            # that phase B's provenance check (exactly four files) and digest
+            # check both refuse -- fail where the cause is visible instead.
+            throw 'marketplace.json is not on an archive source; phase B requires the pin. Fix the marketplace entry before releasing.'
           }
 
       # Stage both archives on a draft release. Drafts are invisible to users
