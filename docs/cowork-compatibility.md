@@ -2,8 +2,45 @@
 
 Status legend: **[V]** verified live in a Cowork cloud session (2026-08-15, Claude Code 2.1.233,
 `entrypoint: remote_cowork`) · **[L]** verified live in a Cowork **local** session on Windows
-(2026-08-17, desktop app 1.30096.5.0, `local_<uuid>` layout, VM shell **down** throughout) ·
+(2026-08-17, desktop app 1.30096.5.0, `local_<uuid>` layout, VM shell **down** throughout — two such
+sessions: the pre-fix measurement run behind Rev 4, and the v1.1.0 validation run behind Rev 6; plus
+a third on 2026-08-19, desktop app 1.32885.1 / CC 2.1.234, behind Rev 7) ·
 **[?]** unknown, needs a test · **[!]** known gap, needs work · **[X]** closed.
+
+Rev 7 (2026-08-19): **CC 2.1.234 / desktop 1.32885.1 measured; no compatibility break.** A fresh
+local session ran the plugin end to end — 37.8 KB colocated mirror, 5 ref files dumped to
+`local_<uuid>/outputs/.claudinine/refs/`, `.end` marker and `.seen`/`.load`/`.pass` sidecars all
+written, `run.sh`/`run.cmd` regenerated. Two layout findings, both in **D7/D9**: the level-3 run dir
+is now a *sibling* of an `agent/` dir whose own `local_ditto_<uuid>` tree is a complete candidate
+root, and its uuid no longer echoes any id above it; and 2.1.234's advertised "short fixed project
+folder" (`CLAUDE_CODE_PROJECT_DIR_NAME`) does **not** apply to first-party Cowork — the desktop app
+sets it only for `3p` session types, so the measured session still got a 193-char mangled slug. Five
+tests pin the run-dir drift, the sibling-root ambiguity and the fixed-slug case
+(`LocalCoworkTests`). No code change was needed; the fourth id namespace (CC `sessionId`
+`59c505b2-…`, unrelated to all three Cowork ids) is unchanged behaviour, see `cowork.md` O-notes.
+
+Rev 6 (2026-08-17, later): **Rev 5 is validated live** — a fresh local session on the released
+**v1.1.0**, VM down for its entire duration, exercised the shell-free path end to end. Hooks executed
+on the Windows host and completed; local mode was detected structurally, landing the dump at exactly
+`local_<uuid>/outputs/.claudinine/refs/`; the length stamp tracked the mirror as it grew
+(23,970 → 362,972 B) so no-op passes skip; **47 ref files** accumulated, one input anchor and one
+result per archived call. Fidelity was proven by *retrieval*, not inspection — `Grep` across the refs
+dir resolved matches inside a 40,978 B archived `Read`, i.e. the header's own PREFERRED verb working.
+The emitted header carried every claimed property: `DIR` stated once, `REF` bound
+(`[ab12cd34] -> ab12cd34`), `mirror key: <sid>` breadcrumb, path-free short pointers, and an explicit
+"this session's shell cannot run retrieval commands". **E6/E7/E8/E9 move from built to validated**;
+B7's structural detection likewise. Two things the session could not measure from inside, both for
+the same reason (the allowlist): the live transcript's size, hence the local compaction ratio, and
+the plugin's own version string — `1.1.0` is the dispatched release, trusted from the pipeline rather
+than read off the host. The allowlist itself reproduced exactly: `Glob` on `…\rpm\plugin_<id>\` was
+refused while `outputs/` read freely. Still open and unchanged: **B2/B3/B8 and G5's next-window run**,
+which all need the VM and are consolidated as **O18** in `cowork.md`, plus **D8**, which does not and
+is carried as **O17** there. One correction to B8 while it is open: O12's 2026-08-15 observation that
+the shim "runs from the sandbox printing `0.1.21`" was made on one of the four boot days, so it is
+probably already affirmative evidence that `libexec` IS reachable from the VM — worth re-reading that
+run's evidence before spending the next window on `ls /sessions/*/mnt/outputs/../../`. *(Follow-up,
+same day: the re-read happened and closed B8 — the plugin tree reaches the VM via its own
+`.remote-plugins` mount, no traversal involved; see B8. B2/B3 and G5's next-window run stay open.)*
 
 Rev 5 (2026-08-17): **Rev 4's fixable items are built** (develop, same day). What shipped:
 **B5/B1 →** `run.sh` now targets the plugin's `libexec/claudinine` routing shim (uname-based RID
@@ -36,7 +73,7 @@ generator and its retrieval shell run on **different operating systems**. Conseq
 Linux binaries ever execute" is true of the *shell* and false of the *generator* (B5); E5(a) — the
 launcher, the fix Rev 3 recommended — cannot work there at all (E6); the colocated mirror from E2 is
 unreachable by the only tools that always exist (E7); and the VM that owns the sole shell booted 4
-times in 5.5 months on this machine (B6). Retrieval never once executed during a long, tool-heavy
+times in the 4 months to 2026-08-17 on this machine (B6). Retrieval never once executed during a long, tool-heavy
 session and nothing surfaced an error (E8). New: B5–B8, D7, E6–E9, G5.
 
 Rev 3 (2026-08-15): **A2 closed green** — the account plugin pipeline preserves exec bits AND
@@ -65,7 +102,9 @@ Two Cowork runtimes matter, and they differ:
 
 ## A. Distribution & install
 
-- **A0 [!] BLOCKER — claude.ai-hosted plugins may not ship a top-level `bin/`.** Measured
+- **A0 [X] claude.ai-hosted plugins may not ship a top-level `bin/`.** *(Closed by the `libexec/`
+  layout — the hosted `.plugin` ships no `bin/`, the validator accepted it, and every account install
+  since 0.1.20 rides that shape. Re-flagged 2026-08-17; kept as originally written below.)* Measured
   2026-08-15 by uploading a probe plugin; the validator refused it: *"Plugin contains a top-level
   bin/ directory … claude.ai-hosted plugins may not ship bin/ executables because they are added to
   PATH on the CLI but are not shown on the admin approval surface. Declare executable entry points
@@ -76,10 +115,11 @@ Two Cowork runtimes matter, and they differ:
   to a directory not named `bin/` — pending confirmation that any executable payload is permitted;
   (b) E1 re-opens, because the PATH injection that made bare `claudinine get` work *is* the banned
   mechanism. See E5.
-- **A1 [!] Establish the install path.** `/plugin install claudinine` is not it: cloud sessions run
+- **A1 [X] Establish the install path.** `/plugin install claudinine` is not it: cloud sessions run
   with `SKIP_PLUGIN_MARKETPLACE=true`, and plugins arrive pre-synced from the account into
-  `~/.claude/plugins/synced/<name>/`. Decide the supported route — `.plugin` bundle installed into
-  the account from the desktop app (then synced), vs. local-mode-only marketplace install.
+  `~/.claude/plugins/synced/<name>/`. *(Closed: the supported route is the `.plugin` account-import,
+  documented in the README and exercised by every release since 0.1.20 — including into already-running
+  sessions, A5.)*
 - **A2 [X] Executable bit AND binary integrity survive the plugin sync.** Measured 2026-08-15 with
   `claudinine-probe` v0.2 installed into the account and synced into a live cloud session: the three
   files packed `755` materialised `-rwxr-xr-x` at
@@ -88,9 +128,10 @@ Two Cowork runtimes matter, and they differ:
   0xfe` and invalid UTF-8 round-tripped byte-identical (sha256 match, 4096 bytes). **A native binary
   can ship in a hosted plugin** — the 1980-mtime/`644` pattern seen on `cowork-plugin-management` was
   simply a markdown-only plugin, not evidence of stripping. Packaging constraint is A0, not this.
-- **A3 [?] Sync limits.** The syncer has a `synced_file_limit_exceeded` path with constants around
-  4096 files / 25 MB per file / 64 MB total. Six RIDs ≈ 19 MB unpacked — probably fine, but confirm.
-  Consider a Linux-only bundle for Cowork (see B1): smaller, and no dead mac/win binaries.
+- **A3 [X] Sync limits.** The syncer has a `synced_file_limit_exceeded` path with constants around
+  4096 files / 25 MB per file / 64 MB total. *(Closed by O10's measurement: six RIDs are 20.34 MB
+  unpacked, largest single file 3.72 MB — inside every cap. The Linux-only idea suggested here was
+  tried and actively broke local mode; reverted, see B1.)*
 - **A4 [X] `CLAUDE_PLUGIN_ROOT` for synced plugins.** Resolves to
   `~/.claude/plugins/synced/<plugin-name>`, as seen by the hooks themselves. Whole tree intact.
 - **A5 [X] Synced-plugin hooks register under the cowork entrypoint — and do so mid-session.** The
@@ -177,25 +218,32 @@ Two Cowork runtimes matter, and they differ:
   (`local-agent-mode-sessions`, `local_<uuid>`, a `/sessions/*/mnt` mount table in the system prompt)
   are useful corroboration but they are inference where the tool name is fact. Cloud Cowork exposes a
   plain `Bash` on the same machine, so it correctly classifies as the Linux case.
-- **B8 [?] Is `libexec` even visible from the local VM?** `rpm\plugin_<id>\libexec\` sits at **level
-  2** of the session path while the VM's plan9 share appears rooted at **level 3** (`local_<uuid>`).
-  The Apr 16 log proves `outputs/..` traverses up one level — a VM-side `python3` successfully read
-  `/sessions/<name>/mnt/outputs/../.claude/projects/<mangled>/<sid>/tool-results/…txt`. It does
-  **not** prove `../../rpm/…` reaches level 2. If the share is rooted at level 3 then all six shipped
-  binaries are unreachable from inside the VM and the launcher route is dead in local mode regardless
-  of which platform it targets. One command settles it next time the gate flips:
-  `ls /sessions/*/mnt/outputs/../../`.
+- **B8 [X] Is `libexec` even visible from the local VM? — YES, desk-closed 2026-08-17 from the
+  2026-08-15 boot-day evidence, per Rev 6's caveat.** The level-2/level-3 traversal question was the
+  wrong frame: the plugin tree does not reach the VM through the session share at all, it has its
+  **own mount** — the host table's VM view `<mnt>/.remote-plugins/plugin_<id>/` is a VM-side path
+  that can only have been observed from inside the VM, and it entered the doc with the same run's
+  evidence. The clincher is O12's opening observation: on 2026-08-15 (a boot day, VM up 20:30–20:58)
+  *"the shim runs from the sandbox printing `0.1.21`"* — a plugin binary **executed inside the VM**,
+  which subsumes reachability. So all six RIDs are visible from the VM when it is up, and the
+  launcher route is alive in local mode on exactly those days. Original concern, kept for the
+  record: `rpm\plugin_<id>\libexec\` sits at **level 2** of the session path while the plan9
+  session share appears rooted at **level 3** (`local_<uuid>`); the Apr 16 log proves `outputs/..`
+  traverses up one level, not two — true, and irrelevant given the dedicated mount. Reconfirm
+  opportunistically next VM window with `ls -d /sessions/*/mnt/*` (already first in O18's list).
 
 ## C. Hook events & session lifecycle
 
 - **C1 [V] Hooks work and the payload is the expected shape.** A probe plugin shipping its own
   executable fired `SessionStart`, `UserPromptSubmit` and `SessionEnd`, each with `session_id`,
   `transcript_path`, `hook_event_name`.
-- **C2 [!] `UserPromptSubmit` is the wrong steady-state trigger for Cowork.** Cowork runs long
+- **C2 [X] `UserPromptSubmit` is the wrong steady-state trigger for Cowork.** Cowork runs long
   autonomous stretches — scheduled tasks, `/loop`, Workflow runs, Monitors — where dozens of turns
-  pass with no user prompt at all. The per-turn boundary that always fires is `Stop`. Evaluate
-  adding `Stop` (Cowork already registers one) with a min-interval guard so the cost stays bounded.
-- **C3 [!] Subagent sweep timing — with a better mechanism than sweeping.** `CompactSubagents` runs
+  pass with no user prompt at all. The per-turn boundary that always fires is `Stop`. *(Closed: the
+  `Stop` trigger shipped with a min-interval guard and is validated on a real cloud host — O2.)*
+- **C3 [X] Subagent sweep timing — with a better mechanism than sweeping.** *(Closed: per-agent
+  compaction on `SubagentStop` via `agent_transcript_path` shipped and is validated on cloud — O3.)*
+  `CompactSubagents` runs
   only at `SessionStart`/`SessionEnd`, while a single Cowork `Workflow` spawns dozens of agents
   inside one session, so `subagents/` grows unbounded between boundaries — and subagent transcripts
   are the best-compacting file type (82%). Measured: `SubagentStop` fires per agent and its payload
@@ -204,7 +252,9 @@ Two Cowork runtimes matter, and they differ:
   directory enumeration, no waiting for a boundary, cost proportional to one agent's output.
 - **C4 [X] `SessionEnd` fires on idle teardown.** Observed 12:42:32 after the session went idle;
   the process then exited and the container survived. So "clean at rest" is achievable in cloud.
-- **C7 [!] `SessionStart` does not fire when an idle Cowork session is woken.** Cowork sessions live
+- **C7 [X] `SessionStart` does not fire when an idle Cowork session is woken.** *(Closed: the `.end`
+  end-marker turns the first prompt after a `SessionEnd` into the start boundary, so the repair pass
+  runs on wake-from-idle after all — O1, validated on cloud.)* Cowork sessions live
   server-side and survive desktop-app restarts, so "restarting the app" neither creates nor restarts
   one. What *does* happen: after `SessionEnd` on idle teardown, the next activity resumes the session
   into a **new process** which re-hydrates from the transcript — observed at 13:27:32
@@ -253,11 +303,11 @@ Two Cowork runtimes matter, and they differ:
   (`.claude/projects/<mangled-cwd>/<sid>/`, same dash-mangling), relocated under a three-level
   Cowork-specific root. Scope of each level, pinned by comparing the Apr 16 log against this session:
 
-  | segment | 2026-04-16 | 2026-08-17 | scope |
-  |---|---|---|---|
-  | 1 | `b60e81e4-…` | `b60e81e4-…` | stable ≥ 4 months — install/user |
-  | 2 | `d042ebc1-…` | `f377406b-…` | varies |
-  | 3 | `local_d778c0c3-…` | `local_933e2b31-…` | per session |
+  | segment | 2026-04-16 | 2026-08-17 | 2026-08-19 | scope |
+  |---|---|---|---|---|
+  | 1 | `b60e81e4-…` | `b60e81e4-…` | `b60e81e4-…` | stable ≥ 4 months — install/user |
+  | 2 | `d042ebc1-…` | `f377406b-…` | `f377406b-…` | varies (conversation) |
+  | 3 | `local_d778c0c3-…` | `local_933e2b31-…` | `local_ce39ec54-…` | per session (run dir) |
 
   Under level 3: `outputs/` (the agent's cwd), `uploads/` (read-only), and `.claude/projects/…`.
   Contrast with the CLI, where `~/.claude/projects/<slug>/` is keyed by **project** and accumulates
@@ -267,6 +317,46 @@ Two Cowork runtimes matter, and they differ:
   never is. This is the structural reason baking any absolute path into a digest header fails in local
   mode. Also: the skills tree inverts the segment order (`skills-plugin\<level2>\<level1>\skills`), so
   don't assume consistent ordering across Cowork's trees.
+
+  *Level-3 name drift (measured 2026-08-19, CC 2.1.234 / desktop 1.32885.1).* The run dir has worn
+  three names — `local_<uuid>`, `local_ditto_<uuid>` (2.1.111, echoing the **conversation** id), and
+  `local_<uuid>` again at 2.1.234 with a uuid that matches **nothing** above it. Two consequences.
+  First, the `local_` prefix is the only invariant, and it is what `LocalCowork.RefsDirFor` anchors on
+  — pinned by `DetectionToleratesEveryObservedRunDirPrefix` so the tolerance stays deliberate rather
+  than incidental. Second, at 2.1.234 the run dir is a **sibling** of an `agent/` dir, not nested
+  under it, and `agent/local_ditto_<uuid>/` can itself be a complete tree with its own `outputs/` and
+  `.claude/`. The ancestor walk starts at the transcript so it resolves to the right one, but two
+  candidate roots now coexist in one conversation — `DetectionHandlesTheRunDirBeingASiblingOfAgentDir`
+  covers it. Do not treat level 3's uuid as derivable from any other id.
+- **D9 [L] The "short fixed project folder" is gated on `3p` sessions — first-party Cowork still gets
+  the long slug.** CC 2.1.234 added `CLAUDE_CODE_PROJECT_DIR_NAME`, which replaces the mangled-cwd
+  project dir with a fixed name; the 2.1.234 changelog advertises it as shortening Windows paths for
+  new Cowork sessions. It does not fire here. Both sides gate it:
+
+  - **CC** honors the var only when `CLAUDE_CONFIG_DIR` is also set —
+    `projectDirName = CLAUDE_CONFIG_DIR ? validate(CLAUDE_CODE_PROJECT_DIR_NAME) : undefined`, then
+    `dirName(cwd) = projectDirName ?? mangle(cwd)`. Validation is
+    `/^[A-Za-z0-9_-]{1,64}$/` minus Windows reserved names (`con|prn|aux|nul|com[0-9]|lpt[0-9]`), so
+    the value is always one short safe segment.
+  - **The desktop app** sets it as `...type === '3p' && { CLAUDE_CODE_PROJECT_DIR_NAME: 'session' }`
+    — the literal string **`session`**, and **only for third-party session types**.
+
+  A local Cowork session measured on 2026-08-19 (CC 2.1.234, desktop 1.32885.1) has `CLAUDE_CONFIG_DIR`
+  set, so CC's gate passes; it still landed in a **193-char** mangled slug, because the session is not
+  `3p`. Note 193 is just under the truncation threshold: the same mangling truncates at **200** chars
+  and appends a base36 hash of the full path (`slice(0,200) + "-" + hash`), which is what produced the
+  `…-ou-qnm1cz` dirs in the April trees — a *cut mid-word*, not a new naming scheme.
+
+  Nothing in Claudinine keys off the slug — every consumer (`MirrorLocator.ColocatedDirectories`,
+  `CloneVerb`, the benchmark cells) enumerates the `projects` dir instead of predicting a name, and
+  `MirrorLocator`'s path math keys only off `<sid>.jsonl` and the `subagents/` marker, both *inside*
+  the slug dir. Shorter paths are strictly good for the colocated mirror, which nests
+  `<sid>/claudinine/<stem>.jsonl` under it and is the component closest to `MAX_PATH`. The one thing
+  to watch if the flag ever reaches first-party sessions: `session` is a **constant**, so the mangled
+  name's incidental per-session uniqueness disappears and two concurrent runs are separated *only* by
+  the `local_<uuid>` above — the same segment detection anchors on.
+  `DetectionSurvivesTheFixedShortProjectDirName` pins both halves (detection still resolves, and two
+  runs sharing the slug still get distinct mirrors) so the flip is a non-event.
 - **D8 [?] The session id changes mid-conversation, and headers bake it.** Digest headers emitted
   early in this session point at `79e249a1-…`; headers emitted later in the *same* conversation point
   at `3090adb5-…`. The copied mirror tree contains transcripts `79e249a1` and `0c4e203c` plus one
@@ -323,7 +413,9 @@ Two Cowork runtimes matter, and they differ:
   half-restored tree. Note `CollectGarbageColocated` deliberately ignores recorded absolute paths
   (they go stale exactly when a tree moves) and tests sibling existence instead — the right call for
   snapshot/restore.
-- **E4 [!] `MirrorFile.CollectGarbageColocated` has no caller.** `HookRunner` still calls only
+- **E4 [X] `MirrorFile.CollectGarbageColocated` has no caller.** *(Closed: wired — `HookRunner`
+  calls it on the session-start path (HookRunner.cs:122), structural GC per O7's regression guard.)*
+  At the time of writing `HookRunner` called only
   `MirrorFile.CollectGarbage()` (legacy pools) and `SessionDirGc.Run()`. A dead session's whole
   sidecar dir is reaped by `SessionDirGc`, so nothing leaks there — but files orphaned *inside a
   living session* (a deleted subagent transcript's mirror, its `.skip`/`.load`/`.seen`) are never

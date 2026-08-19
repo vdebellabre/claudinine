@@ -191,6 +191,14 @@ jobs:
           $version = '${{ needs.version.outputs.version }}'
           ./eng/set-version.ps1 -Version $version
 
+          # Renames `## Unreleased` to this version and reopens an empty slot
+          # above it, so the release commit records the notes that shipped and
+          # develop starts the next cycle clean. Throws when the section is
+          # empty -- deliberately, since a release with blank notes is the
+          # failure this exists to prevent. Nothing has been pushed yet at
+          # this point, so the fix is to write the section and re-dispatch.
+          ./eng/release-notes.ps1 -Version $version -Promote | Out-Null
+
           $m = Get-Content .claude-plugin/marketplace.json -Raw | ConvertFrom-Json
           $src = ($m.plugins | Where-Object { $_.name -eq 'claudinine' }).source
           if ($src -isnot [string] -and $src.source -eq 'archive') {
@@ -201,7 +209,7 @@ jobs:
 
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add .claude-plugin/plugin.json src/Claudinine/Claudinine.csproj .claude-plugin/marketplace.json
+          git add .claude-plugin/plugin.json src/Claudinine/Claudinine.csproj .claude-plugin/marketplace.json CHANGELOG.md
           if (git diff --cached --quiet) { throw 'release produced no change to commit' }
           git commit -m "Release $version"
 
@@ -248,7 +256,11 @@ jobs:
           tag="v$version"
           zip="artifacts/${{ needs.build.outputs.zip }}"
           plugin="artifacts/${{ needs.build.outputs.plugin }}"
-          printf 'Plugin archive for `archive`-source installs (`.zip`, sha256 `%s`) and hosted bundle for claude.ai account upload (`.plugin`).\n' \
-            '${{ needs.build.outputs.sha256 }}' > notes.md
+          # Section first, boilerplate last. The promote step above already
+          # renamed the heading in this checkout, so this reads the section
+          # under its final version name.
+          pwsh -File eng/release-notes.ps1 -Version "$version" > notes.md
+          printf '\n---\nPlugin archive for `archive`-source installs (`.zip`, sha256 `%s`) and hosted bundle for claude.ai account upload (`.plugin`).\n' \
+            '${{ needs.build.outputs.sha256 }}' >> notes.md
           gh release create "$tag" "$zip" "$plugin" --title "$tag" --notes-file notes.md
           echo "asset URLs: $(gh release view "$tag" --json assets --jq '.assets[].url')"

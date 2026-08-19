@@ -114,8 +114,11 @@ internal sealed class TranscriptRecord
         if (IsBoundaryPreserved)
             return true;
 
+        // fork-context-ref: a fork-mode agent transcript's head pointer to its
+        // inherited parent context (CLI 2.1.232+) — app metadata, never ours to touch.
         if (Type is "content-replacement" or "marble-origami-commit"
-            or "marble-origami-snapshot" or "worktree-state" or "task-summary")
+            or "marble-origami-snapshot" or "worktree-state" or "task-summary"
+            or "fork-context-ref")
         {
             return true;
         }

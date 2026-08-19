@@ -256,6 +256,28 @@ internal sealed class TranscriptBuilder(bool sidechain = false)
         return this;
     }
 
+    /// <summary>
+    /// Fork-mode agent head record (CLI 2.1.232+, subagent_type "fork"): a POINTER
+    /// to the inherited parent context — no uuid, no sessionId, no message, no
+    /// isSidechain. Field set copied from a real 2.1.232 transcript
+    /// (docs/forked-subagents-analysis.md); parentLastUuid deliberately names a
+    /// uuid absent from this file, as the real record does. Unlike the other
+    /// uuid-less emitters this one does NOT declassify a sidechain file — that
+    /// exemption is the point of the tests using it.
+    /// </summary>
+    public TranscriptBuilder ForkContextRef(string parentSessionId = "parent-session")
+    {
+        _lines.Add(new JsonObject
+        {
+            ["type"] = "fork-context-ref",
+            ["agentId"] = "abc123def456abc12",
+            ["parentSessionId"] = parentSessionId,
+            ["parentLastUuid"] = "99999999-9999-9999-9999-999999999999",
+            ["contextLength"] = 36,
+        }.ToJsonString());
+        return this;
+    }
+
     /// <summary>Uuid-less metadata record (last-prompt, custom-title, mode, ...).</summary>
     public TranscriptBuilder MetaLine(string type, params (string Key, string Value)[] fields)
     {
