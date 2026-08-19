@@ -1,39 +1,45 @@
-name: Publish release
+name: Open release PR
 
-# Continuous delivery: the only path that publishes. Manual dispatch, choosing
-# which version component to bump.
+# Continuous delivery, phase A: dispatch -> release PR. The only path that
+# starts a release. Manual dispatch, choosing which version component to bump.
+# Full design: docs/release-pr-workorder.md.
 #
-# Branch model: single branch. main is where all development happens, and CD
-# writes exactly one commit per release on top of it: the version stamps, the
-# marketplace pin for the new archive, and the changelog promotion. Between
-# releases the manifests keep the PREVIOUS release's values, which are always a
-# valid install target -- the marketplace pointer only ever moves inside a
-# release commit. Tags are the released snapshots. A ruleset (main-protect)
-# blocks deletion and force-push and requires every human change to arrive by
-# PR with two green checks (ci-ok, unreleased-notes); the release commit is the
-# one exception, pushed directly by the publish GitHub App the ruleset lets
-# bypass it (github-actions[bot] cannot be named as a bypass actor, by GitHub's
-# design -- hence the App).
+# Branch model: single branch, zero machine writes to main. This workflow is
+# read-only on main. It computes the version, builds the archives from the
+# dispatch SHA (version injected via build.yml's `version` input -- nothing
+# committed anywhere yet), stages both archives on a DRAFT release (invisible
+# to users and to releases/latest, editable until published), then commits the
+# version stamps, changelog promotion and marketplace pin to a
+# release/v<version> branch and opens a PR. The human merge of that PR is the
+# release gate; cd-publish.yml reacts to the merge, re-verifies coherence,
+# pushes the tag and publishes the draft.
 #
-# Because the new version is COMPUTED from the dropdown rather than supplied, a
-# release run cannot target a version that already shipped -- there is no input
-# that could name one.
+# The publish App survives only as the PR author: a PR created with the
+# workflow's own GITHUB_TOKEN does not trigger other workflows (GitHub's
+# recursive-run prevention), so it would never get its two required checks and
+# could never merge under the main-protect ruleset. An App-token PR triggers
+# CI normally. The App is no longer a ruleset bypass actor -- it pushes the
+# release branch and opens (and labels) the PR, nothing else. Installation
+# permissions it needs: contents: write (branch push), pull requests: write
+# (PR creation), issues: write (the no-notes label -- it must ride the App's
+# own call, because a GITHUB_TOKEN-applied label fires no `labeled` event and
+# the changelog gate would stay red from its `opened` run).
 #
-# Ordering: checkout the dispatched commit -> compute the version -> build an
-# archive carrying it (UNCOMMITTED) -> commit the bump, pin and changelog
-# promotion on top -> push that commit and its tag to main -> publish.
-# Everything fallible happens before the first write, so a build, pack or
-# republish-check failure leaves main exactly as it was -- the release commit
-# is never pushed for a release that did not get that far.
+# Because the new version is COMPUTED from the dropdown rather than supplied,
+# a release run cannot target a version that already shipped -- there is no
+# input that could name one.
 #
-# All jobs check out the same snapshot (the dispatch SHA, actions/checkout's
-# default), so a push to main mid-run cannot make the tag disagree with the
-# built archive: the release push is a fast-forward of that SHA plus one
-# commit, and a mid-run push makes it fail cleanly -- pull and re-dispatch.
+# Ordering: compute the version -> refuse republish and races -> build the
+# archives -> stage the draft release -> push the release branch -> open the
+# PR. Nothing here is irreversible: an aborted release is cleaned up by
+# closing the PR, deleting the release/v* branch and deleting the draft
+# release (the race check below refuses to run again until all three are
+# gone). The first irreversible step of the whole flow is cd-publish.yml's
+# draft publish.
 #
-# Only the asset upload sits after the push, and it is recoverable in place:
-# commit and tag are already correct, so re-running the release job attaches the
-# asset to the existing tag without a new version or a new build.
+# Consumer floor: archive-source installs need Claude Code v2.1.224+ (see
+# eng/set-archive-source.ps1's header).
+
 on:
   workflow_dispatch:
     inputs:
@@ -43,10 +49,14 @@ on:
         type: choice
         options: [patch, minor, major]
 
+permissions:
+  contents: write       # draft-release creation (GITHUB_TOKEN)
+  pull-requests: read   # race check
+
 jobs:
-  # Computes the target version WITHOUT writing it. The build applies it to its
-  # own checkout (see build.yml's `version` input), which is what keeps main
-  # untouched until the release has published.
+  # Computes the target version WITHOUT writing it. The build applies it to
+  # its own checkout (see build.yml's `version` input), which is what keeps
+  # main untouched while producing archives that carry the new version.
   version:
     name: version
     runs-on: ubuntu-latest
@@ -68,57 +78,87 @@ jobs:
           $r = ./eng/bump-version.ps1 -Component '${{ inputs.bump }}' -WhatIf
           "version=$($r.Version)" >> $env:GITHUB_OUTPUT
 
-      # Refuse early if the target release OR tag already exists: the version
-      # was just computed from the dropdown, so a collision means the
-      # invariant broke (a stale tag, or a prior run that tagged but failed to
-      # publish, or two dispatches racing). Checking the tag too, not just the
-      # release, matters in practice: a run that fails between `git tag` and
-      # a successful `Publish release` leaves exactly a tag-with-no-release,
-      # which the release-only check cannot see -- confirmed live, twice,
-      # both times reproducing the identical "tag already exists" failure on
-      # the next dispatch of the same version.
+      # Refuse early if the target already exists in any form. The version was
+      # just computed from the dropdown, so a collision means the invariant
+      # broke or a prior run left debris:
+      #   - a PUBLISHED release: republishing is always refused;
+      #   - a DRAFT release: a previous phase A staged it and its PR is either
+      #     open (merge or close it) or was closed without cleanup;
+      #   - a bare tag: a cd-publish run that tagged but failed to publish
+      #     (delete the tag and re-run cd-publish, or re-dispatch).
       - name: Refuse to republish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="v${{ steps.next.outputs.version }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
+          state="$(gh release view "$tag" --json isDraft -q .isDraft 2>/dev/null || echo missing)"
+          if [ "$state" = "false" ]; then
             echo "::error::release $tag already exists; refusing to republish." \
                  "The bump should have produced an unused version -- check for a" \
                  "stale tag or a concurrent release run."
             exit 1
           fi
+          if [ "$state" = "true" ]; then
+            echo "::error::a draft release $tag is already staged -- a previous" \
+                 "dispatch's release PR is in flight or was abandoned. Merge or" \
+                 "close that PR; after a close, delete the draft" \
+                 "(gh release delete $tag) and the release branch, then re-dispatch."
+            exit 1
+          fi
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             echo "::error::tag $tag already exists on origin with no matching" \
-                 "release -- likely debris from a run that tagged but failed" \
-                 "before publishing. Delete it (git push origin :refs/tags/$tag)" \
-                 "and re-dispatch, or investigate why it was never cleaned up."
+                 "release -- likely debris from a cd-publish run that tagged but" \
+                 "failed before publishing. Delete it (git push origin" \
+                 ":refs/tags/$tag) and re-run cd-publish, or re-dispatch."
             exit 1
           fi
 
-  # Same build CI runs, with the computed version written into the runner's tree
-  # just before packing. Nothing is committed to produce this archive.
+      # One release in flight at a time: the branch namespace and the open-PR
+      # list are the lock. Two dispatches racing both build fine, but the
+      # second would try to stage a second draft and PR for a version computed
+      # from the same `gh release list` -- refuse before building anything.
+      - name: Refuse to race
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git ls-remote --heads origin 'refs/heads/release/v*' | grep -q .; then
+            echo "::error::a release/v* branch already exists on origin --" \
+                 "another release is in flight (or was abandoned; delete the" \
+                 "branch and its draft release, then re-dispatch)."
+            exit 1
+          fi
+          open="$(gh pr list --state open --json headRefName -q '.[].headRefName' | grep -c '^release/v' || true)"
+          if [ "$open" != "0" ]; then
+            echo "::error::an open release PR already exists -- merge or close it first."
+            exit 1
+          fi
+
+  # Same build CI runs, with the computed version written into the runner's
+  # tree just before compiling and packing. Nothing is committed to produce
+  # these archives; the release branch below replays the same writes so the
+  # merged tree matches what was built.
   build:
     needs: version
     uses: ./.github/workflows/build.yml
     with:
       version: ${{ needs.version.outputs.version }}
 
-  release:
-    name: release
+  release-pr:
+    name: release-pr
     needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           # checkout persists GITHUB_TOKEN as the remote credential by default,
-          # which would shadow the App token this job actually needs to push
-          # with. Disabled so `gh auth setup-git` (below, once the App token
-          # exists) is the only credential helper git sees.
+          # which would shadow the App token the branch push below needs.
+          # Disabled so `gh auth setup-git` (once the App token exists) is the
+          # only credential helper git sees.
           persist-credentials: false
 
-      # The ruleset requires PRs into main; the App is its only bypass actor,
-      # so the direct release push below must authenticate as the App.
+      # The ruleset requires PRs into main with two green checks, and only a
+      # non-GITHUB_TOKEN actor's PR can trigger them -- so the branch push and
+      # the PR creation below authenticate as the App.
       - name: Mint publish-app token
         id: app-token
         uses: actions/create-github-app-token@v2
@@ -130,8 +170,8 @@ jobs:
 
       # Points git's credential helper at `gh`, which reads GH_TOKEN -- the
       # documented way to authenticate a plain `git push` with a minted App
-      # token (actions/create-github-app-token's own README). Simpler and less
-      # error-prone than hand-building an Authorization header.
+      # token. NOTE: the helper reads GH_TOKEN from the environment of the
+      # step git runs in, not from this one -- every pushing step repeats it.
       - name: Point git at the app token
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -142,7 +182,7 @@ jobs:
           name: claudinine-archive
           path: artifacts
 
-      # Confirm the payloads exist before anything irreversible.
+      # Confirm the payloads exist before staging anything.
       - name: Check archives present
         run: |
           zip="artifacts/${{ needs.build.outputs.zip }}"
@@ -150,88 +190,76 @@ jobs:
           test -f "$zip" || { echo "::error::archive $zip missing"; exit 1; }
           test -f "$plugin" || { echo "::error::hosted bundle $plugin missing"; exit 1; }
 
-      # Record the release in one commit: the version bump the build packed
-      # (uncommitted there, so replayed here) plus the digest of the archive that
-      # is about to be published. Both must be in the TAGGED commit, so this runs
-      # before the tag. The pin is gated on the marketplace already using an
-      # archive source: on a relative-path source there is nothing to pin.
-      - name: Commit bump and pin
+      # Replay in the working tree the exact writes the release ships: version
+      # stamps (the build packed the same values, uncommitted there), the
+      # changelog promotion, and the marketplace pin for the archive that is
+      # about to be staged. Also renders the release notes (post-promote, so
+      # the section is read under its final name). The promote throws on an
+      # empty Unreleased section -- deliberately; nothing has been staged yet,
+      # so the fix is to write the section on main and re-dispatch.
+      - name: Stamp version, promote changelog, pin marketplace
         shell: pwsh
         run: |
           $version = '${{ needs.version.outputs.version }}'
           ./eng/set-version.ps1 -Version $version
-
-          # Renames `## Unreleased` to this version and reopens an empty slot
-          # above it, so the release commit records the notes that shipped and
-          # the next cycle starts clean. Throws when the section is empty --
-          # deliberately, since a release with blank notes is the failure this
-          # exists to prevent. Nothing has been pushed yet at this point, so
-          # the fix is to write the section on main and re-dispatch.
           ./eng/release-notes.ps1 -Version $version -Promote | Out-Null
+          ./eng/release-notes.ps1 -Version $version > notes.md
 
           $m = Get-Content .claude-plugin/marketplace.json -Raw | ConvertFrom-Json
           $src = ($m.plugins | Where-Object { $_.name -eq 'claudinine' }).source
           if ($src -isnot [string] -and $src.source -eq 'archive') {
             ./eng/set-archive-source.ps1 -Sha256 '${{ needs.build.outputs.sha256 }}' -Version $version
           } else {
-            Write-Host 'marketplace on relative-path source; skipping digest pin'
+            # A graceful skip here would produce a three-file release commit
+            # that phase B's provenance check (exactly four files) and digest
+            # check both refuse -- fail where the cause is visible instead.
+            throw 'marketplace.json is not on an archive source; phase B requires the pin. Fix the marketplace entry before releasing.'
           }
 
-          git config user.name  'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add .claude-plugin/plugin.json src/Claudinine/Claudinine.csproj .claude-plugin/marketplace.json CHANGELOG.md
-          if (git diff --cached --quiet) { throw 'release produced no change to commit' }
-          git commit -m "Release $version"
-
-      # The dispatched snapshot plus this commit becomes main's tip -- a
-      # fast-forward as long as nothing was pushed to main since the dispatch.
-      # If something was, this fails cleanly and the right move is to
-      # re-dispatch (retrying by rebasing here would tag a tree the archive
-      # was not built from).
-      #
-      # main and the tag go up together by explicit refspec. The tag is
-      # annotated because --follow-tags silently skips lightweight tags, which
-      # left the tag runner-local while main advanced (verified locally).
-      #
-      # This is the first irreversible step. Everything fallible before it -- the
-      # six-RID build, the pack, the republish check -- has already passed, and
-      # the archive is sitting in the artifact store. If the upload below fails,
-      # the commit and tag are already correct: re-run this job to attach the
-      # asset to the existing tag, without a new version or a new build.
-      - name: Push release commit and tag to main
+      # Stage both archives on a draft release. Drafts are invisible to users
+      # and to releases/latest, create no tag, and stay editable until
+      # cd-publish.yml flips them -- which is when immutability locks the
+      # assets and the tag, and GitHub emits the release attestation.
+      - name: Create draft release
         env:
-          # gh auth setup-git (above) configured the credential helper to
-          # delegate to `gh auth git-credential`, but that helper itself reads
-          # GH_TOKEN from ITS OWN step's environment when git invokes it --
-          # env vars do not carry over between steps, so this push failed with
-          # "could not read Username" until the token was repeated here too.
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          version='${{ needs.version.outputs.version }}'
-          git tag -a "v$version" -m "v$version"
-          git push origin "HEAD:main" "refs/tags/v$version"
-
-      # Create the release FROM the pushed tag: `gh release create --target`
-      # would create the tag server-side itself, and a subsequent tag push is
-      # then rejected as already-existing (verified locally). Pushing first
-      # leaves gh one job, and keeps the tag pointing at the release commit.
-      #
-      # Uses the same App token, not github.token: the release/tag object this
-      # creates belongs to the same identity that pushed main, and the App's
-      # `contents: write` permission covers it -- no extra scope needed.
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           version='${{ needs.version.outputs.version }}'
           tag="v$version"
           zip="artifacts/${{ needs.build.outputs.zip }}"
           plugin="artifacts/${{ needs.build.outputs.plugin }}"
-          # Section first, boilerplate last. The promote step above already
-          # renamed the heading in this checkout, so this reads the section
-          # under its final version name.
-          pwsh -File eng/release-notes.ps1 -Version "$version" > notes.md
+          cp notes.md release-body.md
           printf '\n---\nPlugin archive for `archive`-source installs (`.zip`, sha256 `%s`) and hosted bundle for claude.ai account upload (`.plugin`).\n' \
-            '${{ needs.build.outputs.sha256 }}' >> notes.md
-          gh release create "$tag" "$zip" "$plugin" --title "$tag" --notes-file notes.md
-          echo "asset URLs: $(gh release view "$tag" --json assets --jq '.assets[].url')"
+            '${{ needs.build.outputs.sha256 }}' >> release-body.md
+          gh release create "$tag" "$zip" "$plugin" --draft --title "$tag" --notes-file release-body.md
+
+      # The reviewed diff: two version stamps, the changelog promotion, and
+      # the pin. Exactly the four release-managed files -- cd-publish.yml's
+      # provenance check asserts the merge introduces nothing else.
+      - name: Push release branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          version='${{ needs.version.outputs.version }}'
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add .claude-plugin/plugin.json src/Claudinine/Claudinine.csproj .claude-plugin/marketplace.json CHANGELOG.md
+          if git diff --cached --quiet; then echo '::error::release produced no change to commit'; exit 1; fi
+          git commit -m "Release $version"
+          git push origin "HEAD:refs/heads/release/v$version"
+
+      # The PR body carries the dispatch SHA as a machine-readable line:
+      # cd-publish.yml reads it back to verify the merged tree is exactly the
+      # tree the archives were built from, plus the four files above. The
+      # no-notes label rides the same App call (promotion reopens an empty
+      # Unreleased slot, which the changelog gate would otherwise reject).
+      - name: Open release PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          version='${{ needs.version.outputs.version }}'
+          cp notes.md pr-body.md
+          printf '\n---\nzip sha256 `%s` -- staged with the hosted bundle on draft release `v%s`.\nMerging this PR publishes the release; closing it abandons it (then delete the branch and the draft).\n\n<!-- dispatch-sha: %s -->\n' \
+            '${{ needs.build.outputs.sha256 }}' "$version" '${{ github.sha }}' >> pr-body.md
+          gh pr create --base main --head "release/v$version" \
+            --title "Release $version" --label no-notes --body-file pr-body.md

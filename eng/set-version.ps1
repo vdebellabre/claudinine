@@ -8,9 +8,10 @@
 # back to the SDK's own default).
 #
 # build.yml calls this directly (via its `version` input) to pack a version
-# that is not committed anywhere yet, which is what lets cd.yml build and
-# publish before touching main. cd.yml then calls it again to make that same
-# write permanent in the release commit.
+# that is not committed anywhere yet, which is what lets cd.yml build the
+# archives before any branch exists. cd.yml then calls it again on the
+# release branch, where the write becomes permanent once the release PR
+# merges.
 
 [CmdletBinding()]
 param(

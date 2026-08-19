@@ -1,14 +1,13 @@
 name: Commit validation
 
 # Continuous integration: compile the six-RID matrix and run the tests on every
-# PR targeting main. Publishes nothing -- releasing is cd.yml, a manual
-# dispatch whose release commit bypasses the PR requirement via the publish
-# App.
+# PR targeting main. Publishes nothing -- releasing is cd.yml (dispatch ->
+# release PR) plus cd-publish.yml (publish on merge). The release PR is a PR
+# like any other, so this workflow is also what greens it.
 #
-# main has no `push` trigger: humans cannot push to it directly (the
-# main-protect ruleset requires a PR), and CD's release commit touches only
-# manifests and the changelog -- re-validating it would spend a six-RID run on
-# nothing.
+# main has no `push` trigger: nothing lands on main outside a PR (the
+# main-protect ruleset has no bypass actors), so every commit on main arrived
+# with these checks already green.
 #
 # `ci-ok` exists solely to be the ruleset's required status check: requiring
 # one stable name instead of the six matrix job names means a matrix change

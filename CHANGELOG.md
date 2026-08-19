@@ -6,10 +6,12 @@ file and are not backfilled.
 The CD workflow (`.github/workflows/cd.yml`) reads the section matching the
 version it is publishing and puts it in the GitHub release body. **Write the
 next release's section under `## Unreleased` as you go** — CD renames that
-heading to the computed version in the release commit, and an empty
-`Unreleased` section fails the dispatch before anything is built or pushed.
+heading to the computed version in the release PR, and an empty
+`Unreleased` section fails the dispatch before any PR is opened.
 
 ## Unreleased
+
+- **Releases now ship through a reviewed PR.** Dispatching a release opens a `release/v<version>` PR carrying the version stamps, changelog promotion, and marketplace pin, with both archives staged on a draft GitHub release; merging the PR publishes it (tag + undraft) after provenance and digest checks. CD no longer pushes to `main` — the publish App's ruleset bypass is retired and every commit on `main` now arrives by PR. Releases are immutable once published: assets and tag locked, with a sigstore release attestation attached. Supersedes the direct-push model described under 1.2.0.
 
 ## 1.2.0
 

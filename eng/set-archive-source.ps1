@@ -3,9 +3,11 @@
 #
 # The `archive` source needs a pinned URL plus its digest, both of which change
 # every release, so this rewrite is part of the release flow rather than a
-# hand-edit. `version` stays declared in plugin.json, which makes the version
-# string (not the digest) the update signal -- so the digest exists purely as an
-# integrity check.
+# hand-edit: cd.yml (phase A) runs it on the release branch, so the pin ships
+# inside the reviewed release PR. `version` stays declared in plugin.json,
+# which makes the version string (not the digest) the update signal -- so the
+# digest exists purely as an integrity check, verified again by cd-publish.yml
+# against the staged asset before anything publishes.
 #
 # Requires Claude Code v2.1.224+ on the consumer side: 2.1.120-2.1.223 refuse to
 # install an archive-source plugin, and older versions fail to load the whole

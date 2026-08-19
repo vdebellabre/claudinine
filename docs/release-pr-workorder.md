@@ -149,20 +149,37 @@ branch `release/v*`):
      merge-method-independent. (A merge-tree == head-tree check would NOT
      catch this: "Update branch" moves the PR head itself, so head identity
      passes while the zip's provenance silently diverges.);
-   - download the draft's zip asset, hash it, compare against the pin in the
-     merged `marketplace.json`. This is the check that catches a mis-uploaded
-     or tampered asset — the class v1 gave up.
+   - the draft carries exactly the two expected assets (a missing `.plugin`
+     must not publish silently);
+   - download the draft's zip asset, hash it, compare against **both** the pin
+     in the merged `marketplace.json` (catches a mis-uploaded or tampered
+     asset — the class v1 gave up) **and** the digest phase A recorded in the
+     PR body. The second comparison closes a gap the pin alone leaves open: an
+     actor with `contents: write` but no PR-write could swap the draft asset
+     post-review and push a matching pin edit to the release branch — the pin
+     lives in one of the four allowed files, so every other check passes. The
+     PR body is phase A's point-in-time record, editable only with PR-write
+     (parsed from an env var, like `dispatch-sha`).
 2. Re-run the republish check (guards re-runs after success).
 3. Push tag `v<version>` at `merge_commit_sha` with `GITHUB_TOKEN`
    (`contents: write`; tags need no bypass and no PR).
 4. Publish the draft (`gh release edit v<version> --draft=false`). It attaches
    to the just-pushed tag, becomes immutable, and GitHub emits the release
    attestation (fact 4).
+5. Delete the `release/v<version>` branch if it still exists — a backstop
+   only: `delete_branch_on_merge` is on repo-wide (enabled 2026-08-19), so
+   GitHub removes the branch at merge time and this step normally reports
+   "already gone". It exists so the next dispatch's race check stays clean if
+   that setting is ever turned off. Best-effort — the release is already out;
+   a failure is a warning.
 
 **Consequences:** CD is read-only on `main`. The `main-protect` ruleset loses
 its bypass actor; the App is demoted from bypass-pusher to ordinary PR author
-(keeps its secrets, gains `pull_requests: write`). No marketplace format
-change, no transition dance, existing installs unaffected; update checks stay
+(keeps its secrets, gains `pull_requests: write` and `issues: write` — the
+`no-notes` label must ride the App's own PR-create call, because a
+`GITHUB_TOKEN`-applied label fires no `labeled` event and the changelog gate
+would stay red from its `opened` run). No marketplace format change, no
+transition dance, existing installs unaffected; update checks stay
 metadata-only.
 
 ### Why the App survives at all (and only for PR creation)
@@ -204,7 +221,8 @@ and only pushes a tag and flips a draft.
 3. **An abandoned release leaves debris**: closing the PR unmerged leaves the
    branch *and* the draft release. The race check refuses the next dispatch
    until both are deleted. Optional nicety: a cleanup job on `pull_request
-   closed && !merged`.
+   closed && !merged`. (A *successful* release cleans up after itself — phase
+   B step 5 deletes the branch, and publishing consumes the draft.)
 4. **Immutability is forever**: a bad published release can never be patched
    in place — the fix is the next version. That is the existing
    never-republish discipline, now machine-enforced.
@@ -272,7 +290,8 @@ startsWith(github.event.pull_request.head.ref, 'release/v')`.
   deletion/force-push block, PR requirement, the two required checks, the
   strict policy).
 - App installation permissions: confirm `contents: write`, add
-  `pull_requests: write`.
+  `pull_requests: write` **and `issues: write`** (labels go through the
+  Issues API; see *Consequences* for why the label must be App-applied).
 - Keep `PUBLISH_APP_ID` / `PUBLISH_APP_PEM` secrets (phase A still mints).
 
 ### W4 — header comments on surviving machinery

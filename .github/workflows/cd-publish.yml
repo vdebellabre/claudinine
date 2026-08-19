@@ -1,0 +1,225 @@
+name: Publish release
+
+# Continuous delivery, phase B: publish on release-PR merge. Reacts to the
+# merge of a release/v<version> PR that cd.yml (phase A) opened, and performs
+# the only irreversible acts of the whole flow: the tag push and the draft
+# publish. Full design: docs/release-pr-workorder.md.
+#
+# Needs no App token: it reacts to a human merge, and tags plus releases need
+# no ruleset bypass -- GITHUB_TOKEN with contents: write covers both.
+#
+# Coherence checks, all fail-closed before anything irreversible:
+#   1. the merged manifest's version equals the branch-name version (a human
+#      edit in flight must stay coherent);
+#   2. provenance: the diff from the dispatch SHA (recorded by phase A in the
+#      PR body) to the merge commit touches EXACTLY the four release-managed
+#      files. The published zip was built from the dispatch SHA, so this
+#      asserts the tag covers precisely that tree plus the release stamps.
+#      Any drift -- an "Update branch" click, a stray push to the branch --
+#      surfaces as extra files. A merge-tree == head-tree check would NOT
+#      catch this: "Update branch" moves the PR head itself;
+#   3. the draft carries exactly the two expected assets (a missing .plugin
+#      must not publish silently);
+#   4. the draft's zip asset hashes to BOTH the pin in the merged
+#      marketplace.json AND the digest phase A recorded in the PR body. The
+#      pin alone would not catch an actor with contents: write swapping the
+#      draft asset post-review and pushing a matching pin edit to the release
+#      branch (the pin lives in one of the four allowed files); the PR body is
+#      phase A's point-in-time record, editable only with PR write.
+#
+# Publishing the draft is when immutable releases lock the assets and the tag
+# and GitHub emits the sigstore release attestation. The release/v* branch is
+# normally gone by then (delete_branch_on_merge is on repo-wide); the last
+# step below is the backstop that keeps the next dispatch's race check clean
+# if that setting is ever turned off.
+#
+# Re-run safety: nothing is published until the undraft succeeds. A run that
+# failed between the tag push and the undraft leaves a tag with only a draft
+# behind it -- the tag is not yet protected (protection lands at publish), and
+# re-running this workflow skips the tag step (already at the merge commit)
+# and retries the undraft. A coherence failure after a bad merge publishes
+# nothing; recovery is documented in the work order (delete draft + branch,
+# re-dispatch -- the same still-unreleased version is recomputed).
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: publish
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          # Full history: the provenance check diffs against the dispatch SHA,
+          # an earlier commit on main.
+          fetch-depth: 0
+
+      - name: Resolve version from branch name
+        id: v
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          version="${HEAD_REF#release/v}"
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::head branch '$HEAD_REF' does not name a semver version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: 'Coherence: manifest version matches branch name'
+        run: |
+          manifest="$(jq -r .version .claude-plugin/plugin.json)"
+          if [ "$manifest" != "${{ steps.v.outputs.version }}" ]; then
+            echo "::error::plugin.json says $manifest but the branch names" \
+                 "${{ steps.v.outputs.version }} -- an in-flight edit changed the" \
+                 "version; abandon this release (delete draft + branch) and re-dispatch."
+            exit 1
+          fi
+
+      # The PR body is untrusted input: read it from the environment, never
+      # interpolate it into the script text.
+      - name: 'Coherence: merge is dispatch tree + the four release files'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          dispatch="$(printf '%s' "$PR_BODY" | grep -oE 'dispatch-sha: [0-9a-f]{40}' | head -n1 | cut -d' ' -f2 || true)"
+          if [ -z "$dispatch" ]; then
+            echo "::error::no dispatch-sha line in the PR body -- this PR was not" \
+                 "opened by cd.yml; refusing to publish."
+            exit 1
+          fi
+          echo "dispatch SHA: $dispatch"
+          changed="$(git diff --name-only "$dispatch" "$MERGE_SHA" | sort)"
+          expected="$(printf '%s\n' \
+            '.claude-plugin/marketplace.json' \
+            '.claude-plugin/plugin.json' \
+            'CHANGELOG.md' \
+            'src/Claudinine/Claudinine.csproj' | sort)"
+          if [ "$changed" != "$expected" ]; then
+            echo "::error::the merge does not equal the dispatched tree plus the" \
+                 "four release-managed files -- drift was merged into the release" \
+                 "(Update branch?). The archives were built from $dispatch and do" \
+                 "not contain it. Delete the draft and the branch, re-dispatch."
+            echo "--- files changed dispatch..merge:"
+            printf '%s\n' "$changed"
+            exit 1
+          fi
+
+      # Refuse re-publishing, and require the draft phase A staged, carrying
+      # exactly the two expected assets.
+      - name: 'Coherence: exactly one draft awaiting publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.v.outputs.version }}"
+          state="$(gh release view "$tag" --json isDraft -q .isDraft 2>/dev/null || echo missing)"
+          case "$state" in
+            missing) echo "::error::no draft release $tag -- phase A never staged the archives"; exit 1 ;;
+            false)   echo "::error::release $tag is already published -- nothing to do"; exit 1 ;;
+            true)    echo "draft $tag found" ;;
+          esac
+          count="$(gh release view "$tag" --json assets -q '.assets | length')"
+          if [ "$count" != "2" ]; then
+            echo "::error::draft $tag carries $count asset(s), expected exactly 2" \
+                 "(zip + .plugin) -- refusing to publish an incomplete release."
+            exit 1
+          fi
+
+      - name: 'Coherence: draft asset matches the merged pin and the PR record'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          version='${{ steps.v.outputs.version }}'
+          tag="v$version"
+          pin="$(jq -r '.plugins[] | select(.name == "claudinine") | .source.sha256' .claude-plugin/marketplace.json)"
+          url="$(jq -r '.plugins[] | select(.name == "claudinine") | .source.url' .claude-plugin/marketplace.json)"
+          case "$url" in
+            */download/$tag/claudinine-$version.zip) ;;
+            *) echo "::error::marketplace URL '$url' does not point at $tag's asset"; exit 1 ;;
+          esac
+          gh release download "$tag" --pattern "claudinine-$version.zip" --dir dl
+          got="$(sha256sum "dl/claudinine-$version.zip" | cut -d' ' -f1)"
+          if [ "$got" != "$pin" ]; then
+            echo "::error::draft asset sha256 $got does not match the merged pin $pin" \
+                 "-- the bytes users would verify against the manifest are not the" \
+                 "bytes staged for publish. Refusing."
+            exit 1
+          fi
+          # Phase A's point-in-time record: a post-review asset swap with a
+          # matching pin edit passes the check above (the pin is in an allowed
+          # file); it cannot rewrite the PR body without PR-write.
+          recorded="$(printf '%s' "$PR_BODY" | grep -oE 'zip sha256 `[0-9a-f]{64}`' | head -n1 | grep -oE '[0-9a-f]{64}' || true)"
+          if [ -z "$recorded" ]; then
+            echo "::error::no 'zip sha256' record in the PR body -- this PR was not opened by cd.yml; refusing."
+            exit 1
+          fi
+          if [ "$got" != "$recorded" ]; then
+            echo "::error::draft asset sha256 $got does not match phase A's record" \
+                 "$recorded in the PR body -- the asset (and pin) changed after the" \
+                 "PR was opened. Refusing."
+            exit 1
+          fi
+          echo "asset digest matches pin and PR record: $pin"
+
+      # First irreversible step. Annotated (--follow-tags-style lightweight
+      # tags have bitten before); idempotent on re-run: skip when the tag
+      # already sits at the merge commit, fail when it sits anywhere else.
+      - name: Push tag
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          tag="v${{ steps.v.outputs.version }}"
+          existing="$(git ls-remote --tags origin | grep -E "refs/tags/$tag(\^\{\})?\$" | tail -n1 | cut -f1 || true)"
+          if [ -n "$existing" ]; then
+            if [ "$existing" = "$MERGE_SHA" ]; then
+              echo "tag $tag already at $MERGE_SHA (re-run); skipping"
+              exit 0
+            fi
+            echo "::error::tag $tag exists at $existing, not at the merge commit $MERGE_SHA"
+            exit 1
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$tag" -m "$tag" "$MERGE_SHA"
+          git push origin "refs/tags/$tag"
+
+      # Publishing attaches the draft to the tag just pushed, locks assets and
+      # tag (immutable releases), and emits the release attestation.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.v.outputs.version }}"
+          gh release edit "$tag" --draft=false
+          echo "published $tag"
+          echo "asset URLs: $(gh release view "$tag" --json assets --jq '.assets[].url')"
+
+      # Backstop only: delete_branch_on_merge removes the branch at merge
+      # time, so the normal outcome here is "already gone". If the setting is
+      # ever turned off, this keeps the race check clean without anyone
+      # remembering why. Best-effort: the release is already published, so a
+      # failure is a warning, not a failed publish.
+      - name: Delete release branch (backstop)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="release/v${{ steps.v.outputs.version }}"
+          if ! git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            echo "branch $branch already deleted (delete_branch_on_merge)"
+            exit 0
+          fi
+          if gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$branch"; then
+            echo "deleted $branch"
+          else
+            echo "::warning::could not delete $branch -- remove it by hand, or the next dispatch's race check will refuse."
+          fi
