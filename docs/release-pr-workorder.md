@@ -166,10 +166,12 @@ branch `release/v*`):
 4. Publish the draft (`gh release edit v<version> --draft=false`). It attaches
    to the just-pushed tag, becomes immutable, and GitHub emits the release
    attestation (fact 4).
-5. Delete the `release/v<version>` branch (best-effort — the release is
-   already out; a failure is a warning). Without this, every release leaves
-   its branch behind (`delete_branch_on_merge` is off) and the next dispatch's
-   race check refuses until someone deletes it by hand.
+5. Delete the `release/v<version>` branch if it still exists — a backstop
+   only: `delete_branch_on_merge` is on repo-wide (enabled 2026-08-19), so
+   GitHub removes the branch at merge time and this step normally reports
+   "already gone". It exists so the next dispatch's race check stays clean if
+   that setting is ever turned off. Best-effort — the release is already out;
+   a failure is a warning.
 
 **Consequences:** CD is read-only on `main`. The `main-protect` ruleset loses
 its bypass actor; the App is demoted from bypass-pusher to ordinary PR author

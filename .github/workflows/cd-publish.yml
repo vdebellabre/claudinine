@@ -28,9 +28,10 @@ name: Publish release
 #      phase A's point-in-time record, editable only with PR write.
 #
 # Publishing the draft is when immutable releases lock the assets and the tag
-# and GitHub emits the sigstore release attestation. After a successful
-# publish the release/v* branch is deleted, so the next dispatch's race check
-# finds a clean namespace -- the lifecycle is self-contained.
+# and GitHub emits the sigstore release attestation. The release/v* branch is
+# normally gone by then (delete_branch_on_merge is on repo-wide); the last
+# step below is the backstop that keeps the next dispatch's race check clean
+# if that setting is ever turned off.
 #
 # Re-run safety: nothing is published until the undraft succeeds. A run that
 # failed between the tag push and the undraft leaves a tag with only a draft
@@ -203,18 +204,22 @@ jobs:
           echo "published $tag"
           echo "asset URLs: $(gh release view "$tag" --json assets --jq '.assets[].url')"
 
-      # Self-contained lifecycle: without this, every release leaves its
-      # release/v* branch behind (delete_branch_on_merge is off) and the NEXT
-      # dispatch's race check refuses until someone deletes it by hand.
-      # Best-effort: the release is already published, so a failure here is a
-      # warning, not a failed publish.
-      - name: Delete release branch
+      # Backstop only: delete_branch_on_merge removes the branch at merge
+      # time, so the normal outcome here is "already gone". If the setting is
+      # ever turned off, this keeps the race check clean without anyone
+      # remembering why. Best-effort: the release is already published, so a
+      # failure is a warning, not a failed publish.
+      - name: Delete release branch (backstop)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ref="heads/release/v${{ steps.v.outputs.version }}"
-          if gh api -X DELETE "repos/${{ github.repository }}/git/refs/$ref"; then
-            echo "deleted $ref"
+          branch="release/v${{ steps.v.outputs.version }}"
+          if ! git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            echo "branch $branch already deleted (delete_branch_on_merge)"
+            exit 0
+          fi
+          if gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$branch"; then
+            echo "deleted $branch"
           else
-            echo "::warning::could not delete $ref -- remove it by hand, or the next dispatch's race check will refuse."
+            echo "::warning::could not delete $branch -- remove it by hand, or the next dispatch's race check will refuse."
           fi
