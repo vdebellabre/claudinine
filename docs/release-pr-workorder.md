@@ -18,15 +18,19 @@ marketplace pin**, which is the difference from v1.
 Verified against the Claude Code docs (Plugin marketplaces / Plugins reference,
 2026-08-19):
 
-1. **v1's core claim is unsupported.** v1 assumed a moving `releases/latest`
-   pointer "needs nothing new to trigger updates". The docs say the opposite:
-   a declared `version` (marketplace entry or `plugin.json`) or the `sha256`
-   pin **is the update signal**, and without a changed signal "users keep the
-   cached copy". The docs are silent on whether a stable URL whose content
-   changed is ever re-fetched during an update check. Best case, every check
-   downloads the ~10 MB zip to read `plugin.json`; worst case, updates are
-   never detected at all. v1's make-or-break verification item (W6.4) was
-   testing exactly this, post-migration — too late.
+1. **v1's update detection was mispriced, not broken.** v1's claim that a
+   moving `releases/latest` pointer "needs nothing new to trigger updates" is
+   doc-supported — the Version-management table's digest row says that without
+   a pin "users get updates whenever the hosted zip file's bytes change", and
+   a version declared in `plugin.json` likewise lives in the fetched bytes.
+   But that support comes only via the expensive path: for a static marketplace
+   entry the signal is inside the archive, so **every update check downloads
+   the ~10 MB zip**, for every user, at auto-update cadence, forever. v2's
+   signal is the pin in `marketplace.json`, so checks ride the marketplace git
+   refresh — metadata-only. *(Correction 2026-08-19: an earlier revision
+   claimed the docs were silent on stable-URL re-fetch and updates might never
+   be detected; the digest row contradicts that — detection was documented,
+   just download-priced.)*
 2. **v1's pin threat model was backwards.** It argued "an actor who can swap
    the asset can usually rewrite the repo too". Under a PR-gated `main` with
    zero bypass actors, that inverts: `main` becomes the hardest thing to write
@@ -37,8 +41,9 @@ Verified against the Claude Code docs (Plugin marketplaces / Plugins reference,
    `main` is the pin; what this work order kills is the *bypass push*. Those
    decouple: the pin rides the release PR.
 
-Revisit v1 only if Claude Code someday documents stable-URL re-fetch semantics
-or adds signature verification to plugin sources.
+Revisit v1 only if Claude Code someday gains cheap update detection for
+stable-URL archives (e.g. HEAD/ETag checks) or signature verification for
+plugin sources.
 
 ---
 
@@ -48,8 +53,11 @@ or adds signature verification to plugin sources.
    Version management*): `version` in the fetched source's `plugin.json` →
    `version` in the marketplace entry → git commit SHA (git sources) → sha256
    digest (`archive` sources) → `unknown`. A declared version or a changed pin
-   is the update signal; update checks are **metadata-only** (the marketplace
-   refresh is a git pull) — no archive download until the user installs.
+   is the update signal. Checks are **metadata-only when the signal lives in
+   the marketplace entry** (pin or entry version — the marketplace refresh is
+   a git pull); a signal that lives only inside the archive (its `plugin.json`
+   version, or its digest with no pin) costs a download per check. v2 keeps
+   the signal in the entry.
 2. **`sha256` is optional but enforced**: every download is verified against
    it, install refused on mismatch. It is Claude Code's *only* install-time
    integrity mechanism — no sigstore, attestation, or signed-tag verification
@@ -63,8 +71,8 @@ or adds signature verification to plugin sources.
    protected (no delete/move). Publishing also **auto-generates a sigstore
    release attestation** (tag + commit SHA + asset digests, checkable with
    `gh attestation verify`) — provenance for free, verifiable by humans and CI
-   even though Claude Code itself never checks it. Existing releases stay
-   mutable unless republished.
+   even though Claude Code itself never checks it (proven live in W6.2).
+   Existing releases stay mutable unless republished.
 5. **Consumer floor unchanged**: `archive` sources need Claude Code v2.1.224+
    (recorded in `eng/set-archive-source.ps1`'s header, which survives in v2).
 
@@ -72,7 +80,12 @@ or adds signature verification to plugin sources.
 
 - **`main-protect` strict up-to-date**: `strict_required_status_checks_policy:
   true`. No PR merges unless its required checks ran against the current tip
-  of `main`. Load-bearing for phase B's tree identity (below).
+  of `main` — it keeps `ci-ok` honest against the base actually merged into,
+  and makes drift *blocking* on a release PR. It does **not** guarantee the
+  release's provenance (a drifted branch that re-ran its checks still merges);
+  that guarantee is phase B's dispatch-diff check (below). Price accepted:
+  while a release PR is open, any other PR landing on `main` invalidates it —
+  close + re-dispatch. Fine for a single-maintainer repo.
 - **Immutable releases enabled** on the repo (`PUT
   /repos/vdebellabre/claudinine/immutable-releases`). Applies to releases
   published from now on; v1.2.0 remains mutable (fine — never republish it).
@@ -109,7 +122,10 @@ existing `bump: [patch, minor, major]` input):
    `eng/set-archive-source.ps1 -Sha256 <digest> -Version <v>`; commit
    `Release <v>`; push with the App token.
 7. Open the PR with the App token, labeled `no-notes` (promotion reopens an
-   empty `Unreleased` slot). PR body: the rendered release notes + digest.
+   empty `Unreleased` slot). PR body: the rendered release notes + digest,
+   plus a machine-readable line recording the dispatch SHA the zip was built
+   from (e.g. `<!-- dispatch-sha: <sha> -->`) — phase B's provenance check
+   reads it back.
 
 The human merge is the release gate. The reviewed diff is the changelog that
 ships, two version stamps, **and the pin that will govern every install** — a
@@ -122,9 +138,17 @@ branch `release/v*`):
 1. Coherence checks, all before anything irreversible:
    - manifest version at `merge_commit_sha` == the branch-name version (a
      human edit in flight must stay coherent);
-   - `merge_commit_sha^{tree}` == the PR head's tree — with strict up-to-date
-     enforced this holds for all three merge methods, but the published pin
-     must match the merged manifest, so assert it;
+   - **provenance**: `git diff --name-only <dispatch-sha> <merge_commit_sha>`
+     (dispatch SHA read from the PR-body line) touches exactly the four
+     release-managed files — `.claude-plugin/plugin.json`,
+     `src/Claudinine/Claudinine.csproj`, `CHANGELOG.md`,
+     `.claude-plugin/marketplace.json`. The published zip was built from the
+     dispatch SHA, so this asserts the tag covers precisely that tree plus the
+     release stamps. Any drift — an "Update branch" click, a stray push to the
+     branch — surfaces as extra files, and a plain tree diff is
+     merge-method-independent. (A merge-tree == head-tree check would NOT
+     catch this: "Update branch" moves the PR head itself, so head identity
+     passes while the zip's provenance silently diverges.);
    - download the draft's zip asset, hash it, compare against the pin in the
      merged `marketplace.json`. This is the check that catches a mis-uploaded
      or tampered asset — the class v1 gave up.
@@ -175,7 +199,8 @@ and only pushes a tag and flips a draft.
    404s** (the draft isn't public yet). Window is minutes; a user refreshing
    the marketplace inside it gets a failed download, self-healing on retry.
    Recovery for a phase B failure: re-run it — nothing is published until the
-   undraft succeeds.
+   undraft succeeds. **Not a regression**: today's flow has the same window —
+   the release commit (pin included) and tag push precede the asset upload.
 3. **An abandoned release leaves debris**: closing the PR unmerged leaves the
    branch *and* the draft release. The race check refuses the next dispatch
    until both are deleted. Optional nicety: a cleanup job on `pull_request
@@ -192,10 +217,19 @@ and only pushes a tag and flips a draft.
   Delete the `release/v*` branch and the draft release, re-dispatch.
 - **`main` moves while the release PR is open:** strict up-to-date blocks the
   merge. The correct response is **close + re-dispatch — never GitHub's
-  "Update branch" button**: updating the branch folds the drift into the
-  release while the drifted PRs' changelog notes sit in the reopened
-  `Unreleased` slot, shipping code in v*X* with notes deferred to v*X+1*.
-  Phase B's tree check backstops a habit-click.
+  "Update branch" button**: updating the branch folds drift into the tag that
+  the published zip was *not built from*, and the drifted PRs' changelog notes
+  sit in the reopened `Unreleased` slot, shipping code in v*X* with notes
+  deferred to v*X+1*. A habit-click is machine-caught: phase B's dispatch-diff
+  check fails loudly on the extra files.
+- **Phase B's coherence checks fail after a bad merge** (e.g. Update-branch
+  drift merged anyway): nothing is published, but `main` now carries the
+  release commit with no release behind it. Recovery: delete the draft and the
+  merged `release/v*` branch, re-dispatch — `bump-version.ps1` reads
+  `gh release list`, so it recomputes the *same* still-unreleased version, and
+  the fresh phase A builds from the current tip, drift now included and
+  re-promoted (`release-notes.ps1`'s already-promoted handling keeps the
+  re-run safe).
 - **Two dispatches racing:** the race check (branch / open PR / draft exists)
   plus the republish check; the second dispatch fails before writing.
 - **Phase B fails after merge:** re-run it. If it failed between tag push and
@@ -206,8 +240,8 @@ and only pushes a tag and flips a draft.
   A version edit trips phase B's manifest-vs-branch-name check; a pin edit
   trips the digest comparison; changelog wording flows through untouched.
 - **Merge method:** squash, merge, or rebase all work — phase B tags
-  `merge_commit_sha`, and under strict up-to-date all three produce a tree
-  identical to the PR head's, which the tree check asserts.
+  `merge_commit_sha`, and the dispatch-diff check is a plain tree diff between
+  two commits, indifferent to how the second one was produced.
 
 ---
 
@@ -223,7 +257,8 @@ commit and tag to main` step. Keep: version computation, republish checks,
 the `build.yml` call with the `version` input, App-token minting. Add: the
 race check (branch / PR / draft), draft-release creation + asset upload, the
 release-branch commit (set-version, promote, set-archive-source), PR
-creation. `permissions: { contents: write, pull-requests: write }`.
+creation with the dispatch-SHA line in the body.
+`permissions: { contents: write, pull-requests: write }`.
 
 ### W2 — new cd-publish.yml (phase B)
 
