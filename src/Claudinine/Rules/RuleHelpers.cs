@@ -190,9 +190,9 @@ internal static class RuleHelpers
     /// Fixpoint sentinel present in every head/tail-trim marker: content carrying
     /// it is our own trim output and must never be re-trimmed (multibyte content
     /// can trim to just over a byte cap — each pass would then shave a sliver off
-    /// the previous pass's tail).
+    /// the previous pass's tail). Canonical value in <see cref="Protocol"/>.
     /// </summary>
-    public const string TrimSentinel = "trimmed by claudinine]";
+    public const string TrimSentinel = Protocol.TrimSentinel;
 
     /// <summary>
     /// Byte-capped head/tail trim shared by the mid-age tier and mega-block-trim.
@@ -207,7 +207,7 @@ internal static class RuleHelpers
             return text;
         int half = Math.Min(maxBytes / 2 - 100, text.Length / 2);
         return text[..half]
-            + $"\n... [{bytes - maxBytes} bytes trimmed by claudinine] ...\n"
+            + $"\n... [{bytes - maxBytes} bytes {TrimSentinel} ...\n"
             + text[^half..];
     }
 
@@ -242,7 +242,7 @@ internal static class RuleHelpers
     /// those (a stub re-stubbed becomes "1 lines, 0.1KB" nonsense).
     /// </summary>
     public static bool IsClaudinineStub(string content) =>
-        content.StartsWith("[claudinine", StringComparison.Ordinal);
+        content.StartsWith(Protocol.StubPrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// True if this tool_result content is a chain-collapse digest carrier. Content

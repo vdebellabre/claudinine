@@ -54,7 +54,9 @@ internal static class StatuslineVerb
         }
         catch (Exception ex) when (!Dbg.Enabled)
         {
-            _ = ex;
+            // Swallow (the bar must render something every prompt) but let the
+            // opt-in file sink keep the evidence; env-var debug still rethrows.
+            Dbg.Log($"statusline failed: {ex}");
             return 0;
         }
     }

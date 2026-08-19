@@ -263,5 +263,4 @@ internal static class GetVerb
         }
         lines.Add($"wrote {path} ({mediaType}, {Math.Max(1, bytes.Length / 1024)}KB) — use the Read tool on this file to view it");
     }
-
 }

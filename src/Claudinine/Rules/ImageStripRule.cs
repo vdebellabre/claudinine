@@ -31,7 +31,7 @@ internal sealed class ImageStripRule : ICompactionRule
 
     /// <summary>The 0.1.x–0.4.x stub command clause, upgraded retroactively —
     /// the current forms never contain it, which is the idempotence test.</summary>
-    private const string OldCommandMarker = " archived — claudinine get ";
+    private const string OldCommandMarker = " archived — " + Protocol.BareGetCommand;
 
     private const string StubPrefix = "[claudinine: ";
 

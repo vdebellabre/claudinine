@@ -11,6 +11,8 @@ heading to the computed version in the release commit, and an empty
 
 ## Unreleased
 
+- **Opt-in debug log file.** Create an empty `~/.claude/claudinine-debug.log` and every pass appends its diagnostics there (skips, failures, per-pass stats) — no environment variable needed, which matters because hooks run headless and their stderr is effectively invisible. Delete the file to go silent again; growth is capped at 10 MB. Default behaviour is unchanged: silent.
+- **The string protocol is consolidated and contract-tested.** Every phrase whose exact spelling more than one class depends on (carrier prefix, trim sentinel, the three retrieval-command forms) now lives in one documented place, and a new test suite pins each header emitter against every matcher — including the fork-heal regex — plus the load-bearing rule-catalog ordering. No transcript byte changes; this hardens future edits.
 - **Single-branch releases.** The `develop` branch is gone: all work lands on `main` through PRs gated by CI and a changelog check, and each release adds exactly one CD-written commit there (version stamps, marketplace pin, changelog promotion) plus a tag. Between releases the marketplace manifest keeps pointing at the previous release, so it is always a valid install target. Tags are the released snapshots; `main` no longer is one. No user-facing behaviour change.
 
 ## 1.1.0
