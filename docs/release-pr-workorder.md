@@ -327,13 +327,16 @@ startsWith(github.event.pull_request.head.ref, 'release/v')`.
 
 ### W7 — `/ship-release` skill (after the flow has shipped a release)
 
+**Done 2026-08-19** (built after v1.2.1 proved the lifecycle):
+[`.claude/skills/ship-release/SKILL.md`](../.claude/skills/ship-release/SKILL.md).
 Repo skill wrapping the two human actions into one confirmed command:
-`/ship-release minor` → `gh workflow run cd.yml -f bump=minor` → poll for the
-release PR → `gh pr checks --watch` → present the shipping diff (changelog,
-stamps, pin) in-session → on explicit confirmation, `gh pr merge
---delete-branch` → watch phase B → report the release URL and digests. The
-in-session confirmation *is* the release gate; the skill removes tab-switching,
-not review. Build it against the real PR lifecycle, not before.
+`/ship-release minor` → dispatch → poll for the release PR → wait for both
+required checks (not `gh pr checks --watch --required`, which returns on the
+first reporting check) → present the shipping diff (changelog, stamps, pin)
+in-session → on explicit confirmation, merge → watch phase B → verify and
+report the release URL and digests. The in-session confirmation *is* the
+release gate; the skill removes tab-switching, not review. Branch deletion
+rides the repo's `delete_branch_on_merge`.
 
 ---
 
