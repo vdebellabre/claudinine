@@ -2,10 +2,10 @@
 # Computes the next plugin version from the last one actually released, and
 # (unless -WhatIf) writes it via set-version.ps1.
 #
-# develop carries no version in either file it would otherwise be read from
-# (see set-version.ps1) -- the manifest and csproj on develop can never go
-# stale because there is nothing in them to go stale. So "current version" is
-# not a file read; it is whatever GitHub says was tagged last. -Repo defaults
+# Between releases the manifest and csproj carry the PREVIOUS release's
+# version (written by the last release commit, see set-version.ps1), so a file
+# read would always be one release behind. "Current version" is therefore not
+# a file read; it is whatever GitHub says was tagged last. -Repo defaults
 # to the origin remote's owner/name, overridable for testing against a
 # checkout with no such remote.
 #

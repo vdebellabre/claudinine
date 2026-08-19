@@ -6,10 +6,12 @@ file and are not backfilled.
 The CD workflow (`.github/workflows/cd.yml`) reads the section matching the
 version it is publishing and puts it in the GitHub release body. **Write the
 next release's section under `## Unreleased` as you go** — CD renames that
-heading to the computed version in the release commit, so an empty
-`Unreleased` section ships a release with no notes.
+heading to the computed version in the release commit, and an empty
+`Unreleased` section fails the dispatch before anything is built or pushed.
 
 ## Unreleased
+
+- **Single-branch releases.** The `develop` branch is gone: development happens directly on `main`, and each release adds exactly one CD-written commit there (version stamps, marketplace pin, changelog promotion) plus a tag. Between releases the marketplace manifest keeps pointing at the previous release, so it is always a valid install target. Tags are the released snapshots; `main` no longer is one. No user-facing behaviour change.
 
 ## 1.1.0
 

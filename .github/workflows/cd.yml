@@ -3,24 +3,29 @@ name: Publish release
 # Continuous delivery: the only path that publishes. Manual dispatch, choosing
 # which version component to bump.
 #
-# Branch model: develop is where all development happens; main is CD's output
-# only, and a ruleset restricts pushes to main to the publish GitHub App (see
-# PUBLISH_APP_ID / PUBLISH_APP_PEM). Nothing else -- not even repo admins by
-# default -- can commit to main. This exists so main can be pinned as the
-# marketplace's ref while still being the branch CD writes its own release
-# commit to: main never carries hand-written commits, so there is no tree it
-# needs to reconcile with.
+# Branch model: single branch. main is where all development happens, and CD
+# writes exactly one commit per release on top of it: the version stamps, the
+# marketplace pin for the new archive, and the changelog promotion. Between
+# releases the manifests keep the PREVIOUS release's values, which are always a
+# valid install target -- the marketplace pointer only ever moves inside a
+# release commit. Tags are the released snapshots; a ruleset (main-protect)
+# blocks deletion and force-push but ordinary pushes are open.
 #
 # Because the new version is COMPUTED from the dropdown rather than supplied, a
 # release run cannot target a version that already shipped -- there is no input
 # that could name one.
 #
-# Ordering: checkout develop -> compute the version -> build an archive
-# carrying it (UNCOMMITTED) -> commit the bump and pin on top of develop's tree
-# -> push that commit and its tag to main -> publish. Everything fallible
-# happens before the first write, so a build, pack or republish-check failure
-# leaves main exactly as it was -- the release commit is never pushed for a
-# release that did not get that far.
+# Ordering: checkout the dispatched commit -> compute the version -> build an
+# archive carrying it (UNCOMMITTED) -> commit the bump, pin and changelog
+# promotion on top -> push that commit and its tag to main -> publish.
+# Everything fallible happens before the first write, so a build, pack or
+# republish-check failure leaves main exactly as it was -- the release commit
+# is never pushed for a release that did not get that far.
+#
+# All jobs check out the same snapshot (the dispatch SHA, actions/checkout's
+# default), so a push to main mid-run cannot make the tag disagree with the
+# built archive: the release push is a fast-forward of that SHA plus one
+# commit, and a mid-run push makes it fail cleanly -- pull and re-dispatch.
 #
 # Only the asset upload sits after the push, and it is recoverable in place:
 # commit and tag are already correct, so re-running the release job attaches the
@@ -45,16 +50,15 @@ jobs:
       version: ${{ steps.next.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: develop
 
       - name: Compute next version
         id: next
         shell: pwsh
         env:
           # bump-version.ps1 calls `gh release list` to find the last released
-          # version now that develop carries none in-tree; that call needs
-          # this token to authenticate at all.
+          # version -- the tree's own version stamp is the PREVIOUS release's,
+          # so it is never the source of truth; that call needs this token to
+          # authenticate at all.
           GH_TOKEN: ${{ github.token }}
         run: |
           $r = ./eng/bump-version.ps1 -Component '${{ inputs.bump }}' -WhatIf
@@ -94,78 +98,21 @@ jobs:
     needs: version
     uses: ./.github/workflows/build.yml
     with:
-      ref: develop
       version: ${{ needs.version.outputs.version }}
 
   release:
     name: release
     needs: [version, build]
     runs-on: ubuntu-latest
+    # The push and the release upload both run as github-actions[bot] with the
+    # workflow's own token -- the ruleset no longer restricts who can push to
+    # main, so no App identity is needed. A side effect worth keeping: pushes
+    # made with GITHUB_TOKEN do not trigger other workflows, so the release
+    # commit does not spend a CI run on a manifests+changelog-only change.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: develop
-          fetch-depth: 0
-          # checkout persists GITHUB_TOKEN as the remote credential by default,
-          # which would shadow the App token this job actually needs to push
-          # with. Disabled so `gh auth setup-git` (below, once the App token
-          # exists) is the only credential helper git sees.
-          persist-credentials: false
-
-      # Every PR merge into main (the bootstrap workflow-sync PRs, and any
-      # future one) adds a merge commit that develop never gets -- so main's
-      # tip is routinely AHEAD of develop by commits develop doesn't have,
-      # even though develop is always an ancestor of main. Building the
-      # release commit on develop's tip and pushing to main is therefore not
-      # a fast-forward from main's actual current position (confirmed: exit
-      # 128 "Updates were rejected... behind its remote counterpart" on a
-      # real dispatch). Rebasing the checkout onto main's tip first makes the
-      # new commit's parent main's real tip, so the push is a genuine
-      # fast-forward -- develop's file contents, main's history.
-      - name: Rebase checkout onto main's current tip
-        run: |
-          git fetch origin main
-          git checkout -B release-base origin/main
-          # `checkout <ref> -- .` overlays develop's tree onto main's; it does
-          # NOT remove a file that exists on main but not on develop. Verified
-          # empty today (nothing is main-only, since main only ever receives
-          # commits from this job) -- if that ever stops holding, this needs
-          # `git diff --name-only --diff-filter=D origin/main develop | xargs
-          # -r git rm` added alongside it.
-          git checkout develop -- .
-          git status --short
-
-      # main is restricted (ruleset: "restrict who can push") to this App --
-      # not to github-actions[bot], which cannot be named in that list at all,
-      # by GitHub's own design: it is the same identity for every workflow on
-      # every branch, so naming it would let any workflow on any branch push to
-      # main. The App's identity is specific to this installation, so it can be
-      # named without opening that hole.
-      - name: Mint publish-app token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.PUBLISH_APP_ID }}
-          private-key: ${{ secrets.PUBLISH_APP_PEM }}
-          owner: ${{ github.repository_owner }}
-          repositories: claudinine
-
-      # TEMPORARY: the main ruleset's bypass_actors entry needs this
-      # installation-id, not the app-id -- GitHub's ruleset docs don't say
-      # which one a bypass actor_id means, and app-id got rejected by the
-      # ruleset in practice. Remove this step once the ruleset is confirmed
-      # working with the right id.
-      - name: Debug -- print installation id
-        run: echo "installation-id=${{ steps.app-token.outputs.installation-id }}"
-
-      # Points git's credential helper at `gh`, which reads GH_TOKEN -- the
-      # documented way to authenticate a plain `git push` with a minted App
-      # token (actions/create-github-app-token's own README). Simpler and less
-      # error-prone than hand-building an Authorization header.
-      - name: Point git at the app token
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: gh auth setup-git
 
       - uses: actions/download-artifact@v8
         with:
@@ -193,10 +140,10 @@ jobs:
 
           # Renames `## Unreleased` to this version and reopens an empty slot
           # above it, so the release commit records the notes that shipped and
-          # develop starts the next cycle clean. Throws when the section is
-          # empty -- deliberately, since a release with blank notes is the
-          # failure this exists to prevent. Nothing has been pushed yet at
-          # this point, so the fix is to write the section and re-dispatch.
+          # the next cycle starts clean. Throws when the section is empty --
+          # deliberately, since a release with blank notes is the failure this
+          # exists to prevent. Nothing has been pushed yet at this point, so
+          # the fix is to write the section on main and re-dispatch.
           ./eng/release-notes.ps1 -Version $version -Promote | Out-Null
 
           $m = Get-Content .claude-plugin/marketplace.json -Raw | ConvertFrom-Json
@@ -213,10 +160,11 @@ jobs:
           if (git diff --cached --quiet) { throw 'release produced no change to commit' }
           git commit -m "Release $version"
 
-      # develop's tip plus this commit becomes main's tip -- not a merge, a
-      # fast-forward-shaped push of a single new commit onto a branch that only
-      # this App can write to. main never carries hand-written commits, so
-      # there is never a tree on main that this push needs to reconcile with.
+      # The dispatched snapshot plus this commit becomes main's tip -- a
+      # fast-forward as long as nothing was pushed to main since the dispatch.
+      # If something was, this fails cleanly and the right move is to
+      # re-dispatch (retrying by rebasing here would tag a tree the archive
+      # was not built from).
       #
       # main and the tag go up together by explicit refspec. The tag is
       # annotated because --follow-tags silently skips lightweight tags, which
@@ -228,13 +176,6 @@ jobs:
       # the commit and tag are already correct: re-run this job to attach the
       # asset to the existing tag, without a new version or a new build.
       - name: Push release commit and tag to main
-        env:
-          # gh auth setup-git (above) configured the credential helper to
-          # delegate to `gh auth git-credential`, but that helper itself reads
-          # GH_TOKEN from ITS OWN step's environment when git invokes it --
-          # env vars do not carry over between steps, so this push failed with
-          # "could not read Username" until the token was repeated here too.
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           version='${{ needs.version.outputs.version }}'
           git tag -a "v$version" -m "v$version"
@@ -244,13 +185,9 @@ jobs:
       # would create the tag server-side itself, and a subsequent tag push is
       # then rejected as already-existing (verified locally). Pushing first
       # leaves gh one job, and keeps the tag pointing at the release commit.
-      #
-      # Uses the same App token, not github.token: the release/tag object this
-      # creates belongs to the same identity that pushed main, and the App's
-      # `contents: write` permission covers it -- no extra scope needed.
       - name: Publish release
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           version='${{ needs.version.outputs.version }}'
           tag="v$version"

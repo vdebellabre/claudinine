@@ -1,12 +1,11 @@
 #!/usr/bin/env pwsh
 # Writes an explicit plugin version into the two files that carry it.
 #
-# develop carries no version at all in either file (`version` is optional in
-# plugin.json -- "Minimal required field is `name`" -- and an absent <Version>
-# just falls back to the SDK's own default). Only a release commit on main
-# ever has a real version, written by this script and never by hand. So there
-# is nothing to read or diff here: this always INSERTS the field fresh rather
-# than replacing an existing value.
+# Between releases both files carry the PREVIOUS release's version, written by
+# the last release commit and never by hand -- so this overwrites an existing
+# value in place, and inserts the field fresh only on a tree that never had
+# one (`version` is optional in plugin.json, and an absent <Version> falls
+# back to the SDK's own default).
 #
 # build.yml calls this directly (via its `version` input) to pack a version
 # that is not committed anywhere yet, which is what lets cd.yml build and

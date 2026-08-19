@@ -2,7 +2,7 @@
 # Extracts a release's changelog section from CHANGELOG.md, and (with -Promote)
 # renames the `## Unreleased` heading to that version in place.
 #
-# The changelog is written on develop as work lands, under `## Unreleased`.
+# The changelog is written on main as work lands, under `## Unreleased`.
 # cd.yml calls this twice in the release job: once with -Promote, inside the
 # same step that writes the version, so the rename rides the release commit;
 # and once plain, to build the body it hands `gh release create`.
@@ -61,7 +61,7 @@ if ($Promote) {
             $pending.Add($lines[$i])
         }
         if (-not ($pending -join "`n").Trim()) {
-            throw "'## Unreleased' in CHANGELOG.md is empty -- write the release notes there on develop and re-dispatch"
+            throw "'## Unreleased' in CHANGELOG.md is empty -- write the release notes there on main and re-dispatch"
         }
         # Rename in place, then reopen an empty Unreleased slot ABOVE it for the
         # next cycle.
@@ -88,6 +88,6 @@ for ($i = $start; $i -lt $lines.Count; $i++) {
 
 $text = ($body -join "`n").Trim()
 if (-not $text) {
-    throw "the '## $Version' section in CHANGELOG.md is empty -- write the release notes under '## Unreleased' on develop and re-dispatch"
+    throw "the '## $Version' section in CHANGELOG.md is empty -- write the release notes under '## Unreleased' on main and re-dispatch"
 }
 $text

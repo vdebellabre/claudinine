@@ -1,19 +1,16 @@
 name: Commit validation
 
 # Continuous integration: compile the six-RID matrix and run the tests on every
-# push to develop, and on the PRs that gate main. Publishes nothing -- releasing
-# is cd.yml, a manual dispatch that writes to main.
-#
-# `pull_request.branches` filters the BASE branch, so `main` is listed to cover
-# the develop -> main PRs (the only way a workflow change reaches main, since
-# workflow_dispatch reads its definition from the default branch). main is not a
-# `push` trigger: it only ever receives commits from the release dispatch, via
-# the app that the ruleset lets bypass it.
+# push to main (the only branch -- development happens there directly) and on
+# any PR targeting it. Publishes nothing -- releasing is cd.yml, a manual
+# dispatch whose release commit does NOT re-trigger this: it is pushed with
+# GITHUB_TOKEN, whose pushes never fire workflows, and touches only manifests
+# and the changelog anyway.
 on:
   push:
-    branches: [develop]
+    branches: [main]
   pull_request:
-    branches: [develop, main]
+    branches: [main]
 
 jobs:
   build:
