@@ -74,6 +74,10 @@ Claudinine writes that same launcher form into every stub it leaves in the trans
 
 (On a macOS desktop, the same colocated directory carries `run.sh`.)
 
+## Diagnostics
+
+Claudinine is deliberately silent: any anomaly makes a pass skip itself rather than risk the transcript, with no output. If you suspect compaction is not happening and want to see why, create an empty file at `~/.claude/claudinine-debug.log` — every subsequent pass appends its diagnostics there (skips, failures, per-pass stats), from every hook, with timestamps and process ids. Delete the file to go silent again; it stops growing at 10 MB. Setting the `CLAUDININE_DEBUG` environment variable still prints the same diagnostics to stderr for interactive runs.
+
 ## Comparison with Cozempic
 
 [Cozempic](https://github.com/Ruya-AI/cozempic) solves a closely related problem, and Claudinine started as an attempt to get the same benefit with far less machinery. If you are choosing between them, the first difference to mention is functional: Cozempic provides more than compaction — live token monitoring, agent-team protection and interactive diagnosis — if you want those features, Cozempic is the right pick. Claudinine focuses only on compaction, but has some serious advantages:

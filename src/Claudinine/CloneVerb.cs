@@ -212,10 +212,11 @@ internal static class CloneVerb
     {
         (string Source, string Target)[] phrases =
         [
-            ("claudinine get " + sourceId, "claudinine get " + targetId),
-            ("run.sh\" get " + sourceId, "run.sh\" get " + targetId),
+            (Protocol.BareGetCommand + sourceId, Protocol.BareGetCommand + targetId),
+            ("run.sh" + Protocol.LauncherGetFragment + sourceId,
+             "run.sh" + Protocol.LauncherGetFragment + targetId),
             ($"/{sourceId}/claudinine/run.sh", $"/{targetId}/claudinine/run.sh"),
-            ("mirror key: " + sourceId, "mirror key: " + targetId),
+            (Protocol.MirrorKeyPrefix + sourceId, Protocol.MirrorKeyPrefix + targetId),
         ];
         Rules.RuleHelpers.VisitStrings(node, text =>
         {

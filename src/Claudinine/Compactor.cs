@@ -64,14 +64,14 @@ internal static class Compactor
             {
                 rule.Apply(transcript);
             }
-            catch when (!Dbg.Enabled)
+            catch when (!Dbg.Active)
             {
                 return; // a misbehaving rule poisons the pass, not the file
             }
         }
 
         bool ok = transcript.TryRewrite();
-        if (Dbg.Enabled)
+        if (Dbg.Active)
         {
             int replaced = transcript.Records.Count(r => r.Replacement is not null);
             int removed = transcript.Records.Count(r => r.Removed);
@@ -104,14 +104,14 @@ internal static class Compactor
     private static bool MirrorLost(TranscriptFile transcript)
     {
         string sid = Path.GetFileNameWithoutExtension(transcript.Path);
-        string ownPhrase = "claudinine get " + sid;
+        string ownPhrase = Protocol.BareGetCommand + sid;
         // The launcher form as it appears in the RAW jsonl line: the closing
         // quote of the launcher path is JSON-escaped there (`…run.sh\" get <id>`),
         // and RawLine is the raw line — matching the unescaped form would never hit.
-        string ownLauncherPhrase = "\\\" get " + sid;
+        string ownLauncherPhrase = Protocol.LauncherGetFragmentJsonEscaped + sid;
         // Local-mode headers carry no get-command (their verbs are the model's
         // file tools); the sid rides in the block's `mirror key:` breadcrumb.
-        string ownMirrorKeyPhrase = "mirror key: " + sid;
+        string ownMirrorKeyPhrase = Protocol.MirrorKeyPrefix + sid;
         if (!transcript.Records.Any(r => r.View["claudinine"].Exists
             && (r.RawLine.Contains(ownPhrase, StringComparison.OrdinalIgnoreCase)
                 || r.RawLine.Contains(ownLauncherPhrase, StringComparison.OrdinalIgnoreCase)

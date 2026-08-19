@@ -131,6 +131,8 @@ internal sealed partial class ForkHealRule : ICompactionRule
     /// first non-sid character. Note the blanket sid replace in RetargetStrings
     /// also fixes the launcher PATH (`…/&lt;sid&gt;/claudinine/run.sh`) in the same pass.
     /// </summary>
+    // Internal (not private) so ProtocolContractTests can pin its agreement with
+    // the Protocol constants it cannot be composed from (attribute literal).
     [GeneratedRegex("(?:(?:claudinine|run\\.sh\") get |mirror key: )([A-Za-z0-9][A-Za-z0-9-]{6,})")]
-    private static partial Regex GetCommand();
+    internal static partial Regex GetCommand();
 }

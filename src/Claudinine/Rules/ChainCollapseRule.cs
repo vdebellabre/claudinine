@@ -35,12 +35,11 @@ internal sealed class ChainCollapseRule : ICompactionRule
     public const string RuleName = "chain-collapse";
 
     /// <summary>
-    /// The literal opening of every carrier this rule emits. Carrier-header dedup
-    /// and anchor-input stubbing recognize carriers ONLY by this exact prefix —
-    /// any header must be built from this constant, never respelled (a wording
-    /// tweak here would silently disable both downstream rules).
+    /// The literal opening of every carrier this rule emits. Canonical value in
+    /// <see cref="Protocol"/> (aliased here so call sites read as "the chain-collapse
+    /// prefix"); see Protocol's class doc for who else depends on it.
     /// </summary>
-    public const string CarrierPrefix = "[claudinine: this turn originally ran ";
+    public const string CarrierPrefix = Protocol.CarrierPrefix;
 
     public string Name => RuleName;
 

@@ -42,15 +42,15 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
     /// precedes ` get &lt;sid&gt;` in the launcher form (`sh "…/run.sh" get …`), and
     /// the local-mode breadcrumb (`mirror key: &lt;sid&gt;` — local blocks carry no
     /// get-command at all, their verbs are the model's file tools).</summary>
-    private const string GetCommandPrefix = "  claudinine get ";
-    private const string LauncherGetPrefix = "\" get ";
-    private const string MirrorKeyPrefix = "mirror key: ";
+    private const string GetCommandPrefix = "  " + Protocol.BareGetCommand;
+    private const string LauncherGetPrefix = Protocol.LauncherGetFragment;
+    private const string MirrorKeyPrefix = Protocol.MirrorKeyPrefix;
 
     /// <summary>The 0.1.x–0.4.x short-header command clause — a bare `claudinine`
     /// that resolves nowhere on hosted installs (no PATH entry) and nowhere at
     /// all in Cowork local mode. Its presence marks an old short header to be
     /// upgraded to the pointer form.</summary>
-    private const string OldShortMarker = ". Full outputs: claudinine get ";
+    private const string OldShortMarker = ". Full outputs: " + Protocol.BareGetCommand;
 
     /// <summary>Shared tail of every short-header generation — the upgrade
     /// splices the digest body from here on.</summary>
@@ -256,9 +256,10 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
     /// local-mode `mirror key:`). Earliest match wins: the header's commands sit
     /// at the top of the content, so a [ref] preview quoting ANOTHER form
     /// further down can never shadow them (previews can legitimately contain
-    /// retrieval commands verbatim).
+    /// retrieval commands verbatim). Internal so ProtocolContractTests can pin
+    /// it against the real emitters.
     /// </summary>
-    private static string? ParseSessionId(string content)
+    internal static string? ParseSessionId(string content)
     {
         int best = -1, start = -1;
         void Consider(string prefix)
