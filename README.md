@@ -1,18 +1,20 @@
 # Claudinine
 
+[![Works with Claude Code and Cowork](https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Cowork-d97757)](#install)
 [![Release](https://img.shields.io/github/v/release/vdebellabre/claudinine?label=release)](https://github.com/vdebellabre/claudinine/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-win%20%C2%B7%20macOS%20%C2%B7%20linux-lightgrey)](#install)
 
 **Claudinine silently slims your Claude sessions, moving the bulky parts to a side file. Your sessions stay lightweight, yet nothing is lost.**
 
-Works in the Claude Code CLI and in Cowork on claude.ai.
+Every session, Claude writes down everything that happened — every file it read, every command it ran, every search result. That file grows fast, and it is mostly bulk you will never look at again: the full text of a file Claude read once, the output of a build that succeeded twenty turns ago. The next time that session is loaded, all of that bulk gets read back in. It costs tokens, time, and it crowds out the part of the conversation that actually matters.
 
-Every session, Claude writes down everything that happened — every file it read, every command it ran, every search result. That file grows fast, and it is mostly bulk you will never look at again: the full text of a file Claude read once, the output of a build that succeeded twenty turns ago.
+Claudinine trims the bulk as you go. It keeps a short summary of what happened and moves the full details to a side file, so your next session starts lean. Across **174 real sessions**, transcripts shrank from **189 MB to 43 MB** on disk. The typical session is reduced by about **75% of the tokens** Claude has to read back when it loads that session again.
 
-The next time that session is loaded, all of that bulk gets read back in. It costs tokens, time, and it crowds out the part of the conversation that actually matters.
-
-Claudinine trims the bulk as you go. It keeps a short summary of what happened and moves the full details to a side file, so your next session starts lean.
+- **Your long sessions stay usable.** Less filler in the transcript means more room for the actual conversation before Claude has to compact.
+- **Resuming is faster and cheaper.** Reloading a session no longer means reloading megabytes of old tool output.
+- **You do not have to think about it.** There is no dashboard, no report, no prompt asking you to approve anything. Install it and forget it.
+- **Nothing is thrown away.** Full outputs are kept in a side file, and you can restore them (see [Getting your details back](#getting-your-details-back)).
 
 ## What it looks like
 
@@ -36,15 +38,6 @@ RETRIEVAL — use the targeted form:
 The three outputs above totalled about 19 KB. What stays in the transcript is a few hundred bytes: one line per call, in order, each with its size, a preview, and an id. The full text of every one of them is in the side file, and the header tells Claude exactly how to fetch back any line it turns out to need.
 
 (`<retrieve>` above stands in for the real retrieval command, which carries an absolute path to your install — see [Getting your details back](#getting-your-details-back). Sizes and previews are shortened here to fit the page.)
-
-## Why use Claudinine
-
-- **Your long sessions stay usable.** Less filler in the transcript means more room for the actual conversation before Claude has to compact.
-- **Resuming is faster and cheaper.** Reloading a session no longer means reloading megabytes of old tool output.
-- **You do not have to think about it.** There is no dashboard, no report, no prompt asking you to approve anything. Install it and forget it.
-- **Nothing is thrown away.** Full outputs are kept in a side file, and you can restore them (see [Getting your details back](#getting-your-details-back)).
-
-Across 174 real sessions, transcripts shrank from **189 MB to 43 MB** on disk. The typical session is reduced by about **75% of the tokens** Claude has to read back when it loads that session again.
 
 ## Install
 
