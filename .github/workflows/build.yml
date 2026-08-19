@@ -181,8 +181,9 @@ jobs:
           done
           ls -R bins
 
-      # Uncommitted on purpose -- see the `version` input. cd.yml commits this
-      # same write only after the release has been published.
+      # Uncommitted on purpose -- see the `version` input. cd.yml replays this
+      # same write on the release branch; it becomes permanent when the
+      # release PR merges.
       - name: Apply version override
         if: inputs.version != ''
         shell: pwsh
