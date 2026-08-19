@@ -1,14 +1,21 @@
 name: Commit validation
 
 # Continuous integration: compile the six-RID matrix and run the tests on every
-# push to main (the only branch -- development happens there directly) and on
-# any PR targeting it. Publishes nothing -- releasing is cd.yml, a manual
-# dispatch whose release commit does NOT re-trigger this: it is pushed with
-# GITHUB_TOKEN, whose pushes never fire workflows, and touches only manifests
-# and the changelog anyway.
+# PR targeting main. Publishes nothing -- releasing is cd.yml, a manual
+# dispatch whose release commit bypasses the PR requirement via the publish
+# App.
+#
+# main has no `push` trigger: humans cannot push to it directly (the
+# main-protect ruleset requires a PR), and CD's release commit touches only
+# manifests and the changelog -- re-validating it would spend a six-RID run on
+# nothing.
+#
+# `ci-ok` exists solely to be the ruleset's required status check: requiring
+# one stable name instead of the six matrix job names means a matrix change
+# never silently drops a required check. `if: always()` is load-bearing -- a
+# skipped job never reports its check, and a required check that never reports
+# blocks the merge forever.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -19,3 +26,11 @@ jobs:
     # verified on every release dispatch, which is the gate that matters.
     with:
       pack: false
+
+  ci-ok:
+    name: ci-ok
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.build.result }}" = "success"

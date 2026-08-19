@@ -11,7 +11,7 @@ heading to the computed version in the release commit, and an empty
 
 ## Unreleased
 
-- **Single-branch releases.** The `develop` branch is gone: development happens directly on `main`, and each release adds exactly one CD-written commit there (version stamps, marketplace pin, changelog promotion) plus a tag. Between releases the marketplace manifest keeps pointing at the previous release, so it is always a valid install target. Tags are the released snapshots; `main` no longer is one. No user-facing behaviour change.
+- **Single-branch releases.** The `develop` branch is gone: all work lands on `main` through PRs gated by CI and a changelog check, and each release adds exactly one CD-written commit there (version stamps, marketplace pin, changelog promotion) plus a tag. Between releases the marketplace manifest keeps pointing at the previous release, so it is always a valid install target. Tags are the released snapshots; `main` no longer is one. No user-facing behaviour change.
 
 ## 1.1.0
 

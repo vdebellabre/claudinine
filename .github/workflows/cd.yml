@@ -8,8 +8,12 @@ name: Publish release
 # marketplace pin for the new archive, and the changelog promotion. Between
 # releases the manifests keep the PREVIOUS release's values, which are always a
 # valid install target -- the marketplace pointer only ever moves inside a
-# release commit. Tags are the released snapshots; a ruleset (main-protect)
-# blocks deletion and force-push but ordinary pushes are open.
+# release commit. Tags are the released snapshots. A ruleset (main-protect)
+# blocks deletion and force-push and requires every human change to arrive by
+# PR with two green checks (ci-ok, unreleased-notes); the release commit is the
+# one exception, pushed directly by the publish GitHub App the ruleset lets
+# bypass it (github-actions[bot] cannot be named as a bypass actor, by GitHub's
+# design -- hence the App).
 #
 # Because the new version is COMPUTED from the dropdown rather than supplied, a
 # release run cannot target a version that already shipped -- there is no input
@@ -104,15 +108,34 @@ jobs:
     name: release
     needs: [version, build]
     runs-on: ubuntu-latest
-    # The push and the release upload both run as github-actions[bot] with the
-    # workflow's own token -- the ruleset no longer restricts who can push to
-    # main, so no App identity is needed. A side effect worth keeping: pushes
-    # made with GITHUB_TOKEN do not trigger other workflows, so the release
-    # commit does not spend a CI run on a manifests+changelog-only change.
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          # checkout persists GITHUB_TOKEN as the remote credential by default,
+          # which would shadow the App token this job actually needs to push
+          # with. Disabled so `gh auth setup-git` (below, once the App token
+          # exists) is the only credential helper git sees.
+          persist-credentials: false
+
+      # The ruleset requires PRs into main; the App is its only bypass actor,
+      # so the direct release push below must authenticate as the App.
+      - name: Mint publish-app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.PUBLISH_APP_ID }}
+          private-key: ${{ secrets.PUBLISH_APP_PEM }}
+          owner: ${{ github.repository_owner }}
+          repositories: claudinine
+
+      # Points git's credential helper at `gh`, which reads GH_TOKEN -- the
+      # documented way to authenticate a plain `git push` with a minted App
+      # token (actions/create-github-app-token's own README). Simpler and less
+      # error-prone than hand-building an Authorization header.
+      - name: Point git at the app token
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
 
       - uses: actions/download-artifact@v8
         with:
@@ -176,6 +199,13 @@ jobs:
       # the commit and tag are already correct: re-run this job to attach the
       # asset to the existing tag, without a new version or a new build.
       - name: Push release commit and tag to main
+        env:
+          # gh auth setup-git (above) configured the credential helper to
+          # delegate to `gh auth git-credential`, but that helper itself reads
+          # GH_TOKEN from ITS OWN step's environment when git invokes it --
+          # env vars do not carry over between steps, so this push failed with
+          # "could not read Username" until the token was repeated here too.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           version='${{ needs.version.outputs.version }}'
           git tag -a "v$version" -m "v$version"
@@ -185,9 +215,13 @@ jobs:
       # would create the tag server-side itself, and a subsequent tag push is
       # then rejected as already-existing (verified locally). Pushing first
       # leaves gh one job, and keeps the tag pointing at the release commit.
+      #
+      # Uses the same App token, not github.token: the release/tag object this
+      # creates belongs to the same identity that pushed main, and the App's
+      # `contents: write` permission covers it -- no extra scope needed.
       - name: Publish release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           version='${{ needs.version.outputs.version }}'
           tag="v$version"

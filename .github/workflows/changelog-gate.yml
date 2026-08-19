@@ -1,0 +1,50 @@
+name: Changelog gate
+
+# Requires every PR into main to carry release notes: the diff must touch
+# CHANGELOG.md and the `## Unreleased` section must be non-empty at the PR's
+# head. This is what keeps the release-time fail-closed check (release-notes.ps1
+# throwing on an empty section) from ever actually firing -- notes accumulate
+# per PR instead of being reconstructed at dispatch time.
+#
+# Escape hatch: the `no-notes` label, for changes with nothing to tell users
+# (typo fixes, CI plumbing). Kept in its own workflow, not ci.yml, so that
+# adding or removing the label re-runs only this cheap job and not the six-RID
+# build matrix.
+#
+# `unreleased-notes` is a required status check in the main-protect ruleset.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  unreleased-notes:
+    name: unreleased-notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check PR carries unreleased notes
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          case " $LABELS " in *" no-notes "*)
+            echo "'no-notes' label present; skipping the changelog requirement."
+            exit 0
+          esac
+          if git diff --quiet "$BASE_SHA"...HEAD -- CHANGELOG.md; then
+            echo "::error::this PR does not touch CHANGELOG.md -- add what changed" \
+                 "under '## Unreleased', or apply the 'no-notes' label if there is" \
+                 "genuinely nothing to tell users."
+            exit 1
+          fi
+          count=$(awk '/^## Unreleased[[:space:]]*$/{f=1;next} /^## /{f=0} f' CHANGELOG.md | grep -cv '^[[:space:]]*$' || true)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::CHANGELOG.md was touched but '## Unreleased' is empty at" \
+                 "this PR's head -- the notes belong there."
+            exit 1
+          fi
+          echo "CHANGELOG.md touched and '## Unreleased' has $count line(s) of notes."
