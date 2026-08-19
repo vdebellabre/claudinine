@@ -11,6 +11,8 @@ heading to the computed version in the release PR, and an empty
 
 ## Unreleased
 
+- **`/ship-release` skill.** One confirmed command drives a whole release: dispatch, watch the release PR go green, review the shipping diff in-session, merge on explicit confirmation, then verify the published release (immutable, tag on the merge commit, pin matching the shipped bytes). The in-session confirmation is the release gate — the skill removes tab-switching, not review.
+
 ## 1.2.1
 
 - **Releases now ship through a reviewed PR.** Dispatching a release opens a `release/v<version>` PR carrying the version stamps, changelog promotion, and marketplace pin, with both archives staged on a draft GitHub release; merging the PR publishes it (tag + undraft) after provenance and digest checks. CD no longer pushes to `main` — the publish App's ruleset bypass is retired and every commit on `main` now arrives by PR. Releases are immutable once published: assets and tag locked, with a sigstore release attestation attached. Supersedes the direct-push model described under 1.2.0.
