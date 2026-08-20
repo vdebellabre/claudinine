@@ -332,6 +332,13 @@ section remain reachable in principle and unreached in practice.
 
 Stated plainly, because they are real:
 
+- **Collapsed thinking leaves no digest trace.** When chain-collapse removes a
+  turn's interleaved assistant records, their `text` blocks are re-emitted
+  verbatim as `(note)` lines, but their `thinking` blocks are dropped from the
+  digest entirely — deliberately: they are bulky, ephemeral by design, and
+  cryptographically signed, so quoting one into a tool result would carry an
+  unverifiable signature payload. Like everything else, they survive in the
+  mirror and come back with `--full` or `restore-compaction-off`.
 - **Scrollback shows stubs.** The transcript also backs the UI's scrollback, so
   after a resume, compacted tool outputs appear as short digests rather than the
   original text. The full content is in the mirror, not lost, but it is one
