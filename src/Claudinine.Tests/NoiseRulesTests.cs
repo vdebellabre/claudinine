@@ -73,6 +73,28 @@ public sealed class NoiseRulesTests : IDisposable
         await Assert.That(text.Split("always use tabs").Length - 1).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task DupReminderInTailRecordDoesNotRefuseThePass()
+    {
+        // B1 (docs/source-analysis.md): a session killed mid-turn can end on a
+        // reminder-bearing user record. Replacing the tail makes TryRewrite
+        // refuse the WHOLE pass — the rule must skip the tail and converge later.
+        string reminder = "<system-reminder>always use tabs " + new string('r', 300) + "</system-reminder>";
+        var b = new TranscriptBuilder()
+            .UserPrompt("first ask\n" + reminder)
+            .AssistantText("noted")
+            .UserPrompt("second ask\n" + reminder)
+            .AssistantText("still noted")
+            .UserPrompt("killed mid-turn\n" + reminder); // file ends on the dup
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string text = AllText(path);
+        // The mid-file dup went (the pass was NOT refused); the tail copy stays.
+        await Assert.That(text.Split("always use tabs").Length - 1).IsEqualTo(2);
+    }
+
     // ---- document-dedup ----
 
     [Test]
@@ -94,6 +116,29 @@ public sealed class NoiseRulesTests : IDisposable
         await Assert.That(text.Split(new string('d', 1500)).Length - 1).IsEqualTo(1);
         await Assert.That(text).Contains("duplicate content removed");
         await Assert.That(text).Contains("first seen earlier: PROJECT RULES");
+    }
+
+    [Test]
+    public async Task DuplicateBlockInTailRecordDoesNotRefuseThePass()
+    {
+        // Same B1 tail guard as system-reminder-dedup: a ≥1KB dup landing
+        // exactly in the tail record must not poison the whole pass.
+        string doc = "PROJECT RULES\n" + new string('d', 1500);
+        var b = new TranscriptBuilder()
+            .UserPrompt("look")
+            .AssistantText(doc)
+            .UserPrompt("again")
+            .AssistantText(doc)
+            .UserPrompt("once more")
+            .AssistantText(doc); // file ends on the third copy
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string text = AllText(path);
+        // The second copy is stubbed (pass NOT refused); first and tail stay.
+        await Assert.That(text.Split(new string('d', 1500)).Length - 1).IsEqualTo(2);
+        await Assert.That(text).Contains("duplicate content removed");
     }
 
     // ---- tool-result-age ----

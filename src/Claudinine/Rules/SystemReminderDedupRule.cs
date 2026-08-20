@@ -22,6 +22,12 @@ internal sealed partial class SystemReminderDedupRule : ICompactionRule
 
         foreach (var rec in transcript.Records)
         {
+            // Tail guard, same invariant as everywhere else: the file's final
+            // record is never replaced (TryRewrite would refuse the WHOLE pass).
+            // A session killed mid-turn can end on a reminder-bearing user
+            // record; its dup dedups on a later pass once it is no longer the tail.
+            if (ReferenceEquals(rec, transcript.Records[^1]))
+                continue;
             if (rec.IsProtected())
                 continue;
 

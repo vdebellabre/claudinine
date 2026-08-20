@@ -62,6 +62,20 @@ public class BashReadParserTests
     }
 
     [Test]
+    public async Task HeadPlusCountIsFirstN()
+    {
+        // GNU semantics pin (docs/source-analysis.md B2, verified on coreutils
+        // 8.32): `head -n +N` prints the FIRST N lines, same as `head -n N` —
+        // the '+' is significant only for tail. Do NOT "fix" this by refusing
+        // '+' without re-testing against a real head. BSD/macOS acceptance of
+        // the form is unverified; if it errors there, the is_error superseder
+        // guard keeps the failed read from claiming coverage. Only the separated
+        // form parses — attached `-n+5` falls to the fail-closed unknown-flag path.
+        var t = await Assert.That(Parse("head -n +5 f.txt")).HasSingleItem();
+        await Assert.That(t).IsEqualTo(new ReadTarget("f.txt", 1, 5));
+    }
+
+    [Test]
     public async Task HeadWithoutCountRefused() => await Assert.That(Parse("head f.txt")).IsEmpty();
 
     [Test]

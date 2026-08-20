@@ -25,6 +25,12 @@ internal sealed class DocumentDedupRule : ICompactionRule
         var byLength = new Dictionary<int, List<(TranscriptRecord Rec, int BlockIndex, string Text)>>();
         foreach (var rec in transcript.Records)
         {
+            // Tail guard, same invariant as everywhere else: the file's final
+            // record is never replaced (TryRewrite would refuse the WHOLE pass).
+            // A tail occurrence is always last in file order — never the kept
+            // first — so excluding it here only defers its stub to a later pass.
+            if (ReferenceEquals(rec, transcript.Records[^1]))
+                continue;
             if (rec.IsProtected())
                 continue;
             int bi = -1;
