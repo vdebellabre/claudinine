@@ -97,11 +97,17 @@ public sealed class CarrierHeaderDedupTests : IDisposable
     }
 
     [Test]
-    public async Task EachBoundarySegmentKeepsItsOwnFullHeader()
+    [Arguments("compact_boundary")]
+    [Arguments("microcompact_boundary")]
+    public async Task EachBoundarySegmentKeepsItsOwnFullHeader(string subtype)
     {
         // The app's next load slices from the LAST compact_boundary, so a short
         // header's pointer at a pre-boundary block would aim at instructions the
         // model can no longer see. Each segment's first carrier stays full.
+        // microcompact_boundary is treated the same preemptively (O1,
+        // docs/source-analysis.md): whether the loader slices there too is
+        // unconfirmed, but resetting costs one extra full header, not a dead
+        // pointer.
         var b = new TranscriptBuilder().UserPrompt("first task");
         b.BashRead("sed -n '1,5p' a0.txt", out string firstId, Output + "a0");
         b.BashRead("sed -n '1,5p' a1.txt", out _, Output + "a1");
@@ -114,7 +120,7 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         b.RawLine(new JsonObject
         {
             ["type"] = "system",
-            ["subtype"] = "compact_boundary",
+            ["subtype"] = subtype,
             ["uuid"] = "99999999-0000-0000-0000-000000000042",
             ["parentUuid"] = null,
             ["sessionId"] = "test-session",

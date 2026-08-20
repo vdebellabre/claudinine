@@ -321,6 +321,10 @@ internal sealed class ChainCollapseRule : ICompactionRule
                 // self-corrections (~10% of span bytes; collapsing it too would
                 // raise savings but destroy the thread). The anchor-use record is
                 // kept whole, so its text stays in place, not duplicated here.
+                // Only TEXT blocks: thinking blocks are deliberately dropped with
+                // no digest trace (mirror keeps them). They are bulky, ephemeral
+                // by design, and cryptographically signed — quoting one into a
+                // tool result would carry an unverifiable signature payload.
                 if (!isAnchorUse)
                 {
                     foreach (var tb in RuleHelpers.BlocksOfType(node, "text"))
