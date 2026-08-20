@@ -1,86 +1,112 @@
 # Source analysis — bugs, oversights, performance
 
 Full-read review of `src/Claudinine` (~40 files), 2026-08-20, on `main` @ 2f2c8ae.
-Baseline: build clean (0 warnings, analyzers on), all 369 tests pass. Findings below
-were verified against the built binary (live repros) and the corpus where noted —
-each is reproducible from this document alone.
+Baseline: build clean (0 warnings, analyzers on), all 369 tests pass.
 
-Overall: an unusually disciplined codebase (fail-closed everywhere, mirror-first
-invariant, content-based idempotence, contract-tested string protocol). The findings
-are holes in that discipline, not an absence of it. Suggested order: fix B1 and B2
-(both small, both confirmed), then O1/O2 as a follow-up, then weigh P1/P2 against
-the perf bar.
+**Revision 2 (same day):** the original B1 trigger and B2 were challenged by a
+second review (Fable) and re-verified here. B1 is rescoped (mechanism real, trigger
+much narrower than claimed), B2 is refuted and replaced by a different, genuine gap
+(now B3). Both corrections are folded in below; the original claims are kept in
+edited form only where they still hold.
+
+Suggested order: B3 (soundness, small fix) → B1 tail guard (cheap, convention
+consistency) → B2 pin test → O1/O2 → P1/P2 against the perf bar.
 
 ---
 
-## Confirmed bugs
+## Confirmed findings
 
-### B1. Duplicate `<system-reminder>` in the just-submitted prompt aborts the whole pass
+### B1. Reminder dedup can touch the tail record — mechanism real, trigger narrow
 
 **Where:** `Rules/SystemReminderDedupRule.cs` (no tail guard) vs the refusal at
 `Transcript/TranscriptFile.cs:209` (`tail-touched`).
 
-**Mechanism.** The app appends the user prompt to the transcript BEFORE firing
-`UserPromptSubmit`, so the new prompt is the file's tail record. If that prompt
-carries a reminder identical to one seen earlier, `SystemReminderDedupRule`
-(keep-first dedup) sets a Replacement on the tail record. `TryComputeRewrite`
-then refuses `tail-touched` and discards EVERY rule's work for the pass.
+**Mechanism (confirmed, reproducible).** If the file's tail record carries a
+`<system-reminder>` identical to one seen earlier, keep-first dedup sets a
+Replacement on the tail → `TryComputeRewrite` refuses `tail-touched` → every
+rule's work for the pass is discarded. Reproduced live against the built binary:
 
-**Repro** (run against the built binary; any build works):
-
-```powershell
-# transcript: user prompt with reminder, assistant text, user prompt (tail) with same reminder
-# then:
-'{"hook_event_name":"UserPromptSubmit","transcript_path":"...","session_id":"..."}' | claudinine hook
-# with CLAUDININE_DEBUG=1:
-#   rewrite refused: tail-touched
-#   replaced=1 removed=0 rewriteOk=False
+```
+[claudinine debug] rewrite refused: tail-touched
+[claudinine debug] replaced=1 removed=0 rewriteOk=False
 ```
 
-**Amplifier.** `HookRunner.cs:88` touches `PassStamp` unconditionally — even when
-the rewrite was refused. The Stop repair pass within 120 s is therefore throttled
-away too. In a session where every prompt repeats a static reminder (todo nudges,
-plan-mode, empty-list nudges), per-prompt compaction can stall for whole stretches.
-No data loss (mirroring runs before rules), but the core benefit quietly stops.
+Move the dup one record earlier and it dedups fine. The amplifier is real too:
+`HookRunner.cs:88` touches `PassStamp` even on a refused rewrite (the `.pass`
+file appears after the refused run), so the Stop repair pass within 120 s is
+throttled away as well.
 
-**Prevalence.** 10 of 97 corpus main transcripts carry an identical >=40-char
-reminder block repeated across records; the tail-landing case is a subset of that,
-and the corpus predates heavy todo-reminder usage.
+**Trigger (corrected).** The original claim — "at UserPromptSubmit the new prompt
+is the tail record" — is FALSE. The prompt lands AFTER the hook: on a session's
+first prompt the transcript does not exist yet; on later prompts the tail at hook
+time is the previous turn's last record or a queue-operation dequeue (verified
+empirically on CLI 2.1.235 by the second review; the codebase itself knows this —
+`QueueHistoryCollapseRule.cs:21` guards exactly a queue-op tail "mid-flight at the
+boundary we run on", and HookRunner calls UserPromptSubmit the workhorse for "the
+turn that just ended"). The "per-prompt compaction stalls for whole stretches"
+scenario therefore cannot happen.
 
-**Fix.** Skip `records[^1]` in `SystemReminderDedupRule.Apply` — the same tail
-guard CarrierHeaderDedupRule, ForkHealRule and ChainCollapseRule already have.
-The duplicate is deduped on the next pass once it is no longer the tail.
+**Real exposure.** A file that ENDS on a reminder-bearing user record — a session
+killed mid-turn after the prompt was appended — refuses every repair pass
+(SessionStart on resume, SessionEnd, PreCompact) until something is appended after
+it. One refused pass per such boundary; compaction catches up once the turn
+continues. Narrow, but the refusal is pure waste there.
 
-**Same latent gap:** `Rules/DocumentDedupRule.cs` has no tail guard either —
-rare (needs a >=1 KB duplicate block landing exactly in the tail record) but the
-identical one-line fix applies. Note the existing tests never hit B1 because they
-always append an `AssistantText` after the dup-bearing prompt; a regression test
-needs the dup in the actual tail record.
+**Fix (still worth doing, reduced urgency).** Skip `records[^1]` in
+`SystemReminderDedupRule.Apply` — matches the four rules that already carry a
+tail guard; the duplicate is deduped on the next pass once it is no longer the
+tail. `Rules/DocumentDedupRule.cs` has the same latent gap (rare: needs a >=1 KB
+duplicate block landing exactly in the tail record); identical one-line fix.
 
-### B2. `BashReadParser` mis-parses `head -n +N` — unsound supersession
+**Test gap:** existing tests always append an `AssistantText` after the
+dup-bearing prompt, so the tail case is never exercised.
 
-**Where:** `Rules/BashReadParser.cs:138` — `int.TryParse(args[i + 1].TrimStart('+'), ...)`.
+### B2. `head -n +N` parsing — REFUTED, do not change
 
-**Mechanism.** `head -n +5 f` parses as "covers lines 1–5". But `head -n +N` is
-rejected by GNU/BSD head (the output is an error message), and where the form is
-meaningful (tail semantics) it means "from line N to EOF" — never "first N lines".
-The coverage claim is false in every interpretation.
+The original review claimed `head -n +N` is rejected by GNU/BSD head, making the
+parser's coverage claim at `Rules/BashReadParser.cs:138` (`TrimStart('+')`)
+unsound. That is wrong: GNU head 8.32 accepts `head -n +5` and prints the FIRST
+5 lines (re-verified here via Git Bash: `head (GNU coreutils) 8.32`, `head -n +3`
+of a 7-line input prints lines 1–3, exit 0) — exactly what `TrimStart('+')`
+assumes. The supersession is sound on GNU head. The original "end-to-end repro"
+only proved the rule trusts the parse, which was never in doubt.
 
-**Repro (confirmed end-to-end):** a turn running `sed -n '1,5p' /tmp/f.txt`
-followed, several reads later (outside the RecencyKeep window of 6), by
-`head -n +5 /tmp/f.txt` — the sed result is stubbed
-`[claudinine: file read superseded by a later read of /tmp/f.txt:1-5]` although
-the "superseding" command's output contains none of those lines. This is exactly
-the false-positive class the parser's fail-closed design exists to prevent; the
-content survives only in the mirror, behind a stub that claims it is redundant.
+Two things survive from this thread:
 
-**Fix.** Refuse `+N` outright (return null for the segment — the leading `+` is
-the tell). Consider also refusing negative counts (`head -n -5`, GNU "all but the
-last N"): currently harmless (a negative End never covers anything) but
-semantically wrong and one condition away from mattering.
+- **Pin test (do it).** `BashReadParserTests.cs` covers `head -n 50` and `tail`
+  refusal but nothing with a leading `+`. Add a case pinning `head -n +5 f` →
+  `(f, 1, 5)`, with a comment naming the GNU semantics, so nobody "fixes" this
+  again. Open question for the pin, UNVERIFIED here (no macOS host available):
+  whether BSD/macOS head accepts `+N` at all. If it rejects it, the command
+  errors at runtime on those hosts — which is exactly the failed-superseder case
+  B3 below must catch, and one more reason B3 matters.
+- **B3**, the genuine gap noticed in passing — see next.
 
-**Test gap:** `BashReadParserTests.cs` covers `head -n 50` and `tail` refusal,
-nothing with a leading `+`.
+### B3. Supersession ignores `is_error` — a failed later read retires a good earlier one
+
+**Where:** `Rules/ReadSupersessionRule.cs` (shared engine of `BashReadDedupRule`
+and `ReadToolDedupRule`).
+
+**Mechanism.** Pass 1 (lines 28–44) collects read targets from `tool_use` blocks
+ONLY — the rule never looks at the superseding read's result. A later read whose
+`tool_result` carries `is_error: true` still contributes coverage targets in pass
+2, so a FAILED read of file F can stub an earlier SUCCESSFUL read of F as
+"superseded" although the failed read returned no file content at all. The parser
+is fail-closed about the COMMAND text by design; this hole is orthogonal to it —
+the command parsed fine, the execution failed.
+
+**Trigger cases.** Any read of a file deleted or permission-lost between the two
+reads; a range read that errors at runtime for any other reason (a plausible one:
+`head -n +N` on hosts whose head rejects the form — unverified, see the B2 pin
+note). All parse as valid pure-read targets, all claim coverage, all retire
+earlier good reads. Same harm class the parser's fail-closed stance exists to
+prevent: content survives only in the mirror, behind a stub that claims a later
+read has it.
+
+**Fix sketch.** Build a `tool_use_id → is_error` map from `tool_result` blocks in
+the same scan, and exclude error reads from being SUPERSEDERS in pass 2 (they may
+still be stubbed when a valid later read covers them). One change covers both
+subclass rules.
 
 ---
 
@@ -180,3 +206,8 @@ only the load-time peak, not the steady-state footprint.
 - CRLF preservation, strict-UTF8 + BOM refusal at load.
 - Economics gate scoping (replacedBytes vs noteBytes vs headerDedupSaving) and
   its idempotence argument.
+- Hook-time transcript shape: at `UserPromptSubmit` the new prompt is NOT yet in
+  the file (verified empirically, CLI 2.1.235); the tail is the previous turn's
+  last record or a queue-operation dequeue. Do not re-derive the opposite.
+- `head -n +N` under GNU coreutils (8.32) prints the FIRST N lines; the parser's
+  `TrimStart('+')` models that correctly. Do not "fix" without re-testing.
