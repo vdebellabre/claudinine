@@ -52,7 +52,7 @@ internal sealed class TranscriptBuilder(bool sidechain = false)
     }
 
     public TranscriptBuilder ToolRead(string filePath, out string toolUseId, string longOutput,
-        int? offset = null, int? limit = null)
+        int? offset = null, int? limit = null, bool isError = false)
     {
         toolUseId = $"toolu_{_seq + 1:D4}";
         var input = new JsonObject { ["file_path"] = filePath };
@@ -69,15 +69,18 @@ internal sealed class TranscriptBuilder(bool sidechain = false)
                 ["input"] = input,
             }),
         });
+        var result = new JsonObject
+        {
+            ["type"] = "tool_result",
+            ["tool_use_id"] = toolUseId,
+            ["content"] = longOutput,
+        };
+        if (isError)
+            result["is_error"] = true;
         Add("user", new JsonObject
         {
             ["role"] = "user",
-            ["content"] = new JsonArray(new JsonObject
-            {
-                ["type"] = "tool_result",
-                ["tool_use_id"] = toolUseId,
-                ["content"] = longOutput,
-            }),
+            ["content"] = new JsonArray(result),
         });
         return this;
     }

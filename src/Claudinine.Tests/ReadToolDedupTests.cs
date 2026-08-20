@@ -108,6 +108,54 @@ public sealed class ReadToolDedupTests : IDisposable
     }
 
     [Test]
+    public async Task FailedLaterReadNeverSupersedes()
+    {
+        // B3 (docs/source-analysis.md): a later read whose result carries
+        // is_error returned no file content — it must not retire an earlier
+        // successful read of the same range.
+        var b = new TranscriptBuilder();
+        b.UserPrompt("look at foo");
+        b.ToolRead(@"C:\src\foo.cs", out string goodId, LongOutput, offset: 10, limit: 100);
+        for (int i = 0; i < 7; i++)
+        {
+            b.UserPrompt($"again ({i})"); // one read per turn: no chain-collapse here
+            b.ToolRead(@"C:\src\foo.cs", out _, LongOutput, offset: 10, limit: 100, isError: true);
+        }
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string[] lines = File.ReadAllLines(path);
+        await Assert.That(lines.Count(l => l.Contains("[claudinine: file read superseded"))).IsEqualTo(0);
+        await Assert.That(lines.Count(l => l.Contains(LongOutput))).IsEqualTo(8); // all payloads intact
+    }
+
+    [Test]
+    public async Task FailedReadCanStillBeSuperseded()
+    {
+        // The asymmetry of the B3 fix: errored reads cover nothing, but a valid
+        // later read of the range still retires them like any other read.
+        var b = new TranscriptBuilder();
+        b.UserPrompt("look at foo");
+        b.ToolRead(@"C:\src\foo.cs", out _, LongOutput, offset: 10, limit: 100, isError: true);
+        for (int i = 0; i < 7; i++)
+        {
+            b.UserPrompt($"again ({i})"); // one read per turn: no chain-collapse here
+            b.ToolRead(@"C:\src\foo.cs", out _, LongOutput, offset: 10, limit: 100);
+        }
+        b.AssistantText("done");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        string[] lines = File.ReadAllLines(path);
+        // 8 reads, recency keeps 6: the errored first read and the first valid
+        // read are both superseded by later valid reads.
+        await Assert.That(lines.Count(l => l.Contains("[claudinine: file read superseded"))).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task TruncatedDefaultReadDoesNotSupersedeDeepOffsetRead()
     {
         var b = new TranscriptBuilder().UserPrompt("look");
