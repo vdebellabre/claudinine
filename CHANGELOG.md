@@ -11,6 +11,7 @@ heading to the computed version in the release PR, and an empty
 
 ## Unreleased
 
+- **Failed reads no longer supersede good ones.** A later read whose result errored (file deleted between reads, permission lost, runtime failure) used to claim range coverage anyway and could retire an earlier successful read of the same file into a stub. Error results are now excluded as superseders — they can still be stubbed themselves when a valid later read covers them. Covers both `Read`-tool and bash-read dedup (shared engine).
 - **README.** Sharper opening claim, a `works with` / release / license / platforms badge row, and a new "What it looks like" section showing a real collapsed carrier so the mechanic is visible before the benefits are claimed.
 - **`/ship-release` skill.** One confirmed command drives a whole release: dispatch, watch the release PR go green, review the shipping diff in-session, merge on explicit confirmation, then verify the published release (immutable, tag on the merge commit, pin matching the shipped bytes). The in-session confirmation is the release gate — the skill removes tab-switching, not review.
 

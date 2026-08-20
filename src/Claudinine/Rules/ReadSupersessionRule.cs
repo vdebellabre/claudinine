@@ -4,8 +4,10 @@ namespace Claudinine.Rules;
 /// Shared engine for "a later read of the same range makes the earlier result
 /// redundant" rules. Subclasses only say which tool_use blocks are reads and what
 /// file ranges they provably return. The engine finds superseded reads (every
-/// target covered by some later read), keeps a recency window untouched, and stubs
-/// the matching tool_result payloads — original always mirrored first by the pipeline.
+/// target covered by some later NON-ERRORED read — a read whose result carries
+/// is_error returned no content and covers nothing), keeps a recency window
+/// untouched, and stubs the matching tool_result payloads — original always
+/// mirrored first by the pipeline.
 /// </summary>
 internal abstract class ReadSupersessionRule : ICompactionRule
 {
@@ -25,10 +27,20 @@ internal abstract class ReadSupersessionRule : ICompactionRule
 
     public void Apply(TranscriptFile transcript)
     {
-        // Pass 1: every eligible read, in file order.
+        // Pass 1: every eligible read, in file order — plus the ids of reads whose
+        // result errored. A failed read returned no file content, so it may be
+        // superseded but can never supersede. Error results are collected from
+        // protected records too: the tool_result can sit on a protected carrier
+        // while its tool_use record is not.
         var reads = new List<(string ToolUseId, List<ReadTarget> Targets)>();
+        var errored = new HashSet<string>(StringComparer.Ordinal);
         foreach (var rec in transcript.Records)
         {
+            foreach (var b in RuleHelpers.BlocksOfType(rec.CurrentView, "tool_result"))
+            {
+                if (b["is_error"].IsTrue && b["tool_use_id"].AsString() is string errId)
+                    errored.Add(errId);
+            }
             if (rec.IsProtected())
                 continue;
             foreach (var b in RuleHelpers.BlocksOfType(rec.CurrentView, "tool_use"))
@@ -64,6 +76,8 @@ internal abstract class ReadSupersessionRule : ICompactionRule
                 if (allCovered)
                     superseded[toolUseId] = targets;
             }
+            if (errored.Contains(toolUseId))
+                continue;
             foreach (var t in targets)
             {
                 if (!laterByPath.TryGetValue(t.Path, out var bucket))
