@@ -28,23 +28,36 @@ sweep of 2.1.238–2.1.260; no live Cowork session was run, so this rev is **[S]
   present as literals, so `RuleHelpers.PersistedOutputPath` and the mid-tier skip still match.
   Upstream also has a log-scrubber that rewrites `/(Full output saved to: ).*$/m` to `$1<persisted>`;
   it targets telemetry, not the transcript, and does not affect us.
-- **New: upstream does its own tool-result clearing.** Strings
+- **New: upstream does its own tool-result clearing — and it composes with us.** Strings
   `"[Old tool result content cleared]"` with thresholds `20000`/`2000` and a gating flag
-  `tengu_velvet_ibis`. Read of the implementation (`dVo`/`idn`/`xmt`): `dVo` collects tool_use ids
-  for a fixed tool set, `idn` keeps the last N and marks the rest, `xmt` returns
-  **`e.map(...)` — a new array**. This is in-memory API-request shaping, the microcompact path;
-  it does **not** rewrite the transcript on disk. So it cannot corrupt a pass and cannot race the
+  `tengu_velvet_ibis`. Read of the implementation (`dVo`/`idn`/`xmt`/`GKn`): this is the
+  keep-recent microcompact path. `dVo` collects tool_use ids for a fixed tool set, `idn` keeps the
+  last N and marks the rest, and `xmt` returns **`e.map(...)` — a new array**, so the *message list
+  handed to the API* is reshaped, not the transcript on disk. It cannot corrupt a pass or race the
   mirror.
-  - Its skip predicate `fVo` is `content === "[Old tool result content cleared]" ||
-    content.startsWith("<persisted-output>")`. It does **not** recognize
-  `Protocol.StubPrefix` (`[claudinine:`) or `ChainCollapseRule.CarrierPrefix`. Consequence is
-    benign and one-directional: upstream may count an already-stubbed result as a clearing
-    candidate and re-clear it in the request it builds. It loses nothing (our stub is already
-    minimal, the original is in the mirror, and retrieval reads the mirror not the request), but a
-    cleared result also stops naming its tool, so **the model can lose the "which tool produced
-    this" hint our stub deliberately carries.** Nothing to fix today; if upstream ever makes this
-    path write to disk, `fVo`-equivalent recognition of our two prefixes becomes a real
-    interop ask.
+  - **The important detail: it offloads before clearing.** `GKn` calls `await r.persist?.(content,
+    id)` per candidate and only falls back to the bare `[Old tool result content cleared]` string
+    when persist returns nothing (telemetry `"Persisted tool result to"` /
+    `"Failed to persist tool result to"` / `"Cannot persist tool results containing non-text
+    content"`). The writer targets `hge = "tool-results"` via
+    `ab() = <project>/<session-id>/tool-results` — the *same* sidecar dir we already read — and
+    emits the *same* stub we already parse:
+    `Output too large (${size}). Full output saved to: ${filepath}`.
+  - **So no work is needed.** `RuleHelpers.PersistedOutputPath` matches that stub unchanged;
+    `ToolResultAgeRule.Rewrite` skips a persisted-output block in the mid tier (the preview could
+    push the path line out of a kept half) and in the old tier carries the sidecar path explicitly
+    into the stub. Covered by `OldPersistedOutputStubKeepsSidecarPath` and
+    `MidAgePersistedOutputLeftIntact`; full suite 375/375 at CC 2.1.260.
+  - Residual, small and one-directional: `xmt`'s skip predicate `fVo` is
+    `content === "[Old tool result content cleared]" || content.startsWith("<persisted-output>")`,
+    which does **not** recognize `Protocol.StubPrefix` (`[claudinine:`) or
+    `ChainCollapseRule.CarrierPrefix`. Upstream may therefore re-clear a result we already stubbed.
+    It loses no data (our stub is already minimal, the original is in the mirror, retrieval reads
+    the mirror not the request), but a cleared result stops naming its tool, so the model can lose
+    the "which tool produced this" hint our stub carries. Not worth pre-empting: the clearing is
+    flag-gated, in-memory, and the blast radius is one hint on already-old results. Revisit only if
+    upstream makes this path write to disk, at which point `fVo`-equivalent recognition of our two
+    prefixes becomes a real interop ask.
 - Changelog sweep 2.1.238–2.1.260, items considered and cleared: 2.1.247 "subagent tool results are
   now released once they leave the recent display window" (in-memory, same as above);
   2.1.257 "resuming or messaging a subagent whose transcript had grown past 5 MB … failing with
