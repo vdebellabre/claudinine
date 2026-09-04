@@ -4,8 +4,74 @@ Status legend: **[V]** verified live in a Cowork cloud session (2026-08-15, Clau
 `entrypoint: remote_cowork`) · **[L]** verified live in a Cowork **local** session on Windows
 (2026-08-17, desktop app 1.30096.5.0, `local_<uuid>` layout, VM shell **down** throughout — two such
 sessions: the pre-fix measurement run behind Rev 4, and the v1.1.0 validation run behind Rev 6; plus
-a third on 2026-08-19, desktop app 1.32885.1 / CC 2.1.234, behind Rev 7) ·
+a third on 2026-08-19, desktop app 1.32885.1 / CC 2.1.234, behind Rev 7; plus a fourth on 2026-08-21,
+desktop app 1.34493.1 / CC 2.1.237, behind Rev 8) · **[S]** static read only, no live session
+(2026-09-04, desktop app 1.46388.2 / CC 2.1.260, behind Rev 9) ·
 **[?]** unknown, needs a test · **[!]** known gap, needs work · **[X]** closed.
+
+Rev 9 (2026-09-04): **CC 2.1.237 → 2.1.260, desktop 1.34493.1 → 1.46388.2; no compatibility
+break, one thing to watch.** Static read only — presence read over the new bundle plus a changelog
+sweep of 2.1.238–2.1.260; no live Cowork session was run, so this rev is **[S]**, not **[L]**.
+
+- Presence read (`claude.exe`, 217,771,680 B, single packed binary — the `.js` bundle is no longer
+  separately readable): every token we parse is still there. `preservedSegment` 16 (unchanged),
+  `isSidechain` 63, `sidechain` 8, `compactMetadata` 59, `toolUseResult` 138, `PreCompact` 37,
+  `SubagentStop` 55, `SessionEnd` 36, `UserPromptSubmit` 77, `compact_boundary` 48,
+  `isCompactSummary` 51, `persisted-output` 7, `CLAUDE_CODE_PROJECT_DIR_NAME` 6, `mirrorOf` 0
+  (expected). Count drift only; no format change anywhere in the changelog.
+- **`microcompact_boundary` is now 2, previously 0.** The subtype CarrierHeaderDedupRule and
+  `TranscriptRecord`/`TranscriptFile` handled *preemptively* (O1) is now real in the binary. The
+  preemptive handling was the right call and needs no change — this closes the "unconfirmed"
+  caveat in the comment at `Rules/CarrierHeaderDedupRule.cs:83`.
+- **The persisted-output stub format is byte-identical.** `"<persisted-output>"`,
+  `"</persisted-output>"`, `"Output too large ("` and `"). Full output saved to: "` all still
+  present as literals, so `RuleHelpers.PersistedOutputPath` and the mid-tier skip still match.
+  Upstream also has a log-scrubber that rewrites `/(Full output saved to: ).*$/m` to `$1<persisted>`;
+  it targets telemetry, not the transcript, and does not affect us.
+- **New: upstream does its own tool-result clearing.** Strings
+  `"[Old tool result content cleared]"` with thresholds `20000`/`2000` and a gating flag
+  `tengu_velvet_ibis`. Read of the implementation (`dVo`/`idn`/`xmt`): `dVo` collects tool_use ids
+  for a fixed tool set, `idn` keeps the last N and marks the rest, `xmt` returns
+  **`e.map(...)` — a new array**. This is in-memory API-request shaping, the microcompact path;
+  it does **not** rewrite the transcript on disk. So it cannot corrupt a pass and cannot race the
+  mirror.
+  - Its skip predicate `fVo` is `content === "[Old tool result content cleared]" ||
+    content.startsWith("<persisted-output>")`. It does **not** recognize
+  `Protocol.StubPrefix` (`[claudinine:`) or `ChainCollapseRule.CarrierPrefix`. Consequence is
+    benign and one-directional: upstream may count an already-stubbed result as a clearing
+    candidate and re-clear it in the request it builds. It loses nothing (our stub is already
+    minimal, the original is in the mirror, and retrieval reads the mirror not the request), but a
+    cleared result also stops naming its tool, so **the model can lose the "which tool produced
+    this" hint our stub deliberately carries.** Nothing to fix today; if upstream ever makes this
+    path write to disk, `fVo`-equivalent recognition of our two prefixes becomes a real
+    interop ask.
+- Changelog sweep 2.1.238–2.1.260, items considered and cleared: 2.1.247 "subagent tool results are
+  now released once they leave the recent display window" (in-memory, same as above);
+  2.1.257 "resuming or messaging a subagent whose transcript had grown past 5 MB … failing with
+  \"No transcript found\"" — a *ceiling* on subagent transcripts, and our pass shrinks them, so it
+  helps; 2.1.247/2.1.259 nested background subagent results now saved in the **parent subagent's**
+  transcript (more content in `subagents/agent-*.jsonl`, a layout we already sweep — no path
+  change); 2.1.260 `/rewind` stale file-read tracking, and 2.1.251 empty-thinking-block stalls,
+  both upstream-internal. No hook event was added, removed or repayloaded; `PreModelSwitch`/
+  `PostModelSwitch` (2.1.251) are new events we simply do not subscribe to.
+- Not verified, deliberately: no live local Cowork run, so the `atis-latch` record from Rev 8 is
+  still only observed-and-skipped, and the VM-dependent items (O18) stay open. The in-process
+  hosting change first seen at Rev 8 was not re-checked.
+
+Rev 8 (2026-08-21): **CC 2.1.237 / desktop 1.34493.1 measured; no compatibility break.** A fresh
+local session (the quick test after the 2026-08-21 desktop update) ran the plugin end to end —
+23.4 KB colocated mirror holding the full records, 2 ref files dumped to
+`local_<uuid>/outputs/.claudinine/refs/` (+ `.dumped` stamp), all sidecars written, `run.sh`/`run.cmd`
+regenerated. The live transcript was left uncompacted: the two archived outputs (177 B, 140 B) are
+below the digest pay threshold — the economics gate working, not a failure. Two findings: (1) the
+agent no longer runs as the standalone embedded CLI — no `claude-code\2.1.237\claude.exe` process
+existed while the session was live, the agent runs in-process in the Electron shell, and the
+transcript header pins `"version":"2.1.237"` / `"entrypoint":"local-agent"`; a shell-side hosting
+change, nothing we parse is affected; (2) new upstream record type `atis-latch`
+(`{"type":"atis-latch","atis":"","sessionId":…}`), skipped by the pass, absent from the
+2.1.235–237 changelog. Layout and slug derivation unchanged: 188-char mangled `outputs` slug,
+`CLAUDE_CODE_PROJECT_DIR_NAME` still absent from the session `.claude.json`. The session's own probe
+reported the workspace unavailable (VM down), so the VM-dependent items (O18) stay open.
 
 Rev 7 (2026-08-19): **CC 2.1.234 / desktop 1.32885.1 measured; no compatibility break.** A fresh
 local session ran the plugin end to end — 37.8 KB colocated mirror, 5 ref files dumped to

@@ -81,8 +81,10 @@ internal sealed class CarrierHeaderDedupRule : ICompactionRule
             // segment's first full carrier must re-teach retrieval (see class doc).
             // Both subtypes, same pairing as IsProtected/MarkPreserved: whether
             // microcompact slices the same way is unconfirmed (no real records in
-            // the corpus yet), but resetting is the conservative direction — the
-            // cost is one extra full header, not a dead pointer.
+            // the corpus yet — the subtype itself is present in the CC 2.1.260
+            // binary, but that says nothing about its slicing), and resetting is
+            // the conservative direction — the cost is one extra full header, not
+            // a dead pointer.
             if (rec.Type == "system"
                 && rec.View["subtype"].AsString() is "compact_boundary" or "microcompact_boundary")
             {

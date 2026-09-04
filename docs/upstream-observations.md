@@ -161,6 +161,68 @@ boundary stay suspect.
 
 **Baseline going forward: shell 1.32352.1, CLI 2.1.229 (upstream at 2.1.234).**
 
+### 2026-08-21 — shell 1.32885.1 → 1.34493.1, CLI 2.1.234 → 2.1.237
+
+Noticed because the desktop app updated itself. **No compatibility break.**
+
+- Shell: `app-1.34493.1` (mtime 2026-08-21 06:39), replacing `app-1.32885.1`
+  (2026-08-19, the Rev 7 baseline). `app-1.32352.1` also still on disk. Package
+  `AnthropicClaude-1.34493.1-full.nupkg`, 216,601,179 B (1.32352.1 was 231,072,344 B).
+  No online changelog for the shell exists; per the standing observation, a shell bump
+  has never moved anything we parse.
+- CLI: **moved** — `%APPDATA%\Claude\claude-code\` now holds only `2.1.237`
+  (mtime 2026-08-21 11:00); 2.1.234 was pruned by the update. No backup copy of the
+  old bundle was kept, so the differential read is unavailable and the changelog read
+  stands alone. New bundle: 330,167,456 B (2.1.229 was 307,186,848 B), sha256
+  `406167231b3636e55a01d0ce93567256c61e7973489e645883302f14808ae668`, matching
+  `.payload`. The standalone CLI on PATH still reports 2.1.235; the embedded one is
+  what Cowork runs.
+- Presence read over the new bundle (the old side being gone, presence is the
+  trustworthy signal): `preservedSegment` 16, `isSidechain` 81, `sidechain` 8,
+  `compactMetadata` 54 — identical to the 2.1.229 baseline; `toolUseResult` 100 → 106
+  and `PreCompact` 48 → 48, i.e. count drift with no format change in the changelog;
+  `SubagentStop` 76; `mirrorOf` absent as expected. `local-agent-mode-sessions` is 0
+  in the CLI, as expected — that path is shell-side, pointed at via `CLAUDE_CONFIG_DIR`.
+- Changelog 2.1.235 → 2.1.237 (online, from the 2026-08-19 measured baseline of
+  2.1.234): nothing touches our territory — no hook event or payload changes, no
+  transcript record-shape changes, no project-dir naming, no plugin packaging.
+  Closest items, both considered and cleared: 2.1.236's "SIGTERM in print/SDK mode no
+  longer records an interrupted turn or synthetic tool denials" removes a record shape
+  from transcripts rather than reshaping one, and 2.1.236's fix for housekeeping after
+  a session's cwd was deleted concerns Claude Code's own background tasks, not hooks.
+- Not re-verified, and deliberately so: the local Cowork session layout
+  (`local-agent-mode-sessions`) is shell-side and the app was not running, so the next
+  local Cowork run remains the empirical check for the shell bump.
+
+**Baseline going forward: shell 1.34493.1, CLI 2.1.237.**
+
+### 2026-08-21 (later) — local Cowork run on the new shell; the residual is measured and cleared
+
+The entry above left one residual: the local Cowork layout is shell-side, so "the next local Cowork
+run remains the empirical check for the shell bump". That run happened (run dir
+`local_01fc400e-…`, CC sessionId `82285e0d-…`). **No break.**
+
+- Layout unchanged: `<install>\<mid>\local_<uuid>\` with `.claude\projects\<slug>\`, the slug still
+  the mangled `outputs` path (188 chars, same derivation as 2026-08-19), and
+  `CLAUDE_CODE_PROJECT_DIR_NAME` still absent from the session `.claude.json` — first-party Cowork
+  still does not get the fixed slug. New shell-side litter in the run dir (`audit.jsonl`,
+  `.audit-key`, `uploads-tmp`); the April-era `shim-lib`/`shim-perm` dirs are gone.
+- **The agent no longer runs as the standalone embedded CLI.** While the session was live there was
+  no process from `%APPDATA%\Claude\claude-code\2.1.237\` — every `claude.exe` on the box was an
+  Electron shell process (main/GPU/renderer/utility), so the agent runs in-process in the shell.
+  The transcript header pins `"version":"2.1.237"`, `"entrypoint":"local-agent"`, so the in-process
+  agent is the new CLI; the 2.1.237 dir (staged 11:00) is not executed as a separate process.
+  Shell-side hosting change; nothing Claudinine parses is affected, and all hooks fired.
+- Claudinine ran end to end: `.lock` at SessionStart, `.pass`/`.end`/`.load`/`.seen` written,
+  colocated mirror 23,379 B holding the full records, `run.sh`/`run.cmd` regenerated, refs dump with
+  2 files + `.dumped` stamp. The live transcript was left uncompacted — correct economics: the two
+  archived outputs are 177 B and 140 B, below the digest pay threshold.
+- New upstream record type in the transcript: `{"type":"atis-latch","atis":"","sessionId":…}` —
+  bookkeeping, skipped by the pass (absent from `.load`), not mentioned in the 2.1.235–237
+  changelog. The parser tolerates it as any unknown type must.
+
+**Baseline going forward: shell 1.34493.1, CLI 2.1.237 (measured live in local Cowork).**
+
 ### Earlier, reconstructed from scattered notes
 
 These predate this file and were recorded prose-style elsewhere; kept here so the trail
