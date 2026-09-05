@@ -57,7 +57,11 @@ plugin sources.
    the marketplace entry** (pin or entry version — the marketplace refresh is
    a git pull); a signal that lives only inside the archive (its `plugin.json`
    version, or its digest with no pin) costs a download per check. v2 keeps
-   the signal in the entry.
+   the signal in the entry. *(Correction 2026-09-05: the digest is a signal for
+   the CLI only. The Desktop app's update detection compares the entry's
+   `version` with the installed version and reads nothing else for an archive
+   entry, so the entry must also declare `version` — `set-archive-source.ps1`
+   stamps it since 1.2.2. See `docs/upstream-observations.md`.)*
 2. **`sha256` is optional but enforced**: every download is verified against
    it, install refused on mismatch. It is Claude Code's *only* install-time
    integrity mechanism — no sigstore, attestation, or signed-tag verification

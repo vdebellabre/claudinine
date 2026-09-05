@@ -11,6 +11,13 @@ heading to the computed version in the release PR, and an empty
 
 ## Unreleased
 
+- Marketplace entry now declares `version` next to the archive pin. The Desktop
+  app detects plugin updates by comparing the entry's `version` with the
+  installed one and reads nothing else for an archive source, so without the
+  field it never showed an update (1.2.1 stayed "latest" after 1.2.2 shipped).
+  `set-archive-source.ps1` stamps it each release; the 1.2.2 entry is stamped
+  retroactively.
+
 ## 1.2.2
 
 - **Phantom session sidecars are swept.** Claude Desktop allocates sessions that fire the whole hook lifecycle and never write a transcript — two per app launch with cwd = home, plus short-lived ones per project open — each leaving a marker-only `<sid>/claudinine/` dir (`.load`, `.end`, `.lock`) that nothing ever reaped: the orphan-dir sweep ran only after the transcript-exists guard, and a project dir populated solely by such sessions never has a transcript-bearing session to run it. A `SessionStart` with no transcript now runs the sweep before exiting, so each app launch clears the previous launches' leftovers (24 h grace, as before). Deliberately not a SessionEnd self-delete: a real zero-prompt session has no transcript at SessionEnd either (the file is created by the first prompt), so that check cannot tell a phantom from a live session whose `.end` marker a Cowork re-hydration depends on.
