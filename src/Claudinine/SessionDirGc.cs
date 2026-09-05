@@ -9,6 +9,16 @@ namespace Claudinine;
 /// project directory; runs at SessionStart, off the per-prompt critical path.
 /// UI-deleted sessions keep their transcript on disk, so their dirs survive —
 /// same accepted caveat as mirror GC.
+///
+/// "Gone" includes "never existed": Claude Desktop allocates sessions that fire
+/// the full hook lifecycle and never write a transcript (two per app launch
+/// with cwd = home, plus ~1 s-lived ones per project open — measured
+/// 2026-09-05), each leaving a marker-only `&lt;sid&gt;/claudinine/` (.load, .end,
+/// .lock) behind. Those are orphans under the same rule, which is why the
+/// sweep also runs from a SessionStart that has no transcript: in a project
+/// dir populated only by such sessions, theirs is the only hook that ever
+/// fires. The grace window is what makes this safe — a real zero-prompt
+/// session looks identical until it has been quiet for a day.
 /// </summary>
 internal static class SessionDirGc
 {
