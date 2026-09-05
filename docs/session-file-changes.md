@@ -68,6 +68,19 @@ Two locations, both belonging to this plugin or the session it is compacting:
    The lock is the open file handle, not the file's existence: a crashed hook
    releases it via the OS, and the leftover `.lock` file is inert.
 
+   A `claudinine/` dir holding only `.load`, `.end` and `.lock`, with no
+   transcript beside the session dir, is a **phantom session**: Claude Desktop
+   allocates sessions that fire the whole hook lifecycle and never write a
+   transcript — two per app launch with cwd = home, plus ~1 s-lived ones per
+   project open (measured 2026-09-05). They are orphans under the session-dir
+   sweep's rule (no sibling transcript, nothing touched for 24 h) and the
+   sweep runs from any SessionStart in that project dir, transcript or not, so
+   each app launch clears the previous launches' leftovers. The sweep is
+   deliberately deferred rather than done at SessionEnd: a real zero-prompt
+   session also has no transcript at SessionEnd (the file is created by the
+   first prompt), so at that moment nothing distinguishes a phantom from a
+   live session whose `.end` marker a later re-hydration depends on.
+
 If the transcript carries retrieval stubs pointing at its own mirror and no
 mirror can be found anywhere, the plugin fails closed: no compaction, no mirror
 writes, nothing — the loss stays visible instead of being papered over.

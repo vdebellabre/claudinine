@@ -60,7 +60,30 @@ internal static class HookRunner
                             LoadStamp.Write(input.TranscriptPath);
 
                         if (!File.Exists(input.TranscriptPath))
+                        {
+                            // No transcript yet: nothing to compact, but the
+                            // start boundary still owes the project dir its
+                            // orphan sweep. Claude Desktop allocates sessions
+                            // that fire the whole lifecycle and never write a
+                            // transcript (two per app launch with cwd = home,
+                            // measured 2026-09-05; plus ~1 s-lived sessions per
+                            // project open), each leaving a marker-only
+                            // `<sid>/claudinine/` behind. Their SessionStart is
+                            // the ONLY hook that ever runs in a project dir no
+                            // real session lives in, so the sweep must not wait
+                            // for a transcript. Deliberately NOT a SessionEnd
+                            // self-delete: a real zero-prompt session also has
+                            // no transcript at SessionEnd (the file is created
+                            // by the first prompt — missing at UserPromptSubmit
+                            // too), so "no transcript" cannot tell a phantom
+                            // from a live session whose `.end` marker the next
+                            // re-hydration depends on. SessionDirGc's 24 h
+                            // grace is what makes the sweep safe: only dirs no
+                            // hook has touched for a day go.
+                            if (input.HookEventName == "SessionStart")
+                                SessionDirGc.Run(input.TranscriptPath, input.SessionId);
                             return 0;
+                        }
 
                         // A session frozen by `restore-compaction-off` keeps its
                         // mirror fresh but is never compacted — an explicit
