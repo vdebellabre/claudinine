@@ -223,6 +223,42 @@ run remains the empirical check for the shell bump". That run happened (run dir
 
 **Baseline going forward: shell 1.34493.1, CLI 2.1.237 (measured live in local Cowork).**
 
+### 2026-09-05 — shell 1.46388.4, CLI 2.1.260: Desktop update detection reads only the entry `version`
+
+Noticed because "Check for updates" on the claudinine marketplace reported success yet the
+plugin card kept 1.2.1 as current after v1.2.2 was published. **Our gap, not a Desktop bug;
+fixed by stamping `version` into the marketplace entry.**
+
+- The marketplace menu's "Check for updates" calls the app's `refreshMarketplace` bridge,
+  which runs `claude plugin marketplace update <name>` and nothing else. The clone under
+  `~/.claude/plugins/marketplaces/claudinine` was at the 1.2.2 release commit afterwards,
+  so the toast was honest. Installed plugins are not touched by that action; there is a
+  separate `updatePlugin` bridge (`claude plugin update`) the UI offers only when it has
+  detected a newer version.
+- Detection (app.asar, `[CustomPlugins]` listing): for each installed plugin the app
+  resolves a directory inside the marketplace clone and reads a manifest there. A string
+  source resolves to that path; an object source with no installed-path translation falls
+  back to `<clone>/<plugin-name>`, which does not exist for us. The manifest read then
+  returns null and the code falls back to the marketplace entry itself:
+  `availableVersion = entry.version !== installed.version ? entry.version : undefined`.
+  Our entry carried only `source.url` and `source.sha256`, so `availableVersion` was
+  never set. The clone's root `.claude-plugin/plugin.json` did say 1.2.2, but nothing
+  points at it for an archive entry.
+- The CLI path differs: `plugin update` compares the entry `version`, or failing that the
+  first 12 hex chars of `source.sha256`, with the installed version, so the pin alone does
+  trigger a download there. Only the Desktop depends on the entry `version`.
+- The Desktop also merges a *remote*, account-scoped plugin list (`[PluginsFetcher]
+  fetchAccountScopedRemotePlugins`, hourly) and logs "exists in both remote and local.
+  Using remote." for claudinine — a second source of truth for the card once the
+  claude.ai registration is live; not investigated further.
+- Startup plugin auto-update (`Plugin autoupdate: checking installed plugins` and its
+  "skipped (auto-updater disabled)" sibling) was not observed running under the Desktop:
+  `installed_plugins.json` still showed the 1.2.1 install from 2026-08-19 an hour after
+  1.2.2 published. Whether the Desktop disables the CLI auto-updater is an open question.
+
+**Baseline going forward: shell 1.46388.4, CLI 2.1.260. Marketplace entries must declare
+`version` (stamped by `eng/set-archive-source.ps1`).**
+
 ### Earlier, reconstructed from scattered notes
 
 These predate this file and were recorded prose-style elsewhere; kept here so the trail
