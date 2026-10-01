@@ -36,6 +36,9 @@ public sealed class BoundaryPreservedUuidTests : IDisposable
     /// deliberately severed), logicalParentUuid pointing at the preserved tail.
     /// </summary>
     private static string BoundaryLine(string logicalParent, params string[] preservedUuids) =>
+        BoundaryLineWith("allUuids", logicalParent, preservedUuids);
+
+    private static string BoundaryLineWith(string list, string logicalParent, params string[] preservedUuids) =>
         new JsonObject
         {
             ["parentUuid"] = null,
@@ -52,7 +55,7 @@ public sealed class BoundaryPreservedUuidTests : IDisposable
                 ["postTokens"] = 18044,
                 ["preservedMessages"] = new JsonObject
                 {
-                    ["allUuids"] = new JsonArray([.. preservedUuids.Select(u => (JsonNode)u)]),
+                    [list] = new JsonArray([.. preservedUuids.Select(u => (JsonNode)u)]),
                 },
             },
         }.ToJsonString();
@@ -65,6 +68,29 @@ public sealed class BoundaryPreservedUuidTests : IDisposable
         string preserved = b.LastUuid!;
         b.AssistantText("carry on");
         b.RawLine(BoundaryLine(preserved, preserved));
+        b.AssistantText("after the boundary");
+        string path = b.WriteTo(_dir);
+
+        Compactor.Run(path);
+
+        var records = Load(path);
+        await Assert.That(records.Any(r =>
+            r["uuid"]?.GetValue<string>() == preserved)).IsTrue();
+    }
+
+    /// <summary>
+    /// A boundary carrying only <c>uuids</c> (the wire converter makes
+    /// <c>all_uuids</c> optional) still protects what it names — <c>uuids</c> is
+    /// the list the app's own on-disk GC requires present (CLI 2.1.284).
+    /// </summary>
+    [Test]
+    public async Task BareStopHookSummary_NamedOnlyByUuids_IsKept()
+    {
+        var b = new TranscriptBuilder().UserPrompt("do the thing");
+        b.StopHookSummary();
+        string preserved = b.LastUuid!;
+        b.AssistantText("carry on");
+        b.RawLine(BoundaryLineWith("uuids", preserved, preserved));
         b.AssistantText("after the boundary");
         string path = b.WriteTo(_dir);
 
