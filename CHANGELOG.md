@@ -26,7 +26,9 @@ heading to the computed version in the release PR, and an empty
 - README: install from the Claudinine marketplace
   (`claude plugin marketplace add vdebellabre/claudinine`, then
   `claude plugin install claudinine@claudinine`) and how to update.
-  Claudinine is not listed in Anthropic's plugin directory.
+  Claudinine is not listed in Anthropic's plugin directory. The README is also
+  split: the front page keeps the pitch and the install steps, and the details
+  move to `docs/how-it-works.md` and `docs/cozempic-comparison.md`.
 
 ## 1.2.2
 

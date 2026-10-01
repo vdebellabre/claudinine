@@ -14,30 +14,7 @@ Claudinine trims the bulk as you go. It keeps a short summary of what happened a
 - **Your long sessions stay usable.** Less filler in the transcript means more room for the actual conversation before Claude has to compact.
 - **Resuming is faster and cheaper.** Reloading a session no longer means reloading megabytes of old tool output.
 - **You do not have to think about it.** There is no dashboard, no report, no prompt asking you to approve anything. Install it and forget it.
-- **Nothing is thrown away.** Full outputs are kept in a side file, and you can restore them (see [Getting your details back](#getting-your-details-back)).
-
-## What it looks like
-
-A turn that ran three tool calls is written to the transcript as three full records — each carrying the complete output. Claudinine replaces them with one:
-
-```text
-[claudinine: this turn originally ran 3 separate tool calls. Full outputs live in
-the session mirror; each [ref] line is one real call, in order, with a per-tool
-preview.
-
-RETRIEVAL — use the targeted form:
-  <retrieve> --ref REF --grep PATTERN   # matching lines (PREFERRED)
-  <retrieve> --ref REF --full           # entire output (last resort)
-  REF = the 8-hex id in [brackets]: [ab12cd34] -> --ref ab12cd34]
-
-[6765eec5] Bash(ls -la && wc -l README.md) -> 1305b :: 2 sections | README: 133
-[a4af6a0b] Bash(cat README.md) -> 16409b :: # Claudinine / **Claudinine silently...
-[db46dc21] Bash(cat .claude-plugin/*.json) -> 1869b :: 4 sections | manifest: {
-```
-
-The three outputs above totalled about 19 KB. What stays in the transcript is a few hundred bytes: one line per call, in order, each with its size, a preview, and an id. The full text of every one of them is in the side file, and the header tells Claude exactly how to fetch back any line it turns out to need.
-
-(`<retrieve>` above stands in for the real retrieval command, which carries an absolute path to your install — see [Getting your details back](#getting-your-details-back). Sizes and previews are shortened here to fit the page.)
+- **Nothing is thrown away.** Full outputs are kept in a side file, and you can restore them (see [Getting your details back](docs/how-it-works.md#getting-your-details-back)).
 
 ## Install
 
@@ -69,109 +46,10 @@ Each marketplace entry pins the release archive by sha256, so an install only ev
 
 **Cowork (claude.ai).** Plugin marketplaces are disabled there, so `/plugin install` is not the route. Download `claudinine-<version>.plugin` from the [latest release](https://github.com/vdebellabre/claudinine/releases/latest) and import it in claude.ai's plugin settings. It installs account-wide and registers in your Cowork sessions automatically — including sessions already running. The same artifact covers both Cowork modes: it carries binaries for all six platforms, because cloud sessions run hooks inside a Linux container while local sessions run them on your own desktop — Windows or macOS included.
 
-The two artifacts differ only in packaging: the `.plugin` file is what claude.ai's uploader accepts, while the CLI zip additionally puts `claudinine` on your PATH for the [retrieval commands](#getting-your-details-back).
+The two artifacts differ only in packaging: the `.plugin` file is what claude.ai's uploader accepts, while the CLI zip additionally puts `claudinine` on your PATH for the [retrieval commands](docs/how-it-works.md#getting-your-details-back).
 
-## How it works
+## Learn more
 
-Whenever it is invoked, Claudinine runs one pass over the whole session transcript: copy full content to the sidecar, then compact. This pass is idempotent — re-running it has no effect — so the same pass is safe to run at every hook point. There are six active hooks:
-
-- On a new prompt — to compact the previous turn.
-- On turn end — for autonomous stretches (scheduled tasks, loops, workflow runs) that chain many turns with no prompt between them. Throttled to at most one pass per two minutes, so it stays quiet in interactive sessions where the per-prompt pass already runs.
-- On subagent completion — to compact that agent's transcript (`<session>/subagents/agent-*.jsonl`) the moment it finishes, each with its own sidecar. Subagent transcripts compact best of all file types.
-- On session exit — to compact the final turn, leaving the file clean at rest. Subagent transcripts are swept here too, as repair for any missed completion events.
-- On session start — acts as repair for crash leftovers, plus garbage collection of sidecars and orphaned session directories.
-- Before Claude's compaction — same reasons as session start.
-
-This behavior is what allows Claudinine to be run through hooks only, without any persistent process. This is also why performance is important.
-
-Every rewrite is validated before an atomic swap, and any failed check leaves the original untouched. See [docs/session-file-changes.md](docs/session-file-changes.md) for exactly what is modified, why, and what the safety guarantees are.
-
-Compaction cannot touch the live in-memory context of a running session — Claude Code loads the transcript once and works from memory. The benefit therefore arrives every time you resume a session.
-
-On Cowork that moment comes more often than in the CLI, not less: cloud sessions are torn down when idle and re-hydrated from the transcript on the next activity, so one session pays the reload repeatedly within its life — each time from the compacted file. What shrinks there is the long tail: when the cloud container is eventually reclaimed, the transcript and its side file go together, so the archive does not outlive the session the way a local one does.
-
-Cowork also leans harder on two of the hooks above. Sessions there often run long autonomous stretches — scheduled tasks, workflows, agent fan-outs — with no prompt in between, which is exactly what the turn-end hook covers: on one measured cloud session a single autonomous turn went from 285 KB to 36 KB, a stretch that would not have compacted at all without it. And because those stretches spawn many subagents, compacting each agent transcript the moment it finishes matters more than in the CLI: across one session's five agent files, 802 KB of tool output became 142 KB.
-
-One small native binary per platform, no runtime, published for x64/arm64 on Windows, macOS and Linux — including Linux under WSL, which is an ordinary marketplace install inside the distro. That is what lets a single install follow you from the CLI to a cloud container to your own desktop.
-
-## Getting your details back
-
-You can undo compaction for a session entirely, while it is closed. The transcript is rebuilt verbatim from the mirror, and Claudinine can leave that session alone from then on:
-
-```bash
-claudinine restore-compaction-off <session-id>
-```
-
-Use `restore-compaction-on` instead to restore then let compaction resume.
-
-That form assumes a CLI/marketplace install, which keeps `claudinine` on PATH. A claude.ai-hosted install (Cowork) has no PATH entry — there, use the launcher Claudinine keeps next to each session's mirror:
-
-```bash
-sh ~/.claude/projects/<project>/<session-id>/claudinine/run.sh restore-compaction-off <session-id>
-```
-
-Claudinine writes that same launcher form into every stub it leaves in the transcript, so Claude can pull an individual output back without you doing anything. Cowork's local mode ("On your computer") is the one place that works differently, because those sessions usually have no shell at all: there Claudinine keeps a plain-text copy of every archived output inside the session's own workspace (`outputs/.claudinine/refs/`), and stubs point Claude's file tools at it instead of quoting a command — retrieval works with nothing to run. To restore such a session yourself, use the launcher's Windows twin from a regular terminal — the session store lives under your profile:
-
-```bash
-%APPDATA%\Claude\local-agent-mode-sessions\<install>\<device>\local_<id>\.claude\projects\<project>\<session-id>\claudinine\run.cmd restore-compaction-off <session-id>
-```
-
-(On a macOS desktop, the same colocated directory carries `run.sh`.)
-
-## Diagnostics
-
-Claudinine is deliberately silent: any anomaly makes a pass skip itself rather than risk the transcript, with no output. If you suspect compaction is not happening and want to see why, create an empty file at `~/.claude/claudinine-debug.log` — every subsequent pass appends its diagnostics there (skips, failures, per-pass stats), from every hook, with timestamps and process ids. Delete the file to go silent again; it stops growing at 10 MB. Setting the `CLAUDININE_DEBUG` environment variable still prints the same diagnostics to stderr for interactive runs.
-
-## Comparison with Cozempic
-
-[Cozempic](https://github.com/Ruya-AI/cozempic) solves a closely related problem, and Claudinine started as an attempt to get the same benefit with far less machinery. If you are choosing between them, the first difference to mention is functional: Cozempic provides more than compaction — live token monitoring, agent-team protection and interactive diagnosis — if you want those features, Cozempic is the right pick. Claudinine focuses only on compaction, but has some serious advantages:
-
-- **No dependencies, no runtime to install.** Claudinine is a single native binary, runnable as is. Cozempic needs Python + `uv` or `pip` + the `fastmcp` and `cozempic` packages.
-- **No persistent processes.** Claudinine runs on hook invocations and exits; nothing stays resident. Cozempic spawns a background guard daemon per session and keeps an MCP server running alongside it.
-- **Cross-platform without a shell.** Claudinine's hooks invoke a binary directly. Cozempic's hooks are long POSIX shell one-liners using `flock`, `stat`, and `/tmp` paths.
-- **Lightning fast.** Hooks run on your prompts, so they have to be invisible: the per-prompt pass takes a median of **18 ms**, process startup included — under a tenth of a percent of the hook budget, and never more than 53 ms across the whole corpus. A full compaction of an untouched transcript, which happens once when Claudinine first meets a session, is a median of **82 ms**. Cozempic's hooks, see previous point, cannot fit this budget and are one of the reasons why it must rely on manual commands and external processes.
-- **No MCP server, no context cost of its own.** MCP tool definitions occupy context in every session. Claudinine registers none.
-
-The compaction itself also has major differences, and this is where most of the practical difference shows up:
-
-- **Tool calls chain-collapse.** Claudinine processes turns that ran many tool calls into a digest record — each call listed with a short preview, full outputs moved aside. Cozempic prunes record by record (thinking blocks, stale reads, mega-block trim, envelope strip). Collapsing whole tool chains has a significant impact on compaction, especially for large sessions.
-- **Redundancy is proven, not guessed.** Beyond pruning by age and size, Claudinine removes what a later record demonstrably makes obsolete. A file read twice keeps the newer result; an `edited_text_file` notice — which carries the entire file, not a diff, and is the fattest record type in a transcript — goes once a later notice, a full read or a write supersedes it; repeated task-list snapshots keep only the last, which alone removes 97% of that type's bytes. These are correctness wins as much as size wins: a stale full-file snapshot presented as current truth actively misleads the model.
-- **A staleness clock that works on agentic sessions.** Cozempic ages records in user turns only, which barely moves when Claude works autonomously — on one measured session, 952 records and 207 tool results produced just 12 prompts, so nothing ever aged. Claudinine ages on either clock, user turns or tool results since, so long autonomous stretches decay normally.
-- **Claudinine compacts its own overhead.** Chain-collapse leaves residue: one tool call per collapsed turn must survive, dragging its full input along (81% of all leftover call input), and every digest repeats the same ~1 KB of retrieval instructions (7% of all remaining content). Both are compacted in turn — the input becomes a preview, and only the first digest in a file teaches retrieval.
-- **It runs continuously, not as a treatment.** Claudinine compacts each turn as it completes, so the file is already lean at rest. Cozempic's pruning is an operation you invoke — diagnose, dry-run, confirm, apply, then resume the session.
-
-Underlying all of it: **removed content is kept, not deleted.** Every full output is written to the session's sidecar before anything is trimmed, so a stub is a pointer rather than a loss. Each one names the exact command that returns the original, so you can pull back a single output and keep every other saving — and a stripped screenshot or PDF is decoded back to a file Claude can read, re-entering the conversation as fresh vision input instead of being lost. Cozempic's safety net is a timestamped `.bak` copy of the whole file, which undoes the last treatment but cannot return one output while keeping the savings.
-
-That principle is why another rule exists: when a conversation is forked to a new session, the copied digests still point at the parent session, whose sidecar will eventually be garbage-collected out from under them. Claudinine detects the fork, verifies the parent is genuine rather than merely quoted, merges its sidecar, and repoints the references — so everything keeps working as intended, transparently.
-
-### Measured side by side
-
-Both tools ran over the same corpus of **174 real sessions** (189.2 MB, 97 main transcripts and 77 subagent transcripts), each on its own copy so neither saw the other's output. Cozempic ran its strongest prescription (`treat -rx aggressive`). The corpus and harness are in the repo (`eng/bench/`), so the numbers below are reproducible.
-
-**What "tokens" means here matters**, because it is where a naive measurement goes wrong. The count is BPE over only what Claude actually reads back: `message.content` blocks, and only from the last compaction boundary onward. Two large parts of a transcript are *not* counted, because the model never sees them:
-
-- **`toolUseResult`** — a top-level field duplicating each tool's output alongside the copy in `message.content`. It feeds the transcript UI. It was **half the payload** on tool-heavy sessions.
-- **Everything before a compaction boundary** — once Claude compacts, the loader reads only from that boundary on. On the corpus sessions that had compacted, that was **70% of the files**.
-
-Deleting either shrinks the file on disk without saving Claude a single token. Counting them credits a tool for work that has no effect, so both were excluded for both tools. Byte columns still cover the whole file, which is the honest measure for disk.
-
-| | baseline | Claudinine | Cozempic |
-|---|---|---|---|
-| **All sessions** (n=174) | 189.2 MB / 13.44 M tok | 42.7 MB (77.4%) / **4.20 M tok (68.8%)** | 83.8 MB (55.7%) / 9.89 M tok (26.4%) |
-| **Main transcripts** (n=97) | 167.9 MB / 10.34 M tok | 38.7 MB (76.9%) / **3.63 M tok (64.9%)** | 71.1 MB (57.7%) / 7.88 M tok (23.8%) |
-| **Subagent transcripts** (n=77) | 21.2 MB / 3.10 M tok | 4.0 MB (81.0%) / **0.57 M tok (81.6%)** | 12.7 MB (40.1%) / 2.01 M tok (35.1%) |
-
-Those totals are dominated by whichever sessions happen to be largest — the ten biggest are about 28% of all corpus tokens. For what a single session should expect, the per-session view is the useful one, so here it is by size, with every file kept:
-
-| session size | n | Claudinine | Cozempic |
-|---|---|---|---|
-| Under 30k tokens | 52 | **65.6%** | 20.5% |
-| 30k – 100k | 86 | **77.7%** | 32.6% |
-| 100k – 400k | 33 | **62.8%** | 22.9% |
-| Over 400k | 3 | **67.0%** | 24.2% |
-
-The median session is reduced by **74.2%** of its tokens with Claudinine and 23.8% with Cozempic. Claudinine saves more on **167 of 174** sessions, with 5 ties and 2 sessions where Cozempic saves more. It is also about 10× faster: compacting all 174 sessions from scratch takes ~31s against Cozempic's ~300s, which is what a native binary buys over a Python process spawned per session.
-
-One of the two sessions Cozempic wins is worth detailing: it contains a single 900 KB block — a bundled skill the session loaded — which Cozempic truncates. Claudinine leaves skill text untouched by choice, since it's meant to impact Claude's behavior during a session, and should arguably persist across session reloads.
-
-Subagent transcripts compact especially well, since a subagent run is one long uninterrupted chain of tool calls — exactly the shape chain-collapse is built for. Claudinine finds those files itself from the session directory; Cozempic has no session-directory concept, so it was pointed at each one explicitly.
+- [How it works](docs/how-it-works.md): what a compacted turn looks like, when each hook runs, how to get full outputs back, and how to turn on diagnostics.
+- [Comparison with Cozempic](docs/cozempic-comparison.md): the design differences, and a side-by-side benchmark on 174 real sessions.
+- [What Claudinine changes in a session file](docs/session-file-changes.md): every modification, why it is made, and the safety guarantees.
