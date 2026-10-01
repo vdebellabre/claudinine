@@ -60,7 +60,7 @@ it does resolve every transcript key we depend on, which beats reading release n
 python -c "
 import re
 d=open('claude.exe','rb').read()
-for k in [b'preservedSegment', b'isSidechain', b'toolUseResult', b'SubagentStop']:
+for k in [b'preservedSegment', b'preservedMessages', b'isSidechain', b'toolUseResult', b'SubagentStop']:
     print(k.decode(), len(re.findall(re.escape(k), d)))
 "
 ```
@@ -258,6 +258,139 @@ fixed by stamping `version` into the marketplace entry.**
 
 **Baseline going forward: shell 1.46388.4, CLI 2.1.260. Marketplace entries must declare
 `version` (stamped by `eng/set-archive-source.ps1`).**
+
+### 2026-10-01 — shell 1.46388.4 → 2.16120.0, CLI 2.1.260 → 2.1.284
+
+Asked for directly ("what changed since last time"). **No compatibility break.** Two
+upstream mechanisms now overlap with ours (an on-disk transcript GC and transcript
+relocation) and one budget is tighter than our manifest says (SessionEnd gets 1.5 s, not 30 s).
+None of them needs a code change today.
+
+- Shell: `app-2.16120.0` (mtime 2026-09-29 18:27); `app-2.9939.2` and `app-2.9939.4` are
+  also on disk and 1.46388.4 was pruned. The shell's major version went from 1 to 2.
+  Presence read over `app.asar` is stable between 2.9939.4 and 2.16120.0
+  (`availableVersion` 9, `refreshMarketplace` 7, `updatePlugin` 10,
+  `local-agent-mode-sessions` 5, `fetchAccountScopedRemotePlugins` 7). Update detection
+  still sets `availableVersion` only when the marketplace entry's `version` differs from
+  the installed one, so the 2026-09-05 fix (#27) still holds.
+- CLI: `2.1.284` is the one running (confirmed by process path) and `2.1.281` is also on
+  disk. 2.1.260 was pruned, so there is no diff against the baseline, but 281 ↔ 284 is
+  diffable. New bundle: 246,481,056 B, sha256 `3b82b00ee9986fa2c857674dd626cd8f05716d12b83f3003ff0346d558a07408`
+  (matches `.payload`), built 2026-09-27, git `16cbb4dd`. The standalone `claude` on PATH
+  is a stale 2.1.252. Upstream is at **2.1.286**. 2.1.262, 2.1.264 and 2.1.279 were never
+  published.
+- Presence read (281 → 284; Rev 9 / 2.1.260 in brackets): `preservedSegment` 17 → 17
+  [16], `microcompact_boundary` 4 → 4 [2], `compactMetadata` 66 → 66 [59],
+  `toolUseResult` 154 → 158 [138], `isSidechain` 76 → 76 [63], `persisted-output` 7 → 8
+  [7], `Output too large (` and `). Full output saved to: ` 4 → 4,
+  `[Old tool result content cleared]` 4 → 4, `CLAUDE_CODE_PROJECT_DIR_NAME` 5 → 5,
+  `mirrorOf` 0. Every key we parse is still present. The `preservedSegment` and
+  `microcompact_boundary` deltas both led to the findings below. **Add
+  `preservedMessages` to the key list from now on.** We depend on it
+  (`TranscriptFile.MarkPreserved`), yet it was never tracked here.
+- **Upstream now has its own on-disk transcript GC (`performCompactTranscript`), and it
+  composes with ours.**
+  - When it fires: once the file is ≥ 5 MiB, after every 20 MiB appended. The interval
+    doubles, up to 160 MiB, when a run saves less than 10%.
+  - What it does: rewrites `<sid>.jsonl` through a `.compact.tmp.*` file plus rename. It
+    keeps every line from the last compact boundary on, plus:
+    - the boundary's preserved records: `preservedMessages.uuids`, or failing that a
+      `preservedSegment` tail → head parent walk;
+    - their `file-history-*` records;
+    - any pre-boundary parent of a post-boundary record;
+    - the latest copy of each `last-wins` metadata record.
+  - **It is off by default.** It requires `CLAUDE_CODE_TRANSCRIPT_LOCAL_GC` or the flag
+    `tengu_transcript_local_gc` (default `false`), and it is only switched on along the
+    `sdkUrl` resume path, i.e. managed cloud workers. Local Code and Desktop sessions
+    don't run it. It was never observed running.
+  - Why it is safe with us:
+    - It drops only pre-boundary history, which the API-visible ruler already treats as
+      phantom payload. The mirror keeps the originals.
+    - It snapshots three 4 KiB windows and checks inode and size before and after the
+      write, and aborts with `source_changed` on any difference. So our atomic swap
+      (new inode) makes it back off.
+    - If it wins a race, our next pass just reads the shorter file.
+    - It aborts with `preserved_uuid_missing` when a `preservedMessages.uuids` entry is
+      missing, and with `preserved_walk_broken` when the segment walk can't reach
+      `headUuid`. Both abort without writing.
+  - Residual, hardening only: `MarkPreserved` protects `allUuids`. Every writer in the
+    bundle emits `uuids ⊆ allUuids`, but the snake_case wire converter makes
+    `all_uuids` optional. A boundary arriving without it leaves `uuids` unprotected. The
+    upstream GC would then abort rather than corrupt anything, but protecting the union
+    of both lists is a two-line change.
+- **Our SessionEnd hook gets 1.5 s on every path, and our `timeout: 30` does not change
+  it.**
+  - What 2.1.268 changed: SessionEnd hooks with no `timeout` of their own get 1.5 s
+    (`CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS` overrides).
+  - All three callers pass `signal: AbortSignal.timeout(Bme())`: graceful shutdown,
+    `/clear`, and the in-session resume switch. Shutdown also arms its failsafe at
+    `max(5000, Bme() + 5000)`.
+  - `Bme()` (exported as `getSessionEndHookTimeoutMs`) is
+    `max(1500, min(largest declared SessionEnd timeout, 60000))`. The largest timeout is
+    taken over **settings-file hooks and main-thread agent hooks only**. The snapshot it
+    reads (`initialHooksConfig`) is built from policy and merged settings, so plugin
+    hooks are not in it.
+  - So with no settings-file SessionEnd hook (this machine has none) and the env var
+    unset (the Desktop only registers it), the signal aborts our hook at 1.5 s, whatever
+    `hooks.json` declares.
+  - **Not biting in practice.** A SessionEnd writes `.end` before the lock and `.load`
+    after the pass and `CompactSubagents`. Across all 138 colocated session dirs that
+    have both a `.end` and a transcript, none has `.load` older than `.end`. The
+    `.end` → `.load` span is 0.03–0.29 s, including sessions with 11–18 subagent
+    transcripts, so the worst case has about 5× headroom. A scratch-copy run of the
+    largest recent session (5.6 MB), process start included, took 320–515 ms.
+  - Degrade-only if it ever does bite: the swap is atomic, the marker is already
+    written, and the next start boundary repairs anything left.
+  - Worth an upstream issue: `Bme()` should count plugin hooks' declared timeouts. As it
+    stands, a plugin's SessionEnd `timeout` is dead configuration.
+- **Transcript relocation moves our mirror with it.**
+  - When it happens: on a cwd change to another project slug (worktree enter/exit, `cd`).
+  - What moves: `relocateSessionTranscript` moves both `<sid>.jsonl` and the whole
+    `<sid>/` sidecar dir. The colocated `claudinine/` mirror lives in that dir, so it
+    follows. This pays off the 2026-08-15 colocation decision.
+  - Failure mode: if the dir move fails (e.g. a file held open on Windows), upstream logs
+    it and carries on with the transcript moved and the mirror stranded. `get` still
+    resolves the mirror by sid across every project's colocated dirs. The compaction
+    tripwire fails closed, which I confirmed by deleting the mirror next to a scratch
+    copy: the pass refused to compact and rebuilt nothing from stubbed content.
+  - Every `relocated` record found in real transcripts is a *same-target* stamp
+    (`relocatedCwd` equals the project's own cwd, re-appended with the metadata). A real
+    cross-project move hasn't been seen yet.
+- Parallel-batch serialization at 2.1.284 (this session's own transcript): uses and
+  results now interleave as `USE1 → RES1 → USE2 (parent = RES1) → RES2`. The 2.1.222
+  specimen had all uses before any result. Each result still parents its own use. The
+  ChainCollapse pending-set grammar has been order-agnostic since the use-while-draining
+  abort was removed (2026-08-12), so this is covered.
+- Record types: the transcript writer's routing table lists `api-request-shape`,
+  `api-request-blob`, `api-request` and `observer-ref` as `route-by-agent`. This is the
+  2.1.267 "system prompt and tool definitions recorded once" feature. None of them appear
+  in the 25 most recent transcripts (2.1.258–2.1.284). Types that do appear and are new
+  since the 2.1.222 notes: `bridge-session`, `relocated`, `file-history-delta`,
+  `cost-state`, `mode`, `artifact-autoreact-ledger`, `artifact-comment-monitor`. They are
+  all app metadata, and no rule targets them. Watch: if `api-request-blob` starts
+  landing, check that the ruler doesn't count it as API-visible payload.
+- `claude plugin validate .` passes under 2.1.284. This matters because 2.1.281 started
+  warning on unquoted `${CLAUDE_PLUGIN_ROOT}` (ours is quoted) and 2.1.283 started
+  failing invalid marketplace names.
+- Changelog 2.1.261–2.1.286, other items considered and cleared:
+  - 2.1.268: resume shows the conversation before SessionStart hooks finish. This was
+    already assumed in `HookRunner`'s comments, which is why SessionEnd, not
+    SessionStart, makes the file clean at rest.
+  - 2.1.285: tolerates malformed compaction markers. We never edit boundary records,
+    since they are protected.
+  - 2.1.284: compacts again when still too long, which can produce adjacent boundaries.
+    `MarkPreserved` iterates all of them.
+  - 2.1.269: archive extraction strips world-writable bits. Not the exec bit.
+  - 2.1.275: claude.ai-enabled plugins sync into terminal sessions. With both an org copy
+    and a marketplace copy, two instances fire per event, and `PassLock` turns the second
+    into a free skip. This machine has only the managed copy.
+  - Many resume/cache replay and malformed-transcript crash fixes: upstream-internal.
+  - No hook event was added, removed or repayloaded.
+- Not verified, deliberately: no live Cowork run, local or cloud. The upstream GC was
+  read, not run. The relocation failure path was reasoned about, not triggered.
+
+**Baseline going forward: shell 2.16120.0, CLI 2.1.284 (upstream at 2.1.286). Track
+`preservedMessages` in the presence read.**
 
 ### Earlier, reconstructed from scattered notes
 

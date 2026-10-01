@@ -6,8 +6,32 @@ Status legend: **[V]** verified live in a Cowork cloud session (2026-08-15, Clau
 sessions: the pre-fix measurement run behind Rev 4, and the v1.1.0 validation run behind Rev 6; plus
 a third on 2026-08-19, desktop app 1.32885.1 / CC 2.1.234, behind Rev 7; plus a fourth on 2026-08-21,
 desktop app 1.34493.1 / CC 2.1.237, behind Rev 8) · **[S]** static read only, no live session
-(2026-09-04, desktop app 1.46388.2 / CC 2.1.260, behind Rev 9) ·
+(2026-09-04, desktop app 1.46388.2 / CC 2.1.260, behind Rev 9; 2026-10-01, desktop app 2.16120.0 /
+CC 2.1.284, behind Rev 10) ·
 **[?]** unknown, needs a test · **[!]** known gap, needs work · **[X]** closed.
+
+Rev 10 (2026-10-01): **CC 2.1.260 → 2.1.284, desktop 1.46388.4 → 2.16120.0; no compatibility
+break.** Static read only (**[S]**). Bundle presence read, 2.1.281 ↔ 2.1.284 diff, changelog sweep of
+2.1.261–2.1.286, plus scratch-copy hook timings. Full entry in `upstream-observations.md`
+(2026-10-01). The items that bear on Cowork:
+
+- **Cloud only: upstream's own on-disk transcript GC.** `performCompactTranscript` prunes
+  pre-boundary lines from `<sid>.jsonl`. It is gated by `tengu_transcript_local_gc` (default off) and
+  is only switched on for `sdkUrl`-hosted (managed cloud) workers, so `remote_cowork` is the one host
+  where it could run alongside us. It composes with us: it keeps everything from the last boundary on
+  plus the preserved records, aborts on any inode or size change (our atomic swap makes it back off),
+  and only removes what the mirror already holds. Hardening candidate: `MarkPreserved` protects
+  `preservedMessages.allUuids` only, and `uuids` should be unioned in, because the wire converter makes
+  `all_uuids` optional.
+- **SessionEnd is bounded at 1.5 s on every path**: shutdown, `/clear` and resume. `Bme()`
+  ignores plugin-declared timeouts, so our `timeout: 30` is dead configuration. It is not biting:
+  138 local sessions show the full SessionEnd work finishing in 0.03–0.29 s. `EndMarker` is
+  written before the pass, so even a cut pass keeps the Cowork re-hydration boundary intact.
+- **Relocation carries the colocated mirror.** A cwd change to another project slug moves
+  `<sid>.jsonl` *and* the `<sid>/` dir. If the dir move fails, the mirror is stranded: `get` still
+  finds it by sid, and compaction fails closed.
+- Not re-verified: the local Cowork layout, `atis-latch`, and the in-process hosting seen at Rev 8.
+  No live session was run.
 
 Rev 9 (2026-09-04): **CC 2.1.237 → 2.1.260, desktop 1.34493.1 → 1.46388.2; no compatibility
 break, one thing to watch.** Static read only — presence read over the new bundle plus a changelog
