@@ -94,7 +94,7 @@ internal sealed class TranscriptRecord
 
     /// <summary>
     /// Set at load time when a compact_boundary names this record in
-    /// compactMetadata.preservedMessages.allUuids — see TranscriptFile.MarkPreserved.
+    /// compactMetadata.preservedMessages (allUuids or uuids) — see TranscriptFile.MarkPreserved.
     /// Those uuids are a THIRD reference class alongside parentUuid and leafUuid:
     /// they are the records the app keeps in context beside the summary after a
     /// boundary, and nothing in the chain points at them, so dangling-parent

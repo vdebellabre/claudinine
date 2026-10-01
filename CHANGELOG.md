@@ -17,6 +17,16 @@ heading to the computed version in the release PR, and an empty
   field it never showed an update (1.2.1 stayed "latest" after 1.2.2 shipped).
   `set-archive-source.ps1` stamps it each release; the 1.2.2 entry is stamped
   retroactively.
+- Records a compact boundary preserves are protected whether the boundary lists
+  them in `preservedMessages.allUuids` or `preservedMessages.uuids`. Only
+  `allUuids` was read before. The local writer always emits `uuids ⊆ allUuids`,
+  but the wire format makes `all_uuids` optional, and `uuids` is the list
+  Claude Code's own on-disk transcript GC (2.1.284, cloud workers) requires to be
+  present. Hardening; no record was lost in practice.
+- README: install from the Claudinine marketplace
+  (`claude plugin marketplace add vdebellabre/claudinine`, then
+  `claude plugin install claudinine@claudinine`) and how to update.
+  Claudinine is not listed in Anthropic's plugin directory.
 
 ## 1.2.2
 

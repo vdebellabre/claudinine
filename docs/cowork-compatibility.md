@@ -20,8 +20,8 @@ break.** Static read only (**[S]**). Bundle presence read, 2.1.281 ↔ 2.1.284 d
   is only switched on for `sdkUrl`-hosted (managed cloud) workers, so `remote_cowork` is the one host
   where it could run alongside us. It composes with us: it keeps everything from the last boundary on
   plus the preserved records, aborts on any inode or size change (our atomic swap makes it back off),
-  and only removes what the mirror already holds. Hardening candidate: `MarkPreserved` protects
-  `preservedMessages.allUuids` only, and `uuids` should be unioned in, because the wire converter makes
+  and only removes what the mirror already holds. Hardened in the same change: `MarkPreserved` now
+  protects `preservedMessages.uuids` as well as `allUuids`, because the wire converter makes
   `all_uuids` optional.
 - **SessionEnd is bounded at 1.5 s on every path**: shutdown, `/clear` and resume. `Bme()`
   ignores plugin-declared timeouts, so our `timeout: 30` is dead configuration. It is not biting:

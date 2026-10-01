@@ -101,11 +101,18 @@ internal sealed class TranscriptFile
 
     /// <summary>
     /// Flag every record named by a compact_boundary's
-    /// compactMetadata.preservedMessages.allUuids so IsProtected() covers them.
-    /// After a boundary the app loads the summary PLUS these records; they are
-    /// referenced by uuid only, never by the parent chain, so removing one is
-    /// invisible to dangling-parent validation. Missing entries are tolerated —
-    /// the app itself names uuids that were never written (2 of 8 in d8aa7b17).
+    /// compactMetadata.preservedMessages (both <c>allUuids</c> and <c>uuids</c>)
+    /// so IsProtected() covers them. After a boundary the app loads the summary
+    /// PLUS these records; they are referenced by uuid only, never by the parent
+    /// chain, so removing one is invisible to dangling-parent validation. Missing
+    /// entries are tolerated — the app itself names uuids that were never written
+    /// (2 of 8 in d8aa7b17).
+    /// <para>
+    /// <c>uuids</c> is the list the app's own on-disk GC keeps (CLI 2.1.284), and
+    /// it aborts when one is missing. The local writer always emits
+    /// <c>uuids ⊆ allUuids</c>, but the wire converter makes <c>all_uuids</c>
+    /// optional — so read both, and protect the union.
+    /// </para>
     /// </summary>
     private static void MarkPreserved(List<TranscriptRecord> records)
     {
@@ -120,21 +127,24 @@ internal sealed class TranscriptFile
             if (!rec.Root.TryGetProperty("compactMetadata", out var meta)
                 || meta.ValueKind != JsonValueKind.Object
                 || !meta.TryGetProperty("preservedMessages", out var pm)
-                || pm.ValueKind != JsonValueKind.Object
-                || !pm.TryGetProperty("allUuids", out var all)
-                || all.ValueKind != JsonValueKind.Array)
+                || pm.ValueKind != JsonValueKind.Object)
             {
                 continue;
             }
-            foreach (var entry in all.EnumerateArray())
+            foreach (var list in (ReadOnlySpan<string>)["allUuids", "uuids"])
             {
-                // GetString throws on a non-string, non-null entry — deliberately
-                // strict, like the GetValue<string> this replaces: an alien shape
-                // in the app's own boundary metadata must not be half-understood.
-                if (entry.ValueKind != JsonValueKind.Null
-                    && entry.GetString() is { Length: > 0 } uuid)
+                if (!pm.TryGetProperty(list, out var arr) || arr.ValueKind != JsonValueKind.Array)
+                    continue;
+                foreach (var entry in arr.EnumerateArray())
                 {
-                    (preserved ??= new HashSet<string>(StringComparer.Ordinal)).Add(uuid);
+                    // GetString throws on a non-string, non-null entry — deliberately
+                    // strict, like the GetValue<string> this replaces: an alien shape
+                    // in the app's own boundary metadata must not be half-understood.
+                    if (entry.ValueKind != JsonValueKind.Null
+                        && entry.GetString() is { Length: > 0 } uuid)
+                    {
+                        (preserved ??= new HashSet<string>(StringComparer.Ordinal)).Add(uuid);
+                    }
                 }
             }
         }

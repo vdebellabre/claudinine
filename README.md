@@ -43,7 +43,29 @@ The three outputs above totalled about 19 KB. What stays in the transcript is a 
 
 Claudinine runs in the Claude Code CLI and in Cowork (claude.ai), in both of its modes — "In the cloud" and "On your computer". Pick the route that matches where you work.
 
-**Claude Code CLI.** Run `/plugin install claudinine`, and that is the whole setup — the hooks register themselves and compaction starts with your next prompt. There is nothing to configure.
+**Claude Code (CLI, or the Desktop app's Code tab).** Claudinine is not in Anthropic's plugin directory; it ships from its own marketplace, which is this repository. Add the marketplace once, then install from it:
+
+```bash
+claude plugin marketplace add vdebellabre/claudinine
+```
+
+```bash
+claude plugin install claudinine@claudinine
+```
+
+Inside a session, `/plugin marketplace add vdebellabre/claudinine` and `/plugin install claudinine@claudinine` do the same. That is the whole setup: the hooks register themselves and compaction starts with your next prompt. There is nothing to configure. The Desktop app's Code tab uses the same `~/.claude` plugin configuration, so an install made from a terminal shows up there too. You can also add the marketplace from the Desktop's own plugin settings, using the same `vdebellabre/claudinine` address.
+
+Third-party marketplaces are not refreshed for you. To pick up a new release, update the marketplace, then the plugin (in the Desktop, the marketplace's "Check for updates" followed by the plugin's update button does the same):
+
+```bash
+claude plugin marketplace update claudinine
+```
+
+```bash
+claude plugin update claudinine@claudinine
+```
+
+Each marketplace entry pins the release archive by sha256, so an install only ever unpacks the exact build that was published.
 
 **Cowork (claude.ai).** Plugin marketplaces are disabled there, so `/plugin install` is not the route. Download `claudinine-<version>.plugin` from the [latest release](https://github.com/vdebellabre/claudinine/releases/latest) and import it in claude.ai's plugin settings. It installs account-wide and registers in your Cowork sessions automatically — including sessions already running. The same artifact covers both Cowork modes: it carries binaries for all six platforms, because cloud sessions run hooks inside a Linux container while local sessions run them on your own desktop — Windows or macOS included.
 

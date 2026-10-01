@@ -316,8 +316,9 @@ None of them needs a code change today.
   - Residual, hardening only: `MarkPreserved` protects `allUuids`. Every writer in the
     bundle emits `uuids ⊆ allUuids`, but the snake_case wire converter makes
     `all_uuids` optional. A boundary arriving without it leaves `uuids` unprotected. The
-    upstream GC would then abort rather than corrupt anything, but protecting the union
-    of both lists is a two-line change.
+    upstream GC would then abort rather than corrupt anything. **Done in the same PR:**
+    `MarkPreserved` now protects the union of both lists
+    (`BareStopHookSummary_NamedOnlyByUuids_IsKept`).
 - **Our SessionEnd hook gets 1.5 s on every path, and our `timeout: 30` does not change
   it.**
   - What 2.1.268 changed: SessionEnd hooks with no `timeout` of their own get 1.5 s
