@@ -362,7 +362,7 @@ public sealed class CarrierHeaderDedupTests : IDisposable
         var b = new TranscriptBuilder().UserPrompt("old work");
         b.ToolCall("Bash", new JsonObject { ["command"] = "one" },
             LegacyFullHeader(2) + "[aaaa1111] Bash(cmd one) -> 500b :: preview one");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_dir, atRest: false);
 
         Compactor.Run(path);
 

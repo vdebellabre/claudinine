@@ -328,7 +328,7 @@ public sealed class ChainCollapseTests : IDisposable
         b.UserPrompt("second"); // interrupted turn: file ends exactly at a tool_result
         b.BashRead("sed -n '1,5p' t2a.txt", out string keptA, Output + "x");
         b.BashRead("sed -n '1,5p' t2b.txt", out string keptB, Output + "y");
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_dir, atRest: false);
         string lastLineBefore = File.ReadAllLines(path)[^1];
 
         Compactor.Run(path);
@@ -396,7 +396,7 @@ public sealed class ChainCollapseTests : IDisposable
         // tool_result that returns to the orchestrator — no closing assistant text.
         // The tail must stay verbatim (the app chains appends off its uuid), so the
         // last pair is excluded and everything before it collapses.
-        var b = new TranscriptBuilder().UserPrompt("workflow agent task");
+        var b = new TranscriptBuilder(sidechain: true).UserPrompt("workflow agent task");
         b.ToolUse("cmd-a", out string idA, out string uuidA);
         b.ToolResultFor(idA, uuidA, Output + "A");
         b.ToolUse("cmd-b", out string idB, out string uuidB);
@@ -437,7 +437,7 @@ public sealed class ChainCollapseTests : IDisposable
         // saves and the economics gate refuses the turn. This is the case the old
         // MinCalls=2 threshold approximated; the gate now decides it on real bytes,
         // so the payload size (not the call count) is what makes this turn a skip.
-        var b = new TranscriptBuilder().UserPrompt("short agent task");
+        var b = new TranscriptBuilder(sidechain: true).UserPrompt("short agent task");
         b.ToolUse("cmd-a", out string idA, out string uuidA);
         b.ToolResultFor(idA, uuidA, "tiny-a");
         b.ToolUse("cmd-tail", out string idTail, out string uuidTail);
@@ -519,7 +519,7 @@ public sealed class ChainCollapseTests : IDisposable
         // Same shape, but the surviving call carries a real-sized result: dropping
         // the tail pair still leaves enough payload to beat the digest, so the turn
         // collapses — and the file's final record is untouched either way.
-        var b = new TranscriptBuilder().UserPrompt("short agent task");
+        var b = new TranscriptBuilder(sidechain: true).UserPrompt("short agent task");
         b.ToolUse("cmd-a", out string idA, out string uuidA);
         b.ToolResultFor(idA, uuidA, Output + "A");
         b.ToolUse("cmd-tail", out string idTail, out string uuidTail);

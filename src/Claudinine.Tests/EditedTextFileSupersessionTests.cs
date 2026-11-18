@@ -125,7 +125,8 @@ public sealed class EditedTextFileSupersessionTests : IDisposable
         JsonObject[] records = Load(path);
         JsonObject survivor = await Assert.That(EditedTextFiles(records, @"C:\proj\a.cs")).HasSingleItem();
         await Assert.That(survivor["attachment"]!["snippet"]!.GetValue<string>()).IsEqualTo("a v2");
-        await Assert.That(survivor).IsSameReferenceAs(records[^1]);
+        await Assert.That(survivor).IsSameReferenceAs(records[^2]);
+        await Assert.That(records[^1]["subtype"]!.GetValue<string>()).IsEqualTo("stop_hook_summary");
     }
 
     [Test]

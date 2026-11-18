@@ -89,15 +89,89 @@ internal sealed class TranscriptFile
 
         MarkPreserved(records);
 
+        bool isSidechainFile = records.All(r => r.IsSidechain || r.Type == "fork-context-ref");
+        if (!isSidechainFile)
+            MarkLiveWindow(records);
+
         return new TranscriptFile
         {
             Path = path,
             Records = records,
             EndsWithNewline = endsWithNewline,
             LoadedLength = loadedLength,
-            IsSidechainFile = records.All(r => r.IsSidechain || r.Type == "fork-context-ref"),
+            IsSidechainFile = isSidechainFile,
         };
     }
+
+    /// <summary>
+    /// Freeze the part of a main transcript the live process may still chain
+    /// onto: everything from the last turn-end marker (<c>stop_hook_summary</c>
+    /// or <c>turn_duration</c>) — opened one record early, on the marker's
+    /// parent — to the end of the file.
+    /// <para>
+    /// The app parents its next write to its IN-MEMORY tip, which is not the
+    /// last record on disk. Mid-turn, attachments and system records land after
+    /// a tool_result and point at it, then the model's reply arrives seconds
+    /// later still parented to that tool_result. At turn end, uuid-less metadata
+    /// (relocated, bridge-session…) lands after the marker the next prompt will
+    /// parent. A pass that removed the tip — collapsed as a "non-tail" tool
+    /// result, stripped as a zero-signal summary — orphaned the record written
+    /// after it, and the resume loader cuts the chain there (user reports on
+    /// 2.1.309–2.1.327; 3,397 cut links across 298 local sessions, 2026-11-18).
+    /// </para>
+    /// <para>
+    /// Hook-event agnostic on purpose: queued prompts fire UserPromptSubmit
+    /// mid-turn and auto-compaction fires PreCompact mid-turn, and not every
+    /// trigger in the reports was identified. With the turn finished the window
+    /// is just the marker plus trailing metadata; mid-turn it spans the whole
+    /// running turn, back to the previous turn's marker. Claudinine is itself a
+    /// Stop hook, so every completed turn writes a stop_hook_summary. With no
+    /// marker at all (first turn still running), the window starts at the last
+    /// genuine user prompt.
+    /// </para>
+    /// Main transcripts only: agent files carry no turn-end markers, so the
+    /// fallback would freeze them whole, and their passes run once the agent has
+    /// finished writing. Orphans there are left to OrphanHeal.
+    /// </summary>
+    private static void MarkLiveWindow(List<TranscriptRecord> records)
+    {
+        int start = records.FindLastIndex(r => r.Type == "system"
+            && r.View["subtype"].AsString() is "stop_hook_summary" or "turn_duration");
+        if (start >= 0)
+        {
+            // Open on the marker's PARENT: after an idle reload the next prompt
+            // can chain onto the record before the marker, not the marker
+            // (54 of 4,575 markers in local mirrors, all Desktop, 2.1.275–2.1.325).
+            // Today that slot never holds a removable record, but 2.1.219–2.1.246
+            // put a hook_success there, which a rule strips.
+            string? parent = records[start].ParentUuid;
+            if (parent is not null)
+            {
+                int p = records.FindLastIndex(start, r => r.Uuid == parent);
+                if (p >= 0)
+                    start = p;
+            }
+        }
+        else
+        {
+            start = records.FindLastIndex(IsGenuinePrompt);
+        }
+        if (start < 0)
+            start = records.Count - 1;
+        for (int i = start; i < records.Count; i++)
+            records[i].IsLiveWindow = true;
+    }
+
+    /// <summary>
+    /// A prompt the user typed. Stricter than RuleHelpers.IsUserPrompt (meta
+    /// injections and compact summaries don't count): a stricter test can only
+    /// start the window earlier, which is the safe direction.
+    /// </summary>
+    private static bool IsGenuinePrompt(TranscriptRecord r) =>
+        !r.IsSidechain
+        && Rules.RuleHelpers.IsUserPrompt(r.View)
+        && !r.View["isMeta"].IsTrue
+        && !r.View["isCompactSummary"].IsTrue;
 
     /// <summary>
     /// Flag every record named by a compact_boundary's
@@ -158,7 +232,16 @@ internal sealed class TranscriptFile
         }
     }
 
-    public bool HasChanges => Records.Any(r => r.Replacement is not null || r.Removed);
+    /// <summary>
+    /// Dangling references to heal on rewrite: a uuid absent from this transcript
+    /// → the nearest ancestor (by the mirror's original chain) that is present,
+    /// or null for a root. Set by OrphanHeal.Prepare before the rules run;
+    /// resolved by the same walk that rechains removals.
+    /// </summary>
+    public Dictionary<string, string?>? HealedParents { get; set; }
+
+    public bool HasChanges => HealedParents is { Count: > 0 }
+        || Records.Any(r => r.Replacement is not null || r.Removed);
 
     /// <summary>
     /// Validate the pending rewrite (replacements and removals), then atomically
@@ -194,8 +277,10 @@ internal sealed class TranscriptFile
 
         try
         {
-            Jsonl.ReplaceAtomically(Path, lines, EndsWithNewline);
-            return true;
+            // Checked again after the temp write, right before the move: on a
+            // large file the write itself is a window for a live append.
+            return Jsonl.ReplaceAtomically(Path, lines, EndsWithNewline, expectedLength: LoadedLength)
+                || Refuse("file-changed");
         }
         catch
         {
@@ -218,6 +303,15 @@ internal sealed class TranscriptFile
         // parentUuid when the records just before it were removed.
         if (Records[^1].Removed || Records[^1].Replacement is not null)
             return RefuseCompute("tail-touched");
+        // The live window generalizes the tail invariant (see MarkLiveWindow):
+        // its records must keep existing, because the app may still chain onto
+        // any of them. Removal is the hazard; a replacement keeps the uuid (the
+        // chain-mismatch check below enforces it), so the two rules that rewrite
+        // collapsed carriers in place (anchor-input stub, header heal — which
+        // strips the Fable-blocking sentence) keep their tail-only guards. Other
+        // rules skip the window through IsProtected; this is the backstop.
+        if (Records.Any(r => r.IsLiveWindow && r.Removed))
+            return RefuseCompute("live-window-removed");
 
         var byUuid = new Dictionary<string, TranscriptRecord>();
         foreach (var r in Records)
@@ -231,14 +325,24 @@ internal sealed class TranscriptFile
         // Walk up through removed records to the nearest kept ancestor. A uuid we
         // don't know is left as-is (original files legally contain references we
         // cannot resolve — grafts, crash leftovers; we only fix what WE break).
+        // A uuid an EARLIER pass removed is followed through HealedParents —
+        // whose target this pass may in turn be removing, hence one loop.
         string? SurvivingAncestor(string? uuid)
         {
             var visited = new HashSet<string>();
-            while (uuid is not null && removedUuids.Contains(uuid))
+            while (uuid is not null)
             {
+                string? next;
+                if (removedUuids.Contains(uuid))
+                    next = byUuid[uuid].ParentUuid;
+                else if (HealedParents is not null && !byUuid.ContainsKey(uuid)
+                    && HealedParents.TryGetValue(uuid, out var healed))
+                    next = healed;
+                else
+                    break;
                 if (!visited.Add(uuid))
                     return null; // cycle: fail safe to a root
-                uuid = byUuid[uuid].ParentUuid;
+                uuid = next;
             }
             return uuid;
         }
@@ -256,15 +360,12 @@ internal sealed class TranscriptFile
 
             var node = rec.Replacement;
 
-            string? newParent = rec.ParentUuid;
-            if (newParent is not null && removedUuids.Contains(newParent))
-                newParent = SurvivingAncestor(newParent);
+            // Identity for a uuid neither removed now nor healable.
+            string? newParent = SurvivingAncestor(rec.ParentUuid);
 
             string? origLeaf =
                 (node is not null ? new JsonView(node) : rec.View)["leafUuid"].AsString();
-            string? newLeaf = origLeaf is not null && removedUuids.Contains(origLeaf)
-                ? SurvivingAncestor(origLeaf)
-                : origLeaf;
+            string? newLeaf = SurvivingAncestor(origLeaf);
 
             if (newParent != rec.ParentUuid || newLeaf != origLeaf)
             {

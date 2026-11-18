@@ -122,14 +122,24 @@ internal sealed class ChainCollapseRule : ICompactionRule
         }
 
         // No age gate — deliberately. The app never re-reads the file mid-session
-        // (canary-verified), so collapsing the freshest turn affects nothing live;
-        // the only consumer is the next load, and the POC's live test showed a
-        // fully-collapsed session retrieves rather than guesses. The in-flight
+        // (canary-verified), so collapsing the freshest SETTLED turn costs the
+        // live context nothing; the only consumer is the next load, and the POC's
+        // live test showed a fully-collapsed session retrieves rather than
+        // guesses. What the app does do is chain its next write onto records of
+        // the running turn — so a turn ends where the live window starts
+        // (TranscriptFile.MarkLiveWindow), and the window is never collapsed.
+        // The window opens on a turn-end marker or a prompt, so everything before
+        // it is settled. Without the cut, a finished turn's trailing marker —
+        // protected — would abort that turn's collapse outright. The in-flight
         // guard below (a use with no result) is structural, not temporal.
+        int liveStart = records.FindIndex(r => r.IsLiveWindow);
+        if (liveStart < 0)
+            liveStart = records.Count;
+
         for (int b = 0; b < bounds.Count; b++)
         {
             int start = bounds[b] + 1;
-            int end = b + 1 < bounds.Count ? bounds[b + 1] : records.Count;
+            int end = Math.Min(b + 1 < bounds.Count ? bounds[b + 1] : records.Count, liveStart);
             if (end <= start)
                 continue;
             CollapseTurn(transcript, start, end, sid, launcher, refsDir, headerDedupSaving);

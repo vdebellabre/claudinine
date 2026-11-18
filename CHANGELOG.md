@@ -11,6 +11,38 @@ heading to the computed version in the release PR, and an empty
 
 ## Unreleased
 
+- **Fix: compaction no longer cuts the conversation chain, and existing cuts
+  are repaired.** A pass could remove the record Claude Code was about to
+  chain its next write onto. The next record then pointed at nothing, and a
+  resume loaded only what came after the cut: silently before Claude Code
+  2.1.327, with "earlier messages can't be loaded" since. It happened in two
+  ways. A pass running mid-turn (a prompt queued while Claude works,
+  auto-compaction) collapsed the turn's last tool result seconds before the
+  model's reply landed parented to it. And at every turn end, the zero-signal
+  `stop_hook_summary` was stripped while the next prompt was still to be
+  parented to it; metadata written after it hid it from the old "never touch
+  the last record" guard. Measured on one machine: 3,397 cuts across 298
+  sessions, and a resume of the worst one sent the model 8 messages instead
+  of 628.
+  - **Live window.** A pass now leaves alone everything from the last
+    turn-end marker (`stop_hook_summary` or `turn_duration`) to the end of
+    the file, whichever hook triggered it, plus the record the marker
+    follows (after an idle reload the next prompt can chain onto that one).
+    A finished turn's window is just those two; a running turn stays whole
+    until it ends. Subagent transcripts keep the last-record rule.
+  - **Healing.** Every pass repoints a record whose parent is missing from
+    the transcript but present in the session's mirror to its nearest
+    surviving ancestor. The mirror proves the removal was Claudinine's;
+    references it cannot resolve are left as found.
+  - **Dormant sessions.** At `SessionStart`, a one-off sweep heals the
+    project's other dormant sessions before their next resume (time-boxed and
+    resumable, one `<sid>.healed` marker per session). Sessions written to in
+    the last 10 minutes are skipped, since one may be live in another window
+    and its own passes heal it; so are sessions frozen with
+    `restore-compaction-off`.
+  - The swap re-checks the transcript's length after writing the new file and
+    right before moving it into place, so an append landing during a long
+    write is no longer lost.
 - Marketplace entry now declares `version` next to the archive pin. The Desktop
   app detects plugin updates by comparing the entry's `version` with the
   installed one and reads nothing else for an archive source, so without the

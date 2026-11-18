@@ -81,7 +81,12 @@ internal static class HookRunner
                             // grace is what makes the sweep safe: only dirs no
                             // hook has touched for a day go.
                             if (input.HookEventName == "SessionStart")
+                            {
                                 SessionDirGc.Run(input.TranscriptPath, input.SessionId);
+                                // A new Desktop session starts here, transcript-less:
+                                // the common case, so the heal sweep rides it too.
+                                HealSweep.Run(input.TranscriptPath);
+                            }
                             return 0;
                         }
 
@@ -147,9 +152,14 @@ internal static class HookRunner
                             SessionDirGc.Run(input.TranscriptPath, input.SessionId);
                             // A real SessionStart clears any pending teardown marker,
                             // so a CLI resume never replays the start work on its
-                            // first prompt.
+                            // first prompt. The heal sweep rides real starts only: a
+                            // wake runs on the prompt path, where a large project's
+                            // backlog would delay the prompt.
                             if (input.HookEventName == "SessionStart")
+                            {
                                 EndMarker.Consume(input.TranscriptPath);
+                                HealSweep.Run(input.TranscriptPath);
+                            }
                         }
                     }
                     break;

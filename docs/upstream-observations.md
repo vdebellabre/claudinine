@@ -39,7 +39,7 @@ Two tracks move independently, and both are read off disk:
 | Track | How to read it |
 |---|---|
 | Desktop shell | `ls %LOCALAPPDATA%\AnthropicClaude` → `app-<ver>` dirs (newest mtime = current) |
-| Embedded CLI | `%APPDATA%\Claude\claude-code\<ver>\claude.exe --version`; `.payload` holds a sha256 build identity |
+| Embedded CLI | `%APPDATA%\Claude\claude-code\<ver>\<build-hash>\claude.exe --version` (one level deeper since ~2.1.3xx; earlier `<ver>\claude.exe`, with `.payload` holding a sha256 build identity) |
 
 Record both in every entry, but they carry different weight: a shell bump alone has never
 moved anything we parse, while a CLI bump is the one to take seriously. Confirm which CLI
@@ -392,6 +392,58 @@ None of them needs a code change today.
 
 **Baseline going forward: shell 2.16120.0, CLI 2.1.284 (upstream at 2.1.286). Track
 `preservedMessages` in the presence read.**
+
+### 2026-11-18 — shell 2.16120.0 → 6.6395.0 (5.11492.5 running), CLI 2.1.284 → 2.1.325
+
+Terminal `claude` is 2.1.323; upstream is at 2.1.327. The changelog was read from
+2.1.287 to 2.1.327. No bundle diff: 2.1.284 had already been pruned. The embedded
+CLI now sits one level deeper, at `claude-code\<ver>\<build-hash>\claude.exe`.
+
+- **A Claudinine bug surfaced, shipped as the 1.2.3 fix.** 2.1.327 "added a line when a
+  resumed session's earlier messages can't be loaded", and users started seeing
+  it. Claudinine passes had been removing the record the live process would
+  parent its next write to: the last tool_result of a running turn, and the
+  zero-signal `stop_hook_summary` at every turn end. The guard only protected
+  the last record by position. Locally, 3,397 cut links across 298 sessions.
+  Resuming the worst session under 2.1.323 against a local API stub sent the
+  model 8 messages from the cut file, and 628 from the healed one. The
+  bundle carries chain-recovery strings (`tengu_chain_timestamp_fallback`,
+  `tool_result_recovered_by_call_id`, `parentIsPrompt`), but they did not
+  recover this shape. See `session-file-changes.md` (live window, orphan
+  healing).
+- **Idle compaction** (2.1.299 terminal, 2.1.314 Desktop Code tab, 2.1.318
+  fix). A conversation over 200K tokens left idle about 54 minutes is summarized
+  before the one-hour cache expires; in Desktop, the summary is applied at the
+  next message. There is no `idle` trigger on disk. Boundaries say
+  `trigger: "auto"` with `precomputed: true` (applied in about 30 ms), and 2.1.3xx
+  also writes `runningTurnSends {uuids, openerUuid, summarisedOnly}`,
+  `runningTurnPrompt {clientPlatform}`, `preCompactDiscoveredTools` and
+  `cumulativeDroppedTokens`. Of 29 such boundaries, only 3 followed a real idle
+  gap; the rest were background compactions applied mid-turn. In all 29,
+  `runningTurnSends` uuids were a subset of `preservedMessages`, so
+  `MarkPreserved` covers them. That is observed, not guaranteed: watch it.
+  Whether PreCompact fires for a precomputed compaction is unverified
+  (no-output hooks leave no trace).
+- **Hooks.** 2.1.300 SessionEnd now runs when exiting with a background command
+  (it helps "clean at rest"). 2.1.323 PreCompact, PostCompact and post-compaction
+  SessionStart carry `agent_id` for subagent compaction. 2.1.299
+  UserPromptSubmit runs before skill expansion. 2.1.314 PreCompact output is
+  capped at 10,000 characters. 2.1.295 adds `onFailure: "block"` (unused, and
+  must stay so: fail-open is the contract). 2.1.323 adds a 30 s hook heartbeat
+  in `-p`/SDK sessions. No event was added or repayloaded.
+- **Plugins.** `claude plugin validate .` passes under 2.1.323, with a
+  missing-icon warning only. 2.1.325 skips unsafe paths and links in a plugin
+  folder; the libexec layout is unaffected. The 2.1.323 `agent` deprecation
+  does not apply to us.
+- Other items considered and cleared: the `CLAUDE_CODE_TRANSCRIPT_LOCAL_GC`
+  under-10% threshold (2.1.296); smaller session files (2.1.287 MCP results,
+  2.1.304 auto-mode classifier context); `cleanupPeriodDays` fixes (2.1.310,
+  2.1.323), where the colocated mirror dies with the session dir as designed;
+  and many compaction and resume robustness fixes that are upstream-internal.
+- Not verified: no Cowork run, local or cloud.
+
+**Baseline going forward: shell 6.6395.0, CLI 2.1.325 (upstream at 2.1.327).
+Watch `runningTurnSends` ⊆ `preservedMessages` in the presence read.**
 
 ### Earlier, reconstructed from scattered notes
 

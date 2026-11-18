@@ -103,10 +103,25 @@ internal sealed class TranscriptRecord
     public bool IsBoundaryPreserved { get; set; }
 
     /// <summary>
+    /// Set at load time on every record of a main transcript's live window —
+    /// see TranscriptFile.MarkLiveWindow. The app may still parent its next
+    /// write to any of them, so a pass must never remove one. Rules leave them
+    /// as found (IsProtected); the rewrite layer refuses a removal outright.
+    /// </summary>
+    public bool IsLiveWindow { get; set; }
+
+    /// <summary>
     /// True if this record must never be removed or structurally modified.
     /// Ported from cozempic's is_protected, minus its in-memory tag keys.
     /// </summary>
-    public bool IsProtected()
+    public bool IsProtected() => IsLiveWindow || IsStructurallyProtected();
+
+    /// <summary>
+    /// <see cref="IsProtected"/> minus the live window: what the record IS, not
+    /// where it sits. A window record is ours to read (ForkHealRule still counts
+    /// a window carrier as fork evidence) but not yet ours to write.
+    /// </summary>
+    public bool IsStructurallyProtected()
     {
         // Corpus 2026-08-09 (d8aa7b17): StopHookSummaryStripRule removed a
         // stop_hook_summary that the boundary listed as preserved — a zero-signal

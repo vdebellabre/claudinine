@@ -81,7 +81,7 @@ public sealed class HookSuccessStripTests : IDisposable
             .UserPrompt("hello")
             .AssistantText("done")
             .HookSuccess("Stop")
-            .WriteTo(_dir);
+            .WriteTo(_dir, atRest: false);
 
         Compactor.Run(path);
 
@@ -116,6 +116,11 @@ public sealed class HookSuccessStripTests : IDisposable
         string assistantUuid = b.LastUuid!;
         b.HookSuccess("Stop");
         string hookUuid = b.LastUuid!;
+        // The hook sits before the live window (which opens on the marker's
+        // parent), and the uuid-less last-prompt trails inside it — so the
+        // TAIL's leafUuid must be remapped for the hook's removal to land.
+        b.AssistantText("closing");
+        b.StopHookSummary();
         b.MetaLine("last-prompt", ("leafUuid", hookUuid));
         string path = b.WriteTo(_dir);
 

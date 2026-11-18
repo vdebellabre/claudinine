@@ -41,8 +41,13 @@ internal static class Compactor
 
         // Mirror-first invariant: nothing is ever stubbed that isn't already
         // durably mirrored. Append failure → skip compaction entirely.
-        if (!MirrorFile.TryAppendMissing(transcript))
+        if (!MirrorFile.TryAppendMissing(transcript, out var mirrored))
             return;
+
+        // Links the live process broke after an earlier pass (see OrphanHeal).
+        // Computed before the rules so the rewrite resolves heals and this
+        // pass's removals in one walk.
+        OrphanHeal.Prepare(transcript, MirrorLocator.PathFor(transcriptPath), mirrored);
 
         // The retrieval launcher the digest headers point at, re-targeted at
         // the currently running binary on every pass so it can't go stale.

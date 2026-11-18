@@ -86,7 +86,7 @@ public sealed class NoiseRulesTests : IDisposable
             .UserPrompt("second ask\n" + reminder)
             .AssistantText("still noted")
             .UserPrompt("killed mid-turn\n" + reminder); // file ends on the dup
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_dir, atRest: false);
 
         Compactor.Run(path);
 
@@ -131,7 +131,7 @@ public sealed class NoiseRulesTests : IDisposable
             .AssistantText(doc)
             .UserPrompt("once more")
             .AssistantText(doc); // file ends on the third copy
-        string path = b.WriteTo(_dir);
+        string path = b.WriteTo(_dir, atRest: false);
 
         Compactor.Run(path);
 

@@ -462,6 +462,21 @@ internal sealed class TranscriptBuilder(bool sidechain = false)
         return this;
     }
 
+    private bool EndsWithTurnMarker()
+    {
+        for (int i = _lines.Count - 1; i >= 0; i--)
+        {
+            JsonObject? node;
+            try { node = JsonNode.Parse(_lines[i]) as JsonObject; }
+            catch (System.Text.Json.JsonException) { return false; } // deliberately broken fixture line
+            if (node?["uuid"] is null)
+                continue; // uuid-less metadata trails the marker in real files
+            return (node["type"] as JsonValue)?.ToString() == "system"
+                && (node["subtype"] as JsonValue)?.ToString() is "stop_hook_summary" or "turn_duration";
+        }
+        return false;
+    }
+
     public TranscriptBuilder RawLine(string line)
     {
         _lines.Add(line);
@@ -494,9 +509,19 @@ internal sealed class TranscriptBuilder(bool sidechain = false)
         _lines.Add(record.ToJsonString());
     }
 
+    /// <summary>
+    /// Write the fixture. A main transcript is written AT REST by default: a
+    /// zero-signal stop_hook_summary closes the last turn, as the app writes
+    /// after every completed turn (Claudinine is itself a Stop hook), so the
+    /// live window (TranscriptFile.MarkLiveWindow) is just that marker. Pass
+    /// <paramref name="atRest"/>: false for a transcript caught mid-turn, or
+    /// whose exact tail a test is about.
+    /// </summary>
     public string WriteTo(string directory, string name = "test-session.jsonl",
-        string newline = "\n", bool trailingNewline = true)
+        string newline = "\n", bool trailingNewline = true, bool atRest = true)
     {
+        if (atRest && !sidechain && !EndsWithTurnMarker())
+            StopHookSummary();
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, name);
         File.WriteAllText(path,
