@@ -11,6 +11,8 @@ heading to the computed version in the release PR, and an empty
 
 ## Unreleased
 
+## 1.2.3
+
 - **Fix: compaction no longer cuts the conversation chain, and existing cuts
   are repaired.** A pass could remove the record Claude Code was about to
   chain its next write onto. The next record then pointed at nothing, and a
