@@ -13,10 +13,8 @@ namespace Claudinine.Tests;
 public sealed class LiveWindowTests : IDisposable
 {
     private static readonly string Output = "tool output " + new string('o', 2000);
-    // p1 a1 | marker p2 a2
-    private static readonly bool[] WindowAfterMarker = [false, false, true, true, true];
-    // p1 a1 | p2 a2
-    private static readonly bool[] WindowAfterPrompt = [false, false, true, true];
+    private static string WindowOf(string path) => string.Join(",",
+        TranscriptFile.TryLoad(path)!.Records.Select(r => r.IsLiveWindow ? "W" : "-"));
     private readonly string _dir;
     private int _appended;
 
@@ -58,6 +56,10 @@ public sealed class LiveWindowTests : IDisposable
         File.AppendAllText(path, record.ToJsonString() + "\n");
         return uuid;
     }
+
+    /// <summary>Dormant past HealSweep's quiet gate.</summary>
+    private static void Age(string path) =>
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow - HealSweep.QuietFor - TimeSpan.FromMinutes(5));
 
     private static string[] DanglingParents(JsonObject[] records)
     {
@@ -157,16 +159,15 @@ public sealed class LiveWindowTests : IDisposable
         var withMarker = new TranscriptBuilder().UserPrompt("p1").AssistantText("a1")
             .StopHookSummary().UserPrompt("p2").AssistantText("a2")
             .WriteTo(_dir, "with-marker.jsonl", atRest: false);
-        var records = TranscriptFile.TryLoad(withMarker)!.Records;
-        await Assert.That(records.Select(r => r.IsLiveWindow))
-            .IsEquivalentTo(WindowAfterMarker);
+        // p1 | a1 marker p2 a2 — opens on the marker's parent: after an idle
+        // reload the next prompt can chain onto the record before the marker.
+        await Assert.That(WindowOf(withMarker)).IsEqualTo("-,W,W,W,W");
 
         var noMarker = new TranscriptBuilder().UserPrompt("p1").AssistantText("a1")
             .UserPrompt("p2").AssistantText("a2")
             .WriteTo(_dir, "no-marker.jsonl", atRest: false);
-        records = TranscriptFile.TryLoad(noMarker)!.Records;
-        await Assert.That(records.Select(r => r.IsLiveWindow))
-            .IsEquivalentTo(WindowAfterPrompt);
+        // p1 a1 | p2 a2
+        await Assert.That(WindowOf(noMarker)).IsEqualTo("-,-,W,W");
     }
 
     [Test]
@@ -209,6 +210,7 @@ public sealed class LiveWindowTests : IDisposable
         string path = b.WriteTo(_dir, name);
         Compactor.Run(path); // strips the first marker, mirrors it first
         string orphan = AppendLive(path, stripped);
+        Age(path);
         return (path, assistant, orphan);
     }
 
@@ -330,5 +332,99 @@ public sealed class LiveWindowTests : IDisposable
         await Assert.That(ParentOf(Load(own), ownOrphan)).IsNotNull();
         await Assert.That(File.Exists(HealSweep.MarkerPathFor(own))).IsFalse();
         await Assert.That(File.Exists(HealSweep.MarkerPathFor(unmirrored))).IsFalse();
+    }
+
+    [Test]
+    public async Task LeafUuidPointingAtARemovedRecord_IsHealed()
+    {
+        // Same race on the other ancestry link: a uuid-less metadata record
+        // (last-prompt, summary) whose leafUuid names a record we removed.
+        var b = new TranscriptBuilder().UserPrompt("first").AssistantText("one");
+        string assistant = b.LastUuid!;
+        b.StopHookSummary();
+        string stripped = b.LastUuid!;
+        b.UserPrompt("second").AssistantText("two");
+        string path = b.WriteTo(_dir);
+        Compactor.Run(path);
+        await Assert.That(HasUuid(Load(path), stripped)).IsFalse();
+        File.AppendAllText(path, new JsonObject
+        {
+            ["type"] = "last-prompt", ["leafUuid"] = stripped, ["sessionId"] = "test-session",
+        }.ToJsonString() + "\n");
+
+        Compactor.Run(path);
+
+        var leaf = Load(path).Single(r => r["type"]!.GetValue<string>() == "last-prompt");
+        await Assert.That(leaf["leafUuid"]!.GetValue<string>()).IsEqualTo(assistant);
+    }
+
+    [Test]
+    public async Task OrphanWhoseMirrorChainEndsAtARoot_BecomesARoot()
+    {
+        // The removed record had no parent: neither does its healed child —
+        // the same answer SurvivingAncestor gives a child it rechains.
+        var b = new TranscriptBuilder().HookSuccess("PostToolUse");
+        string rootHook = b.LastUuid!;
+        b.UserPrompt("first").AssistantText("one");
+        string path = b.WriteTo(_dir);
+        Compactor.Run(path);
+        await Assert.That(HasUuid(Load(path), rootHook)).IsFalse();
+        string orphan = AppendLive(path, rootHook);
+        File.AppendAllText(path, new JsonObject
+        {
+            ["type"] = "system", ["subtype"] = "stop_hook_summary",
+            ["uuid"] = "bbbbbbbb-0000-0000-0000-000000000003", ["parentUuid"] = orphan,
+            ["sessionId"] = "test-session",
+        }.ToJsonString() + "\n");
+
+        Compactor.Run(path);
+
+        await Assert.That(ParentOf(Load(path), orphan)).IsNull();
+    }
+
+    [Test]
+    public async Task HealSweep_SkipsRecentlyActiveSessions()
+    {
+        // Possibly live in another window: a rewrite could race the CLI's
+        // append, and the sweep does not mirror first. Its own passes heal it.
+        var (sibling, _, _) = DamagedSession("other-session.jsonl");
+        File.SetLastWriteTimeUtc(sibling, DateTime.UtcNow);
+        string before = File.ReadAllText(sibling);
+
+        HealSweep.Run(Path.Combine(_dir, "test-session.jsonl"), TimeSpan.FromSeconds(30));
+
+        await Assert.That(File.ReadAllText(sibling)).IsEqualTo(before);
+        await Assert.That(File.Exists(HealSweep.MarkerPathFor(sibling))).IsFalse();
+    }
+
+    [Test]
+    public async Task HealSweep_LeavesNoMarkerWhenBusy_AndHealsOnRetry()
+    {
+        var (sibling, assistant, orphan) = DamagedSession("other-session.jsonl");
+        string current = Path.Combine(_dir, "test-session.jsonl");
+
+        using (PassLock.TryAcquire(sibling))
+            HealSweep.Run(current, TimeSpan.FromSeconds(30));
+        await Assert.That(File.Exists(HealSweep.MarkerPathFor(sibling))).IsFalse();
+
+        HealSweep.Run(current, TimeSpan.FromSeconds(30));
+        await Assert.That(ParentOf(Load(sibling), orphan)).IsEqualTo(assistant);
+        await Assert.That(File.Exists(HealSweep.MarkerPathFor(sibling))).IsTrue();
+    }
+
+    [Test]
+    public async Task AtomicReplace_RefusesWhenTheTargetGrewDuringTheWrite()
+    {
+        string path = Path.Combine(_dir, "grow.jsonl");
+        File.WriteAllText(path, "{\"a\":1}\n");
+        long loaded = new FileInfo(path).Length;
+        File.AppendAllText(path, "{\"b\":2}\n"); // the live append
+
+        bool swapped = Jsonl.ReplaceAtomically(path, ["{\"x\":0}"], endsWithNewline: true,
+            expectedLength: loaded);
+
+        await Assert.That(swapped).IsFalse();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo("{\"a\":1}\n{\"b\":2}\n");
+        await Assert.That(File.Exists(path + Jsonl.TempSuffix)).IsFalse();
     }
 }

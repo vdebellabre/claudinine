@@ -106,7 +106,8 @@ internal sealed class TranscriptFile
     /// <summary>
     /// Freeze the part of a main transcript the live process may still chain
     /// onto: everything from the last turn-end marker (<c>stop_hook_summary</c>
-    /// or <c>turn_duration</c>) to the end of the file.
+    /// or <c>turn_duration</c>) — opened one record early, on the marker's
+    /// parent — to the end of the file.
     /// <para>
     /// The app parents its next write to its IN-MEMORY tip, which is not the
     /// last record on disk. Mid-turn, attachments and system records land after
@@ -116,7 +117,7 @@ internal sealed class TranscriptFile
     /// parent. A pass that removed the tip — collapsed as a "non-tail" tool
     /// result, stripped as a zero-signal summary — orphaned the record written
     /// after it, and the resume loader cuts the chain there (user reports on
-    /// 2.1.309–2.1.327; 3,428 orphans across 304 local sessions, 2026-11-18).
+    /// 2.1.309–2.1.327; 3,397 cut links across 298 local sessions, 2026-11-18).
     /// </para>
     /// <para>
     /// Hook-event agnostic on purpose: queued prompts fire UserPromptSubmit
@@ -136,8 +137,25 @@ internal sealed class TranscriptFile
     {
         int start = records.FindLastIndex(r => r.Type == "system"
             && r.View["subtype"].AsString() is "stop_hook_summary" or "turn_duration");
-        if (start < 0)
+        if (start >= 0)
+        {
+            // Open on the marker's PARENT: after an idle reload the next prompt
+            // can chain onto the record before the marker, not the marker
+            // (54 of 4,575 markers in local mirrors, all Desktop, 2.1.275–2.1.325).
+            // Today that slot never holds a removable record, but 2.1.219–2.1.246
+            // put a hook_success there, which a rule strips.
+            string? parent = records[start].ParentUuid;
+            if (parent is not null)
+            {
+                int p = records.FindLastIndex(start, r => r.Uuid == parent);
+                if (p >= 0)
+                    start = p;
+            }
+        }
+        else
+        {
             start = records.FindLastIndex(IsGenuinePrompt);
+        }
         if (start < 0)
             start = records.Count - 1;
         for (int i = start; i < records.Count; i++)
@@ -259,8 +277,10 @@ internal sealed class TranscriptFile
 
         try
         {
-            Jsonl.ReplaceAtomically(Path, lines, EndsWithNewline);
-            return true;
+            // Checked again after the temp write, right before the move: on a
+            // large file the write itself is a window for a live append.
+            return Jsonl.ReplaceAtomically(Path, lines, EndsWithNewline, expectedLength: LoadedLength)
+                || Refuse("file-changed");
         }
         catch
         {

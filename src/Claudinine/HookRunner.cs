@@ -150,12 +150,16 @@ internal static class HookRunner
                             MirrorFile.CollectGarbageColocated(
                                 MirrorLocator.ClaudinineDirFor(input.TranscriptPath));
                             SessionDirGc.Run(input.TranscriptPath, input.SessionId);
-                            HealSweep.Run(input.TranscriptPath);
                             // A real SessionStart clears any pending teardown marker,
                             // so a CLI resume never replays the start work on its
-                            // first prompt.
+                            // first prompt. The heal sweep rides real starts only: a
+                            // wake runs on the prompt path, where a large project's
+                            // backlog would delay the prompt.
                             if (input.HookEventName == "SessionStart")
+                            {
                                 EndMarker.Consume(input.TranscriptPath);
+                                HealSweep.Run(input.TranscriptPath);
+                            }
                         }
                     }
                     break;

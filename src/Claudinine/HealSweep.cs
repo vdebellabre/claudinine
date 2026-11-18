@@ -11,17 +11,31 @@ namespace Claudinine;
 /// sessions ahead of their next resume.
 /// <para>
 /// Heal only: no mirror append, no rules, and never a session frozen by
-/// `restore-compaction-off`. A transcript with no colocated
-/// mirror was never compacted here (or not since the 2026-08-15 colocation),
-/// so it holds no orphans of ours. Each healed or clean transcript gets a
-/// `&lt;sid&gt;.healed` marker in its claudinine dir and is never swept again;
-/// new orphans can no longer form behind the live window, and any that do are
-/// healed by that session's own passes. A transcript busy under another hook's
-/// PassLock, or one that grew mid-heal (a live session), gets no marker and is
-/// retried at the next SessionStart.
+/// `restore-compaction-off`. A transcript with no colocated mirror was never
+/// compacted here (or not since the 2026-08-15 colocation), so it holds no
+/// orphans of ours.
 /// </para>
-/// Time-boxed, since SessionStart has a hook timeout and a project can hold
-/// hundreds of sessions: the markers make the sweep resumable, so a large
+/// <para>
+/// DORMANT sessions only: a transcript written to in the last
+/// <see cref="QuietFor"/> is skipped. Another session of the project may be
+/// streaming a turn in another window, and its PassLock does not stop the CLI
+/// from appending: a rewrite racing that append would drop the record — and
+/// since this sweep does not mirror first, the dropped uuid would be in neither
+/// file, a cut no heal could ever repair. A recently active session is healed
+/// by its own passes anyway. (The swap also re-checks the length right before
+/// the move; the quiet gate is what keeps the race from being routine.)
+/// </para>
+/// <para>
+/// Each transcript that loaded and healed cleanly (or needed nothing) gets a
+/// `&lt;sid&gt;.healed` marker in its claudinine dir and is not swept again —
+/// the live window keeps the known shapes from recurring, and the session's own
+/// passes heal anything new. Anything inconclusive gets no marker and is
+/// retried at a later SessionStart: busy under another hook's PassLock, a
+/// transcript that would not load or a mirror that would not read (both can be
+/// transient), or a rewrite refused or raced.
+/// </para>
+/// Real SessionStart only, never a wake on the prompt path, and time-boxed
+/// (checked between files): the markers make the sweep resumable, so a large
 /// backlog drains across a few session starts.
 /// </summary>
 internal static class HealSweep
@@ -29,6 +43,7 @@ internal static class HealSweep
     private const string MarkerExtension = ".healed";
     private const string MarkerVersion = "v1";
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan QuietFor = TimeSpan.FromMinutes(10);
 
     public static void Run(string transcriptPath) => Run(transcriptPath, Budget);
 
@@ -76,6 +91,8 @@ internal static class HealSweep
         string marker = MarkerPathFor(file);
         if (File.Exists(marker))
             return;
+        if (DateTime.UtcNow - File.GetLastWriteTimeUtc(file) < QuietFor)
+            return; // possibly live in another window: its own passes heal it
         string mirrorPath = MirrorLocator.PathFor(file);
         if (!File.Exists(mirrorPath))
             return;
@@ -90,13 +107,13 @@ internal static class HealSweep
             if (held is null)
                 return;
             var transcript = TranscriptFile.TryLoad(file);
-            // Unloadable: our passes refuse it too, so nothing of ours to heal.
-            if (transcript is not null
-                && OrphanHeal.Prepare(transcript, mirrorPath) > 0
-                && !transcript.TryRewrite())
-            {
-                return; // refused or raced a live append: retry next SessionStart
-            }
+            if (transcript is null)
+                return; // possibly transient (sharing violation): retry later
+            int healed = OrphanHeal.Prepare(transcript, mirrorPath);
+            if (healed < 0)
+                return; // mirror unreadable: retry later
+            if (healed > 0 && !transcript.TryRewrite())
+                return; // refused or raced a live append: retry later
         }
         File.WriteAllText(marker, MarkerVersion + "\n", new UTF8Encoding(false));
     }

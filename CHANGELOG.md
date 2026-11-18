@@ -26,17 +26,23 @@ heading to the computed version in the release PR, and an empty
   of 628.
   - **Live window.** A pass now leaves alone everything from the last
     turn-end marker (`stop_hook_summary` or `turn_duration`) to the end of
-    the file, whichever hook triggered it. A finished turn's window is just
-    its marker; a running turn stays whole until it ends. Subagent
-    transcripts keep the last-record rule.
+    the file, whichever hook triggered it, plus the record the marker
+    follows (after an idle reload the next prompt can chain onto that one).
+    A finished turn's window is just those two; a running turn stays whole
+    until it ends. Subagent transcripts keep the last-record rule.
   - **Healing.** Every pass repoints a record whose parent is missing from
     the transcript but present in the session's mirror to its nearest
     surviving ancestor. The mirror proves the removal was Claudinine's;
     references it cannot resolve are left as found.
   - **Dormant sessions.** At `SessionStart`, a one-off sweep heals the
-    project's other sessions before their next resume (time-boxed and
-    resumable, one `<sid>.healed` marker per session). Sessions frozen with
-    `restore-compaction-off` are left untouched.
+    project's other dormant sessions before their next resume (time-boxed and
+    resumable, one `<sid>.healed` marker per session). Sessions written to in
+    the last 10 minutes are skipped, since one may be live in another window
+    and its own passes heal it; so are sessions frozen with
+    `restore-compaction-off`.
+  - The swap re-checks the transcript's length after writing the new file and
+    right before moving it into place, so an append landing during a long
+    write is no longer lost.
 - Marketplace entry now declares `version` next to the archive pin. The Desktop
   app detects plugin updates by comparing the entry's `version` with the
   installed one and reads nothing else for an archive source, so without the

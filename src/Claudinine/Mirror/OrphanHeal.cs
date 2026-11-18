@@ -29,8 +29,10 @@ internal static class OrphanHeal
     /// dangling references that the mirror can resolve. <paramref name="mirrored"/>
     /// (the mirror's <c>u:&lt;uuid&gt;</c> identity set, when the caller has it)
     /// gates the mirror read: without one of OUR uuids dangling, the mirror is
-    /// never opened. Returns the number of references that will be healed.
-    /// Fail-closed: any read problem leaves the transcript's references as found.
+    /// never opened. Returns the number of references that will be healed, or
+    /// -1 when the attempt failed (unreadable mirror…): fail-closed, the
+    /// transcript's references stay as found, and a caller keeping state about
+    /// the outcome must not record it as clean.
     /// </summary>
     public static int Prepare(TranscriptFile transcript, string mirrorPath,
         IReadOnlySet<string>? mirrored = null)
@@ -85,7 +87,7 @@ internal static class OrphanHeal
         catch when (!Dbg.Active)
         {
             transcript.HealedParents = null;
-            return 0;
+            return -1;
         }
     }
 

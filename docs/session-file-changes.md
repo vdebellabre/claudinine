@@ -167,7 +167,8 @@ untouched. The checks:
 - **Tail preservation** — the final record must survive with its `uuid` intact and,
   unless its own links had to be rechained, byte-identical.
 - **Live window** — no record from the last turn-end marker (`stop_hook_summary` or
-  `turn_duration`) onward may be removed; with no marker, from the last real
+  `turn_duration`) onward may be removed, nor the marker's parent (after an idle
+  reload, the next prompt can chain onto it); with no marker, from the last real
   prompt. Claude Code chains its next write off its *in-memory* tip, which is not
   necessarily the last record on disk: mid-turn, attachments land after a
   tool_result while the model's reply will still parent that tool_result; at turn

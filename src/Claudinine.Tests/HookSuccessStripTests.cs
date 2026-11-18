@@ -116,8 +116,10 @@ public sealed class HookSuccessStripTests : IDisposable
         string assistantUuid = b.LastUuid!;
         b.HookSuccess("Stop");
         string hookUuid = b.LastUuid!;
-        // Real layout: the turn-end marker parents the hook record, and the
-        // uuid-less last-prompt trails it inside the live window.
+        // The hook sits before the live window (which opens on the marker's
+        // parent), and the uuid-less last-prompt trails inside it — so the
+        // TAIL's leafUuid must be remapped for the hook's removal to land.
+        b.AssistantText("closing");
         b.StopHookSummary();
         b.MetaLine("last-prompt", ("leafUuid", hookUuid));
         string path = b.WriteTo(_dir);

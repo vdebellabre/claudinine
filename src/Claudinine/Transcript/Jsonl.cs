@@ -65,17 +65,25 @@ internal static class Jsonl
     /// </summary>
     public static void ReplaceAtomically(string path, string content)
     {
-        ReplaceAtomicallyCore(path, writer => writer.Write(content));
+        ReplaceAtomicallyCore(path, null, writer => writer.Write(content));
     }
 
     /// <summary>
     /// <see cref="ReplaceAtomically(string, string)"/> for line lists: streams the
     /// lines to the temp file instead of joining them into one giant string first
     /// (on a many-MB transcript that join was pure allocation).
+    /// <para>
+    /// <paramref name="expectedLength"/>, when given, is re-checked against the
+    /// target AFTER the temp is durable and immediately before the move: the
+    /// temp write of a many-MB file takes long enough for the live app to append
+    /// in between, and the move would silently discard that append. Returns
+    /// false (temp removed, target untouched) when the target changed.
+    /// </para>
     /// </summary>
-    public static void ReplaceAtomically(string path, IReadOnlyList<string> lines, bool endsWithNewline)
+    public static bool ReplaceAtomically(string path, IReadOnlyList<string> lines, bool endsWithNewline,
+        long? expectedLength = null)
     {
-        ReplaceAtomicallyCore(path, writer =>
+        return ReplaceAtomicallyCore(path, expectedLength, writer =>
         {
             for (int i = 0; i < lines.Count; i++)
             {
@@ -86,7 +94,8 @@ internal static class Jsonl
         });
     }
 
-    private static void ReplaceAtomicallyCore(string path, Action<StreamWriter> writeContent)
+    private static bool ReplaceAtomicallyCore(string path, long? expectedLength,
+        Action<StreamWriter> writeContent)
     {
         string temp = path + TempSuffix;
         try
@@ -98,7 +107,13 @@ internal static class Jsonl
                 writer.Flush();
                 stream.Flush(flushToDisk: true);
             }
+            if (expectedLength is long expected && new FileInfo(path).Length != expected)
+            {
+                File.Delete(temp);
+                return false;
+            }
             File.Move(temp, path, overwrite: true);
+            return true;
         }
         catch
         {
