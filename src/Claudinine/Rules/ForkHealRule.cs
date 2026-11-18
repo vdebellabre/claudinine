@@ -43,7 +43,9 @@ internal sealed partial class ForkHealRule : ICompactionRule
         var foreignSids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var rec in records)
         {
-            if (rec.Removed || rec.IsProtected())
+            // Live-window records count as fork evidence (reading is safe);
+            // the retarget loop below is what keeps its hands off them.
+            if (rec.Removed || rec.IsStructurallyProtected())
                 continue;
             var node = rec.CurrentView;
             if (!node["claudinine"].Exists)
@@ -79,9 +81,10 @@ internal sealed partial class ForkHealRule : ICompactionRule
 
         foreach ((var rec, var sids) in flagged)
         {
-            // Tail guard: the file's final record must never be replaced. A fork
-            // can end exactly at a marked carrier; it heals on a later pass.
-            if (ReferenceEquals(rec, records[^1]))
+            // Live-window guard (the tail, for agent files): the app may still
+            // chain onto it. A fork can end exactly at a marked carrier; it heals
+            // once a later turn moves the window past it.
+            if (rec.IsLiveWindow || ReferenceEquals(rec, records[^1]))
                 continue;
             // Per-record validation again: a post-fork digest quoting the healed
             // parent (uuid born after the fork) keeps its quote verbatim.

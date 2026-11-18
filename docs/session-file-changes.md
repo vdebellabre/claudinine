@@ -165,8 +165,21 @@ untouched. The checks:
   what was computed, and nothing may still reference a removed record
   (`dangling-parent`, `dangling-leaf`, `dangling-source`).
 - **Tail preservation** — the final record must survive with its `uuid` intact and,
-  unless its own links had to be rechained, byte-identical. Claude Code chains the
-  next append off that record.
+  unless its own links had to be rechained, byte-identical.
+- **Live window** — no record from the last turn-end marker (`stop_hook_summary` or
+  `turn_duration`) onward may be removed; with no marker, from the last real
+  prompt. Claude Code chains its next write off its *in-memory* tip, which is not
+  necessarily the last record on disk: mid-turn, attachments land after a
+  tool_result while the model's reply will still parent that tool_result; at turn
+  end, uuid-less metadata lands after the marker the next prompt will parent. The
+  final-record rule alone let passes remove those tips, and resume cut the chain
+  there (fixed in 1.2.3). Rules skip the window; the rewrite refuses a removal in
+  it outright. Main transcripts only: subagent files keep the final-record rule.
+- **Orphan healing** — a record whose parent is missing from the transcript but
+  present in the mirror is repointed to its nearest surviving ancestor, by walking
+  the mirror's original chain. It repairs links the live process broke after an
+  earlier pass; references the mirror cannot resolve are not ours, and stay as
+  found.
 - **Never empty** — a rewrite producing zero records is refused.
 
 Only then is the result written to a temp file and moved over the original in one

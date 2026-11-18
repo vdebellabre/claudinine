@@ -81,7 +81,7 @@ public sealed class HookSuccessStripTests : IDisposable
             .UserPrompt("hello")
             .AssistantText("done")
             .HookSuccess("Stop")
-            .WriteTo(_dir);
+            .WriteTo(_dir, atRest: false);
 
         Compactor.Run(path);
 
@@ -116,6 +116,9 @@ public sealed class HookSuccessStripTests : IDisposable
         string assistantUuid = b.LastUuid!;
         b.HookSuccess("Stop");
         string hookUuid = b.LastUuid!;
+        // Real layout: the turn-end marker parents the hook record, and the
+        // uuid-less last-prompt trails it inside the live window.
+        b.StopHookSummary();
         b.MetaLine("last-prompt", ("leafUuid", hookUuid));
         string path = b.WriteTo(_dir);
 

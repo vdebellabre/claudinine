@@ -108,7 +108,8 @@ public sealed class TaskReminderKeepLastTests : IDisposable
         JsonObject[] records = Load(path);
         JsonObject survivor = await Assert.That(Reminders(records)).HasSingleItem();
         await Assert.That(FirstSubject(survivor)).IsEqualTo("plan v2");
-        await Assert.That(survivor).IsSameReferenceAs(records[^1]);
+        await Assert.That(survivor).IsSameReferenceAs(records[^2]);
+        await Assert.That(records[^1]["subtype"]!.GetValue<string>()).IsEqualTo("stop_hook_summary");
     }
 
     [Test]

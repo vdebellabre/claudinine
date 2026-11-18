@@ -65,7 +65,7 @@ public sealed class HousekeepingTests : IDisposable
             .UserPrompt("hello")
             .AssistantText("done")
             .MetaLine("last-prompt", ("lastPrompt", "only"))
-            .WriteTo(_dir);
+            .WriteTo(_dir, atRest: false);
 
         Compactor.Run(path);
 
@@ -90,7 +90,7 @@ public sealed class HousekeepingTests : IDisposable
 
         JsonObject[] records = Load(path);
         await Assert.That(CountType(records, "queue-operation")).IsEqualTo(0);
-        await Assert.That(records.Length).IsEqualTo(2); // user + assistant untouched
+        await Assert.That(records.Length).IsEqualTo(3); // user + assistant + closing marker untouched
     }
 
     [Test]
@@ -150,7 +150,7 @@ public sealed class HousekeepingTests : IDisposable
             .UserPrompt("hello")
             .AssistantText("done")
             .QueueOp("dequeue")
-            .WriteTo(_dir);
+            .WriteTo(_dir, atRest: false);
 
         Compactor.Run(path);
 
@@ -172,7 +172,10 @@ public sealed class HousekeepingTests : IDisposable
         Compactor.Run(path);
 
         JsonObject[] records = Load(path);
-        await Assert.That(CountType(records, "system")).IsEqualTo(0);
+        // Only the closing marker survives: it is the live tip the next prompt
+        // will parent (TranscriptFile.MarkLiveWindow).
+        await Assert.That(CountType(records, "system")).IsEqualTo(1);
+        await Assert.That(records[^1]["subtype"]!.GetValue<string>()).IsEqualTo("stop_hook_summary");
         // The second user prompt re-parents to the surviving assistant record.
         JsonObject secondPrompt = records.Single(r =>
             r["message"]?["content"] is JsonValue v
@@ -192,7 +195,7 @@ public sealed class HousekeepingTests : IDisposable
             .StopHookSummary(preventedContinuation: true)
             .StopHookSummary(stopReason: "blocked")
             .AssistantText("tail")
-            .WriteTo(_dir);
+            .WriteTo(_dir, atRest: false);
 
         Compactor.Run(path);
 

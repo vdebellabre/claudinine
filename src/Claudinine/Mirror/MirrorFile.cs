@@ -19,7 +19,18 @@ internal static class MirrorFile
     /// must target the dir where the session's mirror actually lives.
     /// </summary>
     public static bool TryAppendMissing(TranscriptFile transcript, string? mirrorPath = null)
+        => TryAppendMissing(transcript, out _, mirrorPath);
+
+    /// <summary>
+    /// <see cref="TryAppendMissing(TranscriptFile, string?)"/>, also handing back
+    /// the mirror's post-append identity set (<c>u:&lt;uuid&gt;</c> entries) —
+    /// already in memory here, so OrphanHeal can tell which dangling references
+    /// are ours without re-reading the mirror.
+    /// </summary>
+    public static bool TryAppendMissing(TranscriptFile transcript,
+        out IReadOnlySet<string>? mirrored, string? mirrorPath = null)
     {
+        mirrored = null;
         try
         {
             if (mirrorPath is null)
@@ -104,6 +115,7 @@ internal static class MirrorFile
                 // it now so the next pass skips the full read we just paid.
                 if (!cacheValid && hasHeader)
                     SeenCache.TryRewrite(mirrorPath, mirrorLength, seen, seenCounts);
+                mirrored = seen;
                 return true;
             }
 
@@ -131,6 +143,7 @@ internal static class MirrorFile
                 }
                 SeenCache.TryRewrite(mirrorPath, newLength, seen, seenCounts);
             }
+            mirrored = seen;
             return true;
         }
         catch
@@ -404,7 +417,7 @@ internal static class MirrorFile
                 try
                 {
                     string ext = Path.GetExtension(file);
-                    if (ext is not (".jsonl" or ".skip" or ".load" or ".lock"))
+                    if (ext is not (".jsonl" or ".skip" or ".load" or ".lock" or ".healed"))
                         continue; // .seen below; temp files and unknowns left alone
                     string stem = Path.GetFileNameWithoutExtension(file);
                     string transcript = string.Equals(stem, sid, StringComparison.OrdinalIgnoreCase)

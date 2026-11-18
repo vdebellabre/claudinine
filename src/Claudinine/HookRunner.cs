@@ -81,7 +81,12 @@ internal static class HookRunner
                             // grace is what makes the sweep safe: only dirs no
                             // hook has touched for a day go.
                             if (input.HookEventName == "SessionStart")
+                            {
                                 SessionDirGc.Run(input.TranscriptPath, input.SessionId);
+                                // A new Desktop session starts here, transcript-less:
+                                // the common case, so the heal sweep rides it too.
+                                HealSweep.Run(input.TranscriptPath);
+                            }
                             return 0;
                         }
 
@@ -145,6 +150,7 @@ internal static class HookRunner
                             MirrorFile.CollectGarbageColocated(
                                 MirrorLocator.ClaudinineDirFor(input.TranscriptPath));
                             SessionDirGc.Run(input.TranscriptPath, input.SessionId);
+                            HealSweep.Run(input.TranscriptPath);
                             // A real SessionStart clears any pending teardown marker,
                             // so a CLI resume never replays the start work on its
                             // first prompt.

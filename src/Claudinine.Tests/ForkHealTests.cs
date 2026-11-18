@@ -152,7 +152,7 @@ public sealed class ForkHealTests : IDisposable
         // is never replaced — TryRewrite would refuse the whole pass.
         string carrier = MarkedCarrier("claudinine get test-session --ref REF", "fork-session");
         var b = new TranscriptBuilder().UserPrompt("hello");
-        string path = b.RawLine(carrier).WriteTo(_dir, "fork-session.jsonl");
+        string path = b.RawLine(carrier).WriteTo(_dir, "fork-session.jsonl", atRest: false);
         // The carrier's own uuid is in the parent mirror: a genuine fork copy.
         WriteMirror("test-session",
             (CarrierUuid, "original"),

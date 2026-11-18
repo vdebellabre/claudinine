@@ -86,12 +86,12 @@ public sealed class LoadStampTests : IDisposable
         // Every SessionStart re-stamps; the statusline must see the LAST load,
         // not the first.
         string stem = NewStem();
-        string path = new TranscriptBuilder().UserPrompt("v1").WriteTo(_dir, stem + ".jsonl");
+        string path = new TranscriptBuilder().UserPrompt("v1").WriteTo(_dir, stem + ".jsonl", atRest: false);
         LoadStamp.Write(path);
         var first = LoadStamp.Read(path);
 
         new TranscriptBuilder().UserPrompt("v1").UserPrompt("longer second prompt")
-            .WriteTo(_dir, stem + ".jsonl");
+            .WriteTo(_dir, stem + ".jsonl", atRest: false);
         LoadStamp.Write(path);
         var second = LoadStamp.Read(path);
 
